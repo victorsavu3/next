@@ -33,9 +33,25 @@ with Claude Code and other CLI tools rather than embedding AI directly.
 - Move tasks from inbox to the right stage / project
 - Due dates — optional deadline on any task
 - Priority — high / medium / low urgency on each task
-- Tags / contexts — free-form labels (e.g. `@home`, `@work`) that represent the working
-  environment; active contexts filter which tasks are shown
+- Tags — see unified tag system below
 - Projects — nested to unlimited depth; project-level priority influences task scores
+
+### Unified tag system
+All labels on a task are tags. Prefix conventions give some tags special meaning:
+
+| Prefix | Kind | Example | Implicit filtering behaviour |
+|--------|------|---------|------------------------------|
+| `@` | Context | `@home`, `@work` | Only tasks matching an active context (or with no `@` tag) are shown |
+| `$` | Resource | `$printer`, `$vacation` | Tasks requiring an unavailable resource are hidden |
+| *(none)* | Freeform | `python`, `reading` | No implicit effect; used for manual queries |
+
+**Active contexts** are set globally (e.g. `tm context @home`). When one or more contexts
+are active, tasks with no `@` tag are always shown; tasks with at least one `@` tag are
+shown only if they share a tag with the active set.
+
+**Resource availability** is set globally (e.g. `tm resource $printer off`). Tasks
+carrying a `$resource` tag whose resource is marked unavailable are hidden from the
+default list and excluded from scoring.
 
 ### Nested tasks (subtasks)
 A task can have subtasks to any depth. The parent task is treated as blocked by its
@@ -53,13 +69,6 @@ Two distinct recurrence models:
   "water plants 7 days after last watered"). The next instance is created when the current
   one is marked done, with the due date calculated from the completion timestamp.
 
-### Resources
-Named toggles representing things that may not always be available (e.g. `printer`,
-`vacation`). A resource can be marked available or unavailable globally. Tasks that
-require an unavailable resource are excluded from scoring and the default task list.
-Resources are separate from contexts: contexts describe where you are, resources describe
-what you have access to.
-
 ### Blocking tasks
 A task can declare that it is blocked by one or more other tasks. Blocked tasks are
 excluded from scoring and the default view until all blockers are resolved.
@@ -75,8 +84,29 @@ Urgency score computed per task (Taskwarrior-style) from:
 - **User adjustment** — a manual numeric boost or penalty the user can apply to any task
 
 The default `next` / `list` command ranks tasks by score descending, after filtering out
-blocked tasks, tasks requiring unavailable resources, and tasks not matching the active
+blocked tasks, tasks with unavailable `$` tags, and tasks not matching the active `@`
 contexts. Tasks with a `start` date in the future are hidden entirely until that date.
+
+### Query interface
+All list commands accept filters that can be combined freely:
+
+| Filter | Example | Meaning |
+|--------|---------|---------|
+| `+tag` | `+@home`, `+python` | Task must have this tag |
+| `-tag` | `-@work` | Task must not have this tag |
+| `project:<path>` | `project:work/infra` | Task is in this project or any sub-project |
+| `context:<name>` | `context:@home` | Override active context for this query |
+| `--future` | | Include tasks with a future `start` date and planned recurrence instances |
+| `--all` | | Disable all implicit filtering (contexts, resources, blocked, start date) |
+| `--stage <stage>` | `--stage inbox` | Filter by GTD stage |
+
+Examples:
+```
+tm list +python project:work          # python-tagged tasks in the work project tree
+tm list context:@home --future        # upcoming tasks available at home
+tm list --all --stage someday         # everything in someday/maybe, unfiltered
+tm forecast +$printer                 # upcoming recurrences that need the printer
+```
 
 ### Reminders
 Overdue and due-today tasks are surfaced prominently at the top of every `list` /
@@ -95,7 +125,7 @@ user to process inbox items, check waiting-for tasks, and triage someday/maybe.
 
 ### Forgejo integration
 - **Import** — pull issues from a Forgejo repository in as tasks, preserving title, body,
-  labels, and open/closed state
+  labels (mapped to freeform tags), and open/closed state
 - **Completion sync** — marking an imported task complete closes the corresponding Forgejo
   issue; no other fields are written back
 - Each imported task stores its Forgejo issue URL so duplicates are avoided on re-import
@@ -126,3 +156,5 @@ stable enough to pipe to Claude Code or other tools.
 - **Subtask files** — should subtasks be embedded in the parent's TOML file or stored as
   separate files with a `parent` reference? Separate files are better for git diffs;
   embedded is simpler to edit by hand.
+- **Context matching with no active context set** — when no `@` context is active, should
+  all tasks be shown regardless of their `@` tags, or only tasks with no `@` tags?
