@@ -1,0 +1,33 @@
+use std::path::PathBuf;
+
+use thiserror::Error;
+
+pub type Result<T> = std::result::Result<T, AppError>;
+
+#[derive(Debug, Error)]
+pub enum AppError {
+    #[error("invalid date expression '{0}': {1}")]
+    InvalidDate(String, String),
+
+    #[error("task not found: {0}")]
+    TaskNotFound(String),
+
+    /// Returned when a short ID prefix matches more than one task.
+    #[error("ambiguous task ID prefix '{0}': matches {1} tasks")]
+    AmbiguousId(String, usize),
+
+    #[error("project not found: {0}")]
+    ProjectNotFound(String),
+
+    #[error("git conflict in files: {0:?}")]
+    GitConflict(Vec<PathBuf>),
+
+    #[error("forgejo API error: {0}")]
+    ForgejoApi(String),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error("{0}")]
+    Other(String),
+}
