@@ -16,8 +16,9 @@ pub enum AppError {
     #[error("ambiguous task ID prefix '{0}': matches {1} tasks")]
     AmbiguousId(String, usize),
 
-    #[error("project not found: {0}")]
-    ProjectNotFound(String),
+    /// Returned when a slug is already used by another task.
+    #[error("slug '{0}' is already taken by another task")]
+    SlugConflict(String),
 
     #[error("git conflict in files: {0:?}")]
     GitConflict(Vec<PathBuf>),

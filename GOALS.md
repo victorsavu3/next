@@ -21,8 +21,8 @@ with Claude Code and other CLI tools rather than embedding AI directly.
 ## GTD stages
 
 - **Inbox** — default landing zone; tasks land here on capture, no metadata required
-- **Projects** — multi-step outcomes; tasks can belong to a project (projects nest to
-  unlimited depth)
+- **Projects** — a GTD marker (`stage = project`) for active committed outcomes; any task
+  can have subtasks regardless of stage, and any task can serve as a parent.
 - **Waiting-for** — blocked on someone else; stores who as a free-text string
 - **Someday/Maybe** — low-commitment ideas to revisit later
 
@@ -34,7 +34,11 @@ with Claude Code and other CLI tools rather than embedding AI directly.
 - Due dates — optional deadline on any task
 - Priority — high / medium / low urgency on each task
 - Tags — see unified tag system below
-- Projects — nested to unlimited depth; project-level priority influences task scores
+- Projects are plain tasks in the `project` stage; hierarchy is expressed through
+  `parent_id`, not a separate project concept
+- Tasks may have a user-provided **slug** (e.g. `"water-plants"`, `"work-infra"`) as a
+  stable short identifier, used to reference the task as a parent or blocker without
+  knowing its UUID
 
 ### Unified tag system
 All labels on a task are tags. Prefix conventions give some tags special meaning:
@@ -45,18 +49,20 @@ All labels on a task are tags. Prefix conventions give some tags special meaning
 | `$` | Resource | `$printer`, `$vacation` | Tasks requiring an unavailable resource are hidden |
 | *(none)* | Freeform | `python`, `reading` | No implicit effect; used for manual queries |
 
-**Active contexts** are set globally (e.g. `tm context @home`). When one or more contexts
+**Active contexts** are set globally (e.g. `next context @home`). When one or more contexts
 are active, tasks with no `@` tag are always shown; tasks with at least one `@` tag are
 shown only if they share a tag with the active set.
 
-**Resource availability** is set globally (e.g. `tm resource $printer off`). Tasks
+**Resource availability** is set globally (e.g. `next resource $printer off`). Tasks
 carrying a `$resource` tag whose resource is marked unavailable are hidden from the
 default list and excluded from scoring.
 
 ### Nested tasks (subtasks)
-A task can have subtasks to any depth. The parent task is treated as blocked by its
-subtasks — excluded from scoring and the default view until all subtasks are completed.
-Nesting is the primary organisation tool alongside projects.
+Any task can have subtasks to any depth via `parent_id` — there is no special project
+type. A parent task is hidden from the default scored list until all direct children are
+resolved, but the user can mark it done explicitly at any time. Long-running parent tasks
+should set `long_term = true` to avoid age-based scoring pressure while in progress; all
+tasks are completable eventually.
 
 ### Recurrence
 Two distinct recurrence models:
@@ -64,7 +70,7 @@ Two distinct recurrence models:
 - **Schedule-based** — task recurs on a fixed calendar rule (e.g. "1st of every month",
   "every Monday"). At most one future instance is visible at a time; it appears in the
   list as soon as the previous instance is completed (or when the tool first runs for that
-  period). A `tm forecast` command shows the list of upcoming due dates for review.
+  period). A `next forecast` command shows the list of upcoming due dates for review.
 - **Completion-based** — task recurs a fixed interval after the last completion (e.g.
   "water plants 7 days after last watered"). The next instance is created when the current
   one is marked done, with the due date calculated from the completion timestamp.
@@ -102,10 +108,10 @@ All list commands accept filters that can be combined freely:
 
 Examples:
 ```
-tm list +python project:work          # python-tagged tasks in the work project tree
-tm list context:@home --future        # upcoming tasks available at home
-tm list --all --stage someday         # everything in someday/maybe, unfiltered
-tm forecast +$printer                 # upcoming recurrences that need the printer
+next list +python project:work          # python-tagged tasks in the work project tree
+next list context:@home --future        # upcoming tasks available at home
+next list --all --stage someday         # everything in someday/maybe, unfiltered
+next forecast +$printer                 # upcoming recurrences that need the printer
 ```
 
 ### Reminders
@@ -113,13 +119,13 @@ Overdue and due-today tasks are surfaced prominently at the top of every `list` 
 `next` run — no daemon or background process required.
 
 ### Weekly review
-An interactive `tm review` command walks through each GTD stage in turn, prompting the
+An interactive `next review` command walks through each GTD stage in turn, prompting the
 user to process inbox items, check waiting-for tasks, and triage someday/maybe.
 
 ### Sync
 - All task data lives as one TOML file per task in a git repository
 - SQLite DB is a local cache in `~/.cache/task-manager/`, rebuilt lazily before each command
-- `tm sync` pulls from the remote git repo, rebuilds the DB, then pushes local commits
+- `next sync` pulls from the remote git repo, rebuilds the DB, then pushes local commits
 - Offline edits accumulate as local git commits; sync merges them when connectivity returns
 - Git merge conflicts (two machines editing the same task file) are resolved manually
 

@@ -97,11 +97,10 @@ src/
 
   domain/
     task.rs                # Task struct + validation; TomlTask for serde
-    project.rs             # Project struct; TomlProject for serde
     state.rs               # GlobalState (active contexts, resource map)
     tag.rs                 # TagKind enum (Context/Resource/Freeform); tag parsing
     filter.rs              # FilterSet struct; fn apply(tasks, filter) -> Vec<Task>
-    scoring.rs             # fn score(task, project, weights) -> f64
+    scoring.rs             # fn score(task, parent_task, weights) -> f64
     recurrence.rs          # RecurrenceRule; fn next_due(rule, after) -> NaiveDate
                            # fn to_rrule(rule_str) -> RRuleSet
     date_parse.rs          # fn parse_date(expr, today) -> Result<NaiveDate>
@@ -110,9 +109,8 @@ src/
   storage/
     toml_store.rs          # fn read_task(path), write_task(task, repo_root)
                            # fn read_all_tasks(repo_root) -> Vec<Task>
-                           # fn read_project(path), write_project(...)
                            # fn read_state(repo_root), write_state(...)
-    db.rs                  # schema creation; fn rebuild(tasks, projects, head)
+    db.rs                  # schema creation; fn rebuild(tasks, head)
                            # fn is_stale(db, repo_root) -> bool
                            # query helpers used by CLI commands
     git.rs                 # fn commit(repo, message); fn pull(repo); fn push(repo)
@@ -151,9 +149,9 @@ paths are never computed ad hoc.
 
 ### 5.1 TOML file conventions
 
-- One `.toml` file per task in `tasks/`; one per project in `projects/<path>.toml`
-- Filenames: `<slugified-title>-<first-8-uuid-hex>.toml`
-- Slug: lowercase, spaces → `-`, strip non-alphanumeric except `-`
+- One `.toml` file per task in a flat `tasks/` directory (no `projects/` directory)
+- Filename: `<slug>.toml` if the task has a user slug; otherwise `<title-slug>-<first-8-uuid-hex>.toml`
+- Title slug: lowercase, spaces → `-`, strip non-alphanumeric except `-`
 - Files are written with `toml::to_string_pretty` for human readability
 
 The `[recurrence]` table is only present when the task recurs; optional fields are
@@ -177,8 +175,8 @@ CREATE TABLE tasks (
     due                      TEXT,            -- YYYY-MM-DD
     start_date               TEXT,            -- YYYY-MM-DD
     long_term                INTEGER NOT NULL DEFAULT 0,
-    project                  TEXT,
-    parent_id                TEXT,
+    slug                     TEXT UNIQUE,     -- user-provided identifier
+    parent_id                TEXT,            -- UUID of parent task (any stage)
     waiting_for              TEXT,
     score_adjustment         REAL NOT NULL DEFAULT 0.0,
     notes                    TEXT,
@@ -204,19 +202,12 @@ CREATE TABLE task_blockers (
     PRIMARY KEY (task_id, blocked_by)
 );
 
-CREATE TABLE projects (
-    path        TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    priority    TEXT NOT NULL DEFAULT 'medium',
-    description TEXT,
-    created_at  TEXT NOT NULL
-);
+-- No projects table: project tasks are plain tasks with stage='project'
 
 -- Useful indexes
-CREATE INDEX idx_tasks_status  ON tasks(status);
-CREATE INDEX idx_tasks_stage   ON tasks(stage);
-CREATE INDEX idx_tasks_project ON tasks(project);
-CREATE INDEX idx_tasks_parent  ON tasks(parent_id);
+CREATE INDEX idx_tasks_status ON tasks(status);
+CREATE INDEX idx_tasks_stage  ON tasks(stage);
+CREATE INDEX idx_tasks_parent ON tasks(parent_id);
 ```
 
 ### 5.3 Cache rebuild
@@ -225,7 +216,7 @@ CREATE INDEX idx_tasks_parent  ON tasks(parent_id);
 .peel_to_commit().id().to_string()`. A rebuild:
 
 1. Opens a transaction
-2. `DELETE FROM tasks; DELETE FROM task_tags; DELETE FROM task_blockers; DELETE FROM projects;`
+2. `DELETE FROM tasks; DELETE FROM task_tags; DELETE FROM task_blockers;`
 3. Iterates all TOML files, inserts rows
 4. Updates `meta` with current HEAD and schema version
 5. Commits

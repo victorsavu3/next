@@ -63,11 +63,15 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub long_term: bool,
 
-    /// `/`-separated project path, e.g. `"work/infra"`.
+    /// Optional user-provided identifier, e.g. `"water-plants"` or `"work-infra"`.
+    /// Must be unique across all tasks. Used to reference the task as a parent or
+    /// blocker without knowing its UUID. Also serves as the project identifier
+    /// when a task with `stage = Project` acts as the parent of other tasks.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub project: Option<String>,
+    pub slug: Option<String>,
 
-    /// UUID of the parent task; makes this task a subtask.
+    /// UUID of the parent task. A task is a subtask (or belongs to a project-task)
+    /// when this is set. The parent is blocked until all direct children are resolved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<Uuid>,
 
@@ -128,7 +132,7 @@ impl Task {
             due: None,
             start: None,
             long_term: false,
-            project: None,
+            slug: None,
             parent_id: None,
             tags: Vec::new(),
             waiting_for: None,

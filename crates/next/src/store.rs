@@ -3,11 +3,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        project::Project,
-        state::GlobalState,
-        task::Task,
-    },
+    domain::{state::GlobalState, task::Task},
     error::Result,
 };
 
@@ -20,7 +16,11 @@ pub enum PullResult {
     Conflicts(Vec<PathBuf>),
 }
 
-/// Persistent storage for tasks, projects, and global state.
+/// Persistent storage for tasks and global state.
+///
+/// Projects are plain tasks (`stage = Stage::Project`) and are stored and
+/// retrieved through the same task methods. There is no separate project
+/// concept in the storage layer.
 ///
 /// Reads use `&self`; writes use `&mut self`. Implementations may use interior
 /// mutability internally (e.g. a SQLite connection behind a Mutex) but the trait
@@ -30,9 +30,13 @@ pub enum PullResult {
 /// (source of truth) backed by an SQLite cache for fast queries.
 /// `next-test-utils` provides an in-memory implementation for unit tests.
 pub trait Store: Send + Sync {
-    // --- Tasks ---
+    // --- Tasks (includes project-tasks) ---
 
     fn get_task(&self, id: Uuid) -> Result<Task>;
+
+    /// Returns the task with the given user-provided slug, if any.
+    /// Slugs are unique across all tasks.
+    fn get_task_by_slug(&self, slug: &str) -> Result<Option<Task>>;
 
     /// Returns all tasks whose UUID string starts with `prefix`.
     /// Used for short-ID disambiguation in the CLI (minimum 4 hex chars).
@@ -53,14 +57,6 @@ pub trait Store: Send + Sync {
     /// Returns the task linked to this iCalendar UID, if any.
     /// Used for deduplication on re-import.
     fn get_task_by_webcal_uid(&self, uid: &str) -> Result<Option<Task>>;
-
-    // --- Projects ---
-
-    fn get_project(&self, path: &str) -> Result<Option<Project>>;
-
-    fn list_projects(&self) -> Result<Vec<Project>>;
-
-    fn save_project(&mut self, project: &Project) -> Result<()>;
 
     // --- Global state ---
 

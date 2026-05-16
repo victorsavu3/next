@@ -1,0 +1,13 @@
+[package]
+name = "next-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "next"
+path = "src/main.rs"
+
+[dependencies]
+next = { path = "../next" }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"

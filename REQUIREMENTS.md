@@ -27,8 +27,8 @@ A task MAY carry the following optional fields:
 | `due` | date string (YYYY-MM-DD) | Optional deadline |
 | `start` | date string (YYYY-MM-DD) | Task hidden until this date; disables age scoring |
 | `long_term` | boolean | Disables age scoring; default `false` |
-| `project` | string path | `/`-separated, e.g. `"work/infra"` |
-| `parent_id` | UUID string | Declares this task a subtask of another |
+| `slug` | string | User-provided identifier (e.g. `"water-plants"`); must be unique |
+| `parent_id` | UUID string | UUID of the parent task; used for subtasks and project membership |
 | `tags` | array of strings | See §3 |
 | `waiting_for` | string | Free-text; meaningful when `stage = "waiting"` |
 | `blocked_by` | array of UUID strings | Explicit blockers |
@@ -53,24 +53,16 @@ interval_days = 7       # positive integer; for completion-based recurrence
 
 Exactly one of `rule` or `interval_days` MUST be present in a `[recurrence]` table.
 
-### 1.2 Project metadata
+### 1.2 Projects and subtasks
 
-Projects MUST be defined by TOML files inside the `projects/` directory. A project at
-path `work/infra` MUST have its metadata at `projects/work/infra.toml`.
+There is no separate project type. Any task can have child tasks by setting `parent_id`
+on the children. Hierarchy nests to unlimited depth. The `stage = "project"` value is a
+GTD workflow marker (meaning "active committed project") but is not required for a task
+to act as a parent — any task at any stage can have subtasks.
 
-A project MUST have:
-
-| Field | Type |
-|-------|------|
-| `name` | string |
-| `created_at` | RFC 3339 datetime |
-
-A project MAY have:
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `priority` | `low` \| `medium` \| `high` | Default: `medium` |
-| `description` | string | |
+A task's slug (e.g. `"work-infra"`) can be used instead of its UUID when specifying
+`parent_id` or `blocked_by` on the command line. The tool resolves the slug to a UUID
+before writing the TOML file.
 
 ### 1.3 Global state
 
@@ -92,23 +84,20 @@ vacation = false
 ```
 <repo-root>/
   tasks/
-    water-plants-a1b2c3d4.toml   # filename: <title-slug>-<first-8-of-uuid>.toml
+    water-plants-a1b2c3d4.toml   # filename: <slug>.toml if slug set, else <title-slug>-<first-8-uuid>.toml
+    work-infra.toml              # project task with slug "work-infra"
     deploy-db-e5f6a7b8.toml
-  projects/
-    work.toml
-    work/
-      infra.toml
   state.toml
   .gitignore                     # must include the DB path if it is inside the repo
 ```
 
-All task files MUST reside in the flat `tasks/` directory regardless of project
-membership or parent/child relationships. Subtasks are separate files with a `parent_id`
-field — they are NOT embedded in the parent file.
+All task files MUST reside in the flat `tasks/` directory. There is no `projects/`
+directory; project tasks are stored alongside all other tasks.
 
-File names MUST be derived from the task title (lower-case, spaces replaced with `-`,
-non-alphanumeric characters stripped) followed by `-` and the first 8 hex characters of
-the UUID. Example: `"Water plants"` with UUID `a1b2c3d4-…` → `water-plants-a1b2c3d4.toml`.
+File names MUST follow this rule: if the task has a `slug`, the file is named
+`<slug>.toml`; otherwise `<title-slug>-<first-8-uuid>.toml` where the title slug is
+lower-case with spaces replaced by `-` and non-alphanumeric characters stripped.
+Example: `"Water plants"` with no slug and UUID `a1b2c3d4-…` → `water-plants-a1b2c3d4.toml`.
 
 ### 2.2 SQLite cache
 
@@ -220,16 +209,23 @@ until every referenced task has `status = done` or `status = cancelled`.
 
 ### 6.2 Subtasks
 
-A task with a `parent_id` is a subtask. The parent task MUST be treated as blocked by
-all of its direct children — it is excluded from the default list and scoring until every
-direct child has `status = done` or `status = cancelled`.
+Any task can have child tasks via `parent_id`. A parent task is excluded from the
+*default scored list* until all of its direct children have `status = done` or
+`status = cancelled`; it does not appear in `next list` / `next next` output until then.
 
-Blocking is **not** transitive through subtask depth: a grandparent is only blocked by
-its direct children, not by grandchildren (the child itself is blocked by the grandchild,
-which in turn blocks the grandparent).
+The user MAY mark a parent task done at any time via `next done <id>` regardless of
+child task status — the completion gate only affects automatic scoring visibility, not
+explicit user actions.
 
-A parent task MUST NOT be automatically marked `done` when all subtasks complete. The
-user MUST mark the parent done explicitly.
+A parent task MUST NOT be automatically marked `done` when all subtasks complete; the
+user marks it done explicitly.
+
+Blocking is **not** transitive through depth: a grandparent is only blocked by its
+direct children (who are in turn blocked by their own children).
+
+Project tasks that are long-running SHOULD use `long_term = true` to suppress age-based
+scoring while the project is in progress; this prevents them from rising to the top of
+the list merely because they are old.
 
 ---
 
@@ -280,16 +276,16 @@ next add <title> [options]
 | `--due <expr>` | Natural-language date accepted ("in two weeks", "next Monday") |
 | `--start <expr>` | Natural-language date accepted |
 | `--priority high\|medium\|low` | |
-| `--project <path>` | |
+| `--slug <slug>` | User-provided identifier; must be unique; used as the filename |
 | `--tag <tag>` | Repeatable |
-| `--parent <id>` | Makes this task a subtask |
+| `--parent <id-or-slug>` | Sets `parent_id`; accepts UUID, UUID prefix, or slug |
 | `--notes <text>` | |
 | `--stage <stage>` | Default: `inbox` |
 | `--recur schedule <rule>` | Creates a schedule-based recurring task |
 | `--recur completion <days>` | Creates a completion-based recurring task |
 | `--long-term` | Sets `long_term = true` |
 | `--wait-for <who>` | Sets `waiting_for` and `stage = waiting` |
-| `--blocked-by <id>` | Repeatable |
+| `--blocked-by <id-or-slug>` | Repeatable; accepts UUID, UUID prefix, or slug |
 | `--adjust <float>` | Sets `score_adjustment` |
 
 ### 8.2 `next list` and `next next`
@@ -305,13 +301,16 @@ prefixed) at the top of the output.
 ### 8.3 Task actions
 
 ```
-next show <id>             # full task details including subtasks and blockers
-next done <id>             # mark done; triggers recurrence if applicable
-next cancel <id>           # mark cancelled
-next edit <id> [options]   # modify fields (same options as add)
-next delete <id>           # permanently remove (prompts for confirmation)
-next move <id> --project <path> --stage <stage>  # relocate a task
+next show <id-or-slug>             # full task details including subtasks and blockers
+next done <id-or-slug>             # mark done; triggers recurrence if applicable
+next cancel <id-or-slug>           # mark cancelled
+next edit <id-or-slug> [options]   # modify fields (same options as add)
+next delete <id-or-slug>           # permanently remove (prompts for confirmation)
+next move <id-or-slug> --parent <id-or-slug> --stage <stage>  # relocate a task
 ```
+
+All `<id-or-slug>` arguments MUST accept a full UUID, an unambiguous UUID prefix
+(minimum 4 hex characters), or a task's slug.
 
 ### 8.4 Context and resource management
 
@@ -324,12 +323,15 @@ next resource                       # list resources and availability
 next resource set <$tag> on|off     # toggle a resource
 ```
 
-### 8.5 Project management
+### 8.5 Project commands
+
+`next project` commands are convenience wrappers. Any task can have subtasks; `project`
+commands simply default `--stage project` and present output in a tree view.
 
 ```
-next project list                   # list all projects (tree view)
-next project add <path> [options]   # create project (--priority, --description)
-next project show <path>            # show project metadata and its tasks
+next project list                   # list tasks with stage=project (tree view via parent_id)
+next project add <title> [options]  # shorthand for `next add --stage project`
+next project show <id-or-slug>      # show the task and all its descendants (any stage)
 ```
 
 ### 8.6 Review
