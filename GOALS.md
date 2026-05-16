@@ -52,6 +52,11 @@ require an unavailable resource are excluded from scoring and the default task l
 Resources are separate from contexts: contexts describe where you are, resources describe
 what you have access to.
 
+### Nested tasks (subtasks)
+A task can have subtasks to any depth. The parent task is treated as blocked until all of
+its subtasks are completed — it is excluded from scoring and the default view until then.
+Nesting is the primary organisation tool alongside projects.
+
 ### Blocking tasks
 A task can declare that it is blocked by one or more other tasks. Blocked tasks are
 excluded from scoring and the default view until all blockers are resolved.
@@ -75,6 +80,20 @@ contexts.
 - SQLite DB is a local cache rebuilt from the text files
 - `sync` command: pull from remote git repo, rebuild DB, then push any local changes
 - Offline edits accumulate as local git commits; sync merges them when connectivity returns
+
+### Forgejo integration
+- **Import** — pull issues from a Forgejo repository in as tasks, preserving title, body,
+  labels, and open/closed state
+- **Completion sync** — marking an imported task complete closes the corresponding Forgejo
+  issue; no other fields are written back
+- Each imported task stores its Forgejo issue URL so duplicates are avoided on re-import
+
+### WebCal (iCalendar) support
+- **Import** — read a `.ics` / webcal feed and create or update tasks based on VTODO
+  entries; only task status (NEEDS-ACTION → open, COMPLETED / CANCELLED → done) is
+  imported; other fields are ignored
+- **Export** — write tasks as VTODO entries; maps title, due date, priority, and
+  completion status; fields with no iCalendar equivalent are omitted gracefully
 
 ### Pipe-friendly output
 Every list/show command supports a `--json` flag. Plain-text output is structured and
