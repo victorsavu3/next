@@ -124,7 +124,7 @@ The rebuild MUST be a full replace (drop and re-import all rows) to avoid drift.
 
 ### 2.3 Sync
 
-`tm sync` MUST execute the following steps in order, stopping on any error:
+`next sync` MUST execute the following steps in order, stopping on any error:
 
 1. `git pull` from the configured remote (fast-forward or merge)
 2. If merge conflicts exist, print an actionable error message and exit with code 2
@@ -187,8 +187,8 @@ Default weights MUST be defined in code and SHOULD be overridable via a user con
 at `$XDG_CONFIG_HOME/task-manager/config.toml`.
 
 Tasks excluded from the default view (blocked, resource-unavailable, future `start`,
-parent awaiting subtasks) MUST NOT receive a score and MUST NOT appear in `tm list` /
-`tm next` output unless `--all` is passed.
+parent awaiting subtasks) MUST NOT receive a score and MUST NOT appear in `next list` /
+`next next` output unless `--all` is passed.
 
 ---
 
@@ -237,7 +237,7 @@ user MUST mark the parent done explicitly.
 
 ### 7.1 Completion-based
 
-When `tm done` is run on a task with `recurrence.type = "completion"`:
+When `next done` is run on a task with `recurrence.type = "completion"`:
 
 1. The current task is marked `done`
 2. A new task MUST be created, copying all fields from the completed task except `id`,
@@ -247,7 +247,7 @@ When `tm done` is run on a task with `recurrence.type = "completion"`:
 ### 7.2 Schedule-based
 
 A schedule-based recurrence template MUST maintain a single active instance at all times.
-When `tm done` is run on the active instance:
+When `next done` is run on the active instance:
 
 1. The current task is marked `done`
 2. A new task MUST be created immediately with `due` set to the next date produced by
@@ -256,9 +256,9 @@ When `tm done` is run on the active instance:
    due-date proximity
 
 The recurrence template MUST be identifiable (e.g. via a shared `recurrence_id` field on
-all instances) so `tm forecast` can project future occurrences.
+all instances) so `next forecast` can project future occurrences.
 
-`tm forecast` MUST accept the same filter tokens as `tm list` and MUST display the
+`next forecast` MUST accept the same filter tokens as `next list` and MUST display the
 upcoming due dates for all matching recurrence series for a configurable horizon
 (default: 90 days).
 
@@ -266,13 +266,13 @@ upcoming due dates for all matching recurrence series for a configurable horizon
 
 ## 8. CLI commands
 
-The binary MUST be named `tm`. All commands MUST support `--json` to emit JSON output.
+The binary MUST be named `next`. All commands MUST support `--json` to emit JSON output.
 Exit codes: `0` success, `1` user/input error, `2` system error.
 
-### 8.1 `tm add`
+### 8.1 `next add`
 
 ```
-tm add <title> [options]
+next add <title> [options]
 ```
 
 | Option | Notes |
@@ -292,11 +292,11 @@ tm add <title> [options]
 | `--blocked-by <id>` | Repeatable |
 | `--adjust <float>` | Sets `score_adjustment` |
 
-### 8.2 `tm list` and `tm next`
+### 8.2 `next list` and `next next`
 
 ```
-tm list [filters...]    # full scored list; overdue/due-today shown first with emphasis
-tm next [N] [filters...]  # top N tasks by score (default N=10)
+next list [filters...]    # full scored list; overdue/due-today shown first with emphasis
+next next [N] [filters...]  # top N tasks by score (default N=10)
 ```
 
 Both commands MUST show overdue and due-today tasks visually distinct (e.g. coloured or
@@ -305,37 +305,37 @@ prefixed) at the top of the output.
 ### 8.3 Task actions
 
 ```
-tm show <id>             # full task details including subtasks and blockers
-tm done <id>             # mark done; triggers recurrence if applicable
-tm cancel <id>           # mark cancelled
-tm edit <id> [options]   # modify fields (same options as add)
-tm delete <id>           # permanently remove (prompts for confirmation)
-tm move <id> --project <path> --stage <stage>  # relocate a task
+next show <id>             # full task details including subtasks and blockers
+next done <id>             # mark done; triggers recurrence if applicable
+next cancel <id>           # mark cancelled
+next edit <id> [options]   # modify fields (same options as add)
+next delete <id>           # permanently remove (prompts for confirmation)
+next move <id> --project <path> --stage <stage>  # relocate a task
 ```
 
 ### 8.4 Context and resource management
 
 ```
-tm context                        # show active contexts
-tm context set <@tag>...          # replace active context set
-tm context clear                  # clear all active contexts
+next context                        # show active contexts
+next context set <@tag>...          # replace active context set
+next context clear                  # clear all active contexts
 
-tm resource                       # list resources and availability
-tm resource set <$tag> on|off     # toggle a resource
+next resource                       # list resources and availability
+next resource set <$tag> on|off     # toggle a resource
 ```
 
 ### 8.5 Project management
 
 ```
-tm project list                   # list all projects (tree view)
-tm project add <path> [options]   # create project (--priority, --description)
-tm project show <path>            # show project metadata and its tasks
+next project list                   # list all projects (tree view)
+next project add <path> [options]   # create project (--priority, --description)
+next project show <path>            # show project metadata and its tasks
 ```
 
 ### 8.6 Review
 
 ```
-tm review
+next review
 ```
 
 Walks through GTD stages in order: **inbox → waiting-for → someday/maybe → projects**.
@@ -345,7 +345,7 @@ process, skip, move, done, delete). MUST be interruptible (Ctrl-C leaves tasks u
 ### 8.7 Sync
 
 ```
-tm sync
+next sync
 ```
 
 See §2.3.
@@ -353,7 +353,7 @@ See §2.3.
 ### 8.8 Forecasting
 
 ```
-tm forecast [filters...]
+next forecast [filters...]
 ```
 
 See §7.2.
@@ -365,7 +365,7 @@ See §7.2.
 ### 9.1 Forgejo
 
 ```
-tm import forgejo <owner/repo> [--project <path>] [--tag <tag>]
+next import forgejo <owner/repo> [--project <path>] [--tag <tag>]
 ```
 
 - MUST fetch all issues (open and closed) from the Forgejo API
@@ -375,14 +375,14 @@ tm import forgejo <owner/repo> [--project <path>] [--tag <tag>]
 - MUST store the issue URL in `forgejo_issue`
 - MUST NOT overwrite user edits to other fields on re-import
 
-When `tm done` is called on a task with a `forgejo_issue` field, the tool MUST close
+When `next done` is called on a task with a `forgejo_issue` field, the tool MUST close
 the corresponding issue via the Forgejo API. No other field is written back to Forgejo.
 
 ### 9.2 iCalendar (WebCal)
 
 ```
-tm import ical <file-or-url>
-tm export ical [filters...] [--output <file>]
+next import ical <file-or-url>
+next export ical [filters...] [--output <file>]
 ```
 
 **Import:**
