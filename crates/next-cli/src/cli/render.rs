@@ -1,12 +1,45 @@
-//! Placeholder render functions.
-//! These will be replaced once the storage layer and query logic are implemented.
+use next::domain::scoring::ScoredTask;
 
-#![allow(dead_code)]
+/// Prints a human-readable table of scored tasks to stdout.
+pub fn render_task_list(tasks: &[ScoredTask]) {
+    if tasks.is_empty() {
+        println!("No tasks.");
+        return;
+    }
 
-pub fn render_task_list_placeholder() {
-    println!("(task list rendering not yet implemented)");
+    for st in tasks {
+        let task = &st.task;
+
+        let short_id = {
+            let hex = task.id.to_string().replace('-', "");
+            hex[..8].to_owned()
+        };
+
+        let title = truncate(&task.title, 45);
+
+        let due = task
+            .due
+            .map(|d| format!("due:{d}"))
+            .unwrap_or_default();
+
+        let tags = if task.tags.is_empty() {
+            String::new()
+        } else {
+            task.tags.join(" ")
+        };
+
+        let score = format!("{:.1}", st.score);
+
+        println!(
+            "{short_id}  {title:<45}  {score:>5}  {due:<14}  {tags}",
+        );
+    }
 }
 
-pub fn render_task_placeholder() {
-    println!("(task rendering not yet implemented)");
+fn truncate(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        s
+    } else {
+        &s[..max]
+    }
 }

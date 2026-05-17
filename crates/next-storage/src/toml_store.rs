@@ -31,7 +31,7 @@ impl TomlStore {
     }
 
     /// Canonical filename for a task (no directory prefix).
-    fn task_filename(task: &Task) -> String {
+    pub(crate) fn task_filename(task: &Task) -> String {
         if let Some(ref slug) = task.slug {
             format!("{slug}.toml")
         } else {

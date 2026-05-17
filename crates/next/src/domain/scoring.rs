@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// A task paired with its computed urgency score.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ScoredTask {
     pub task: Task,
     pub score: f64,

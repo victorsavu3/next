@@ -1,3 +1,8 @@
+use next::domain::{
+    filter::FilterSet,
+    task::Stage,
+};
+
 /// Shared filter arguments used across list-style commands.
 ///
 /// Filter tokens are captured as trailing positional args and parsed into
@@ -43,5 +48,31 @@ impl FilterArgs {
             }
         }
         args
+    }
+
+    /// Converts to a domain [`FilterSet`].
+    pub fn to_filter_set(&self) -> anyhow::Result<FilterSet> {
+        let stage = self.stage.as_deref().map(parse_stage).transpose()?;
+        Ok(FilterSet {
+            required_tags: self.required_tags.clone(),
+            excluded_tags: self.excluded_tags.clone(),
+            stage,
+            context_override: self
+                .context_override
+                .as_ref()
+                .map(|c| vec![c.clone()]),
+            include_future: self.future,
+            disable_implicit: self.all,
+        })
+    }
+}
+
+fn parse_stage(s: &str) -> anyhow::Result<Stage> {
+    match s.to_lowercase().as_str() {
+        "inbox" => Ok(Stage::Inbox),
+        "project" => Ok(Stage::Project),
+        "waiting" => Ok(Stage::Waiting),
+        "someday" => Ok(Stage::Someday),
+        _ => anyhow::bail!("unknown stage {s:?} — expected inbox, project, waiting, or someday"),
     }
 }
