@@ -2,14 +2,14 @@ use crate::AppContext;
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
-    /// Task ID to edit.
+    /// Task to edit: UUID, UUID prefix, or slug.
     pub id: String,
 
     /// New title.
     #[arg(long)]
     pub title: Option<String>,
 
-    /// Due date.
+    /// Due date (ISO 8601 or natural language).
     #[arg(long)]
     pub due: Option<String>,
 
@@ -21,9 +21,9 @@ pub struct Args {
     #[arg(long)]
     pub priority: Option<String>,
 
-    /// Project path.
+    /// User-provided slug.
     #[arg(long)]
-    pub project: Option<String>,
+    pub slug: Option<String>,
 
     /// Tags to attach (repeatable).
     #[arg(long = "tag", action = clap::ArgAction::Append)]
@@ -33,55 +33,55 @@ pub struct Args {
     #[arg(long = "remove-tag", action = clap::ArgAction::Append)]
     pub remove_tags: Vec<String>,
 
-    /// Parent task ID.
+    /// Parent task: UUID, UUID prefix, or slug.
     #[arg(long)]
     pub parent: Option<String>,
 
-    /// IDs of tasks that block this one (repeatable).
+    /// Explicit blocker task (repeatable).
     #[arg(long = "blocked-by", action = clap::ArgAction::Append)]
     pub blocked_by: Vec<String>,
 
-    /// Additional notes.
+    /// Free-text notes.
     #[arg(long)]
     pub notes: Option<String>,
 
-    /// Stage.
+    /// GTD stage (inbox, project, waiting, someday).
     #[arg(long)]
     pub stage: Option<String>,
 
-    /// Identifier of a task or date to wait for.
+    /// Who this task is waiting on (sets stage to waiting).
     #[arg(long)]
     pub wait_for: Option<String>,
 
-    /// Recurrence schedule rule.
+    /// Schedule-based recurrence rule.
     #[arg(long)]
     pub recur_schedule: Option<String>,
 
-    /// Recurrence completion interval in days.
+    /// Completion-based recurrence interval in days.
     #[arg(long)]
     pub recur_completion: Option<u32>,
 
-    /// Mark task as long-term.
+    /// Suppress age-based scoring.
     #[arg(long)]
     pub long_term: bool,
 
-    /// Adjust due/start dates relative to today.
+    /// Manual urgency score adjustment.
     #[arg(long)]
-    pub adjust: bool,
+    pub adjust: Option<f64>,
 
-    /// Clear the due date.
+    /// Remove the due date.
     #[arg(long)]
     pub clear_due: bool,
 
-    /// Clear the start date.
+    /// Remove the start date.
     #[arg(long)]
     pub clear_start: bool,
 
-    /// Clear the parent link.
+    /// Remove the parent link.
     #[arg(long)]
     pub clear_parent: bool,
 
-    /// Clear all blocked-by links.
+    /// Remove all explicit blockers.
     #[arg(long)]
     pub clear_blocked_by: bool,
 

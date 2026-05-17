@@ -20,11 +20,11 @@ pub struct ForgejoArgs {
     /// Repository in "owner/repo" format.
     pub repo: String,
 
-    /// Project path to assign imported tasks.
+    /// Parent task for imported tasks: UUID, UUID prefix, or slug.
     #[arg(long)]
-    pub project: Option<String>,
+    pub parent: Option<String>,
 
-    /// Tags to attach (repeatable).
+    /// Extra tags to attach to all imported tasks (repeatable).
     #[arg(long = "tag", action = clap::ArgAction::Append)]
     pub tags: Vec<String>,
 
@@ -35,7 +35,7 @@ pub struct ForgejoArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct IcalArgs {
-    /// Path to a local iCal file or a URL.
+    /// Path to a local iCal file or an http(s)://  / webcal:// URL.
     pub source: String,
 
     /// Output as JSON.

@@ -3,14 +3,14 @@ use crate::AppContext;
 #[derive(clap::Args, Debug)]
 #[command(name = "move")]
 pub struct Args {
-    /// Task ID to move.
+    /// Task to move: UUID, UUID prefix, or slug.
     pub id: String,
 
-    /// Target project path.
+    /// New parent task: UUID, UUID prefix, or slug. Pass "none" to remove.
     #[arg(long)]
-    pub project: Option<String>,
+    pub parent: Option<String>,
 
-    /// Target stage (inbox, next, waiting, someday).
+    /// New GTD stage (inbox, project, waiting, someday).
     #[arg(long)]
     pub stage: Option<String>,
 

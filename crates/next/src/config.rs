@@ -1,58 +1,153 @@
+use serde::{Deserialize, Serialize};
+
+// ── Per-field default functions ───────────────────────────────────────────────
+// Defined once; used both by `#[serde(default = "...")]` and `Default` impl.
+
+fn default_due_overdue_base() -> f64 { 12.0 }
+fn default_due_overdue_per_day() -> f64 { 0.3 }
+fn default_due_week_base() -> f64 { 6.0 }
+fn default_due_week_per_day() -> f64 { 0.8 }
+fn default_due_month_base() -> f64 { 3.0 }
+fn default_due_month_per_day() -> f64 { 0.1 }
+fn default_priority_low() -> f64 { 0.0 }
+fn default_priority_medium() -> f64 { 1.0 }
+fn default_priority_high() -> f64 { 2.0 }
+fn default_project_low() -> f64 { -0.5 }
+fn default_project_medium() -> f64 { 0.0 }
+fn default_project_high() -> f64 { 0.5 }
+fn default_age_per_day() -> f64 { 0.01 }
+fn default_age_max() -> f64 { 2.0 }
+fn default_forecast_horizon_days() -> u32 { 90 }
+fn default_next_count() -> usize { 10 }
+
+// ── ScoringConfig ─────────────────────────────────────────────────────────────
+
 /// Weights used in the urgency scoring formula.
-/// All values are additive contributions to the final score.
-#[derive(Debug, Clone)]
+///
+/// All fields are optional in the config file; any omitted field keeps its
+/// default value, so a minimal `[scoring]` section only needs to list the
+/// overrides (e.g. `priority_high = 3.0`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoringConfig {
     // Due-date factor
+    #[serde(default = "default_due_overdue_base")]
     pub due_overdue_base: f64,
+    #[serde(default = "default_due_overdue_per_day")]
     pub due_overdue_per_day: f64,
+    #[serde(default = "default_due_week_base")]
     pub due_week_base: f64,
+    #[serde(default = "default_due_week_per_day")]
     pub due_week_per_day: f64,
+    #[serde(default = "default_due_month_base")]
     pub due_month_base: f64,
+    #[serde(default = "default_due_month_per_day")]
     pub due_month_per_day: f64,
 
     // Priority factor
+    #[serde(default = "default_priority_low")]
     pub priority_low: f64,
+    #[serde(default = "default_priority_medium")]
     pub priority_medium: f64,
+    #[serde(default = "default_priority_high")]
     pub priority_high: f64,
 
-    // Project-priority offset
+    // Project-priority offset (based on parent task priority)
+    #[serde(default = "default_project_low")]
     pub project_low: f64,
+    #[serde(default = "default_project_medium")]
     pub project_medium: f64,
+    #[serde(default = "default_project_high")]
     pub project_high: f64,
 
     // Age factor (per day, capped at `age_max`)
+    #[serde(default = "default_age_per_day")]
     pub age_per_day: f64,
+    #[serde(default = "default_age_max")]
     pub age_max: f64,
 }
 
 impl Default for ScoringConfig {
     fn default() -> Self {
         Self {
-            due_overdue_base: 12.0,
-            due_overdue_per_day: 0.3,
-            due_week_base: 6.0,
-            due_week_per_day: 0.8,
-            due_month_base: 3.0,
-            due_month_per_day: 0.1,
-            priority_low: 0.0,
-            priority_medium: 1.0,
-            priority_high: 2.0,
-            project_low: -0.5,
-            project_medium: 0.0,
-            project_high: 0.5,
-            age_per_day: 0.01,
-            age_max: 2.0,
+            due_overdue_base: default_due_overdue_base(),
+            due_overdue_per_day: default_due_overdue_per_day(),
+            due_week_base: default_due_week_base(),
+            due_week_per_day: default_due_week_per_day(),
+            due_month_base: default_due_month_base(),
+            due_month_per_day: default_due_month_per_day(),
+            priority_low: default_priority_low(),
+            priority_medium: default_priority_medium(),
+            priority_high: default_priority_high(),
+            project_low: default_project_low(),
+            project_medium: default_project_medium(),
+            project_high: default_project_high(),
+            age_per_day: default_age_per_day(),
+            age_max: default_age_max(),
         }
     }
 }
 
-/// Application-wide configuration loaded from
-/// `$XDG_CONFIG_HOME/task-manager/config.toml`.
-#[derive(Debug, Clone, Default)]
+// ── ForgejoConfig ─────────────────────────────────────────────────────────────
+
+/// Connection settings for the Forgejo integration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ForgejoConfig {
+    /// Base URL of the Forgejo instance, e.g. `https://forgejo.example.com`.
+    #[serde(default)]
+    pub base_url: String,
+
+    /// Personal access token with read/write access to issues.
+    #[serde(default)]
+    pub token: String,
+}
+
+// ── Config ────────────────────────────────────────────────────────────────────
+
+/// Application-wide configuration.
+///
+/// Loaded from `$XDG_CONFIG_HOME/task-manager/config.toml`.
+/// All fields are optional; missing fields use the values shown in
+/// [`Config::default`].
+///
+/// Example config file:
+/// ```toml
+/// forecast_horizon_days = 60
+/// next_count = 5
+///
+/// [forgejo]
+/// base_url = "https://forgejo.example.com"
+/// token    = "my-secret-token"
+///
+/// [scoring]
+/// priority_high = 3.0          # only override what you want to change
+/// age_max       = 3.0
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Urgency scoring weights.
+    #[serde(default)]
     pub scoring: ScoringConfig,
-    /// Number of days ahead shown by `next forecast` (default 90).
+
+    /// Forgejo integration settings.
+    #[serde(default)]
+    pub forgejo: ForgejoConfig,
+
+    /// Number of days ahead shown by `next forecast`.
+    #[serde(default = "default_forecast_horizon_days")]
     pub forecast_horizon_days: u32,
-    /// Default number of tasks shown by `next next` (default 10).
+
+    /// Default number of tasks shown by `next next`.
+    #[serde(default = "default_next_count")]
     pub next_count: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            scoring: ScoringConfig::default(),
+            forgejo: ForgejoConfig::default(),
+            forecast_horizon_days: default_forecast_horizon_days(),
+            next_count: default_next_count(),
+        }
+    }
 }
