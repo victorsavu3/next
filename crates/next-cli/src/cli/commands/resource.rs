@@ -86,6 +86,6 @@ fn set(ctx: &mut AppContext, resource: String, availability: Availability) -> an
     )?;
 
     let label = if available { "available" } else { "unavailable" };
-    println!("{resource} marked as {label}.");
+    ctx.log.info("resource", &format!("{resource} marked as {label}"));
     Ok(())
 }

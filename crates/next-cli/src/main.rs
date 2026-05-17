@@ -1,4 +1,5 @@
 mod cli;
+mod log;
 mod resolve;
 
 use std::path::PathBuf;
@@ -6,6 +7,7 @@ use std::path::PathBuf;
 use anyhow::Context as _;
 use clap::Parser;
 use cli::{Cli, Command};
+use log::Logger;
 use next::{Config, Store, VcsBackend};
 
 pub struct AppContext {
@@ -14,6 +16,7 @@ pub struct AppContext {
     pub vcs: Box<dyn VcsBackend>,
     /// Absolute path to the repository root (contains `.git` and `state.toml`).
     pub repo_root: PathBuf,
+    pub log: Logger,
 }
 
 impl AppContext {
@@ -23,11 +26,13 @@ impl AppContext {
         let config = load_config();
         let (store, vcs) = next_storage::open(repo_root.clone())
             .context("failed to open task store")?;
+        let log = Logger::new(&repo_root);
         Ok(Self {
             config,
             store: Box::new(store),
             vcs: Box::new(vcs),
             repo_root,
+            log,
         })
     }
 }
@@ -67,7 +72,27 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let mut ctx = AppContext::new()?;
 
-    match cli.command {
+    let cmd_name = match &cli.command {
+        Command::Add(_) => "add",
+        Command::List(_) => "list",
+        Command::Next(_) => "next",
+        Command::Show(_) => "show",
+        Command::Done(_) => "done",
+        Command::Cancel(_) => "cancel",
+        Command::Edit(_) => "edit",
+        Command::Delete(_) => "delete",
+        Command::Move(_) => "move",
+        Command::Project(_) => "project",
+        Command::Context(_) => "context",
+        Command::Resource(_) => "resource",
+        Command::Forecast(_) => "forecast",
+        Command::Review(_) => "review",
+        Command::Sync(_) => "sync",
+        Command::Import(_) => "import",
+        Command::Export(_) => "export",
+    };
+
+    let result = match cli.command {
         Command::Add(args) => cli::commands::add::run(args, &mut ctx),
         Command::List(args) => cli::commands::list::run(args, &mut ctx),
         Command::Next(args) => cli::commands::next_cmd::run(args, &mut ctx),
@@ -85,5 +110,11 @@ fn main() -> anyhow::Result<()> {
         Command::Sync(args) => cli::commands::sync::run(args, &mut ctx),
         Command::Import(args) => cli::commands::import::run(args, &mut ctx),
         Command::Export(args) => cli::commands::export::run(args, &mut ctx),
+    };
+
+    if let Err(ref e) = result {
+        ctx.log.error(cmd_name, &format!("{e:#}"));
     }
+
+    result
 }

@@ -133,7 +133,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);
     } else {
-        println!("Added [{}] {}", short_id, task.title);
+        ctx.log.info("add", &format!("added [{}] {}", short_id, task.title));
     }
 
     Ok(())

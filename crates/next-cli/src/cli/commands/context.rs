@@ -57,7 +57,7 @@ fn set(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
         &[state_path],
         &format!("next: context set {}", tags.join(" ")),
     )?;
-    println!("Active context set to: {}", tags.join(", "));
+    ctx.log.info("context", &format!("set {}", tags.join(" ")));
     Ok(())
 }
 
@@ -67,6 +67,6 @@ fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
     ctx.store.save_state(&state)?;
     let state_path = ctx.repo_root.join("state.toml");
     ctx.vcs.commit(&[state_path], "next: context clear")?;
-    println!("Active context cleared.");
+    ctx.log.info("context", "cleared");
     Ok(())
 }
