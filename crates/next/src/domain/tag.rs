@@ -1,11 +1,12 @@
 /// Classifies a tag string by its prefix convention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TagKind {
-    /// `@name` — working-environment context (e.g. `@home`, `@work`).
+    /// `@name` or `@parent/child` — working-environment context (e.g. `@home`, `@work`).
     Context,
     /// `$name` — physical or situational resource (e.g. `$printer`, `$vacation`).
     Resource,
-    /// No prefix — freeform label (e.g. `python`, `reading`).
+    /// `#name` or `#parent/child` — freeform hierarchical label (e.g. `#python`, `#work/backend`).
+    /// Segments are separated by `/`. A filter on a parent matches all descendants.
     Freeform,
 }
 
@@ -16,6 +17,7 @@ pub fn classify(tag: &str) -> TagKind {
     } else if tag.starts_with('$') {
         TagKind::Resource
     } else {
+        // Both `#name` and bare names (legacy) are Freeform.
         TagKind::Freeform
     }
 }
@@ -30,9 +32,58 @@ pub fn is_resource(tag: &str) -> bool {
     matches!(classify(tag), TagKind::Resource)
 }
 
-/// Strips the leading `@` or `$` prefix and returns the bare name.
+/// Strips the leading `@`, `$`, or `#` prefix and returns the bare name.
+///
+/// For hierarchical tags the full path is returned: `bare_name("#work/backend") == "work/backend"`.
 pub fn bare_name(tag: &str) -> &str {
-    tag.trim_start_matches(['@', '$'])
+    tag.trim_start_matches(['@', '$', '#'])
+}
+
+/// Returns `true` when `filter` matches `tag`.
+///
+/// Matching rules (same for all prefix kinds):
+/// - Exact match: `filter == tag`.
+/// - Ancestor match: `tag` starts with `filter` followed by `/`.
+///
+/// Examples:
+/// ```
+/// use next::domain::tag::tag_matches;
+/// assert!(tag_matches("#abc",     "#abc"));        // exact
+/// assert!(tag_matches("#abc",     "#abc/cde"));    // ancestor
+/// assert!(!tag_matches("#abc/cd", "#abc/cde"));   // not a segment boundary
+/// assert!(!tag_matches("#ab",     "#abc/cde"));   // different segment
+/// ```
+pub fn tag_matches(filter: &str, tag: &str) -> bool {
+    if tag == filter {
+        return true;
+    }
+    // Check that `filter` is a complete segment prefix of `tag`.
+    match tag.strip_prefix(filter) {
+        Some(rest) => rest.starts_with('/'),
+        None => false,
+    }
+}
+
+/// Returns all ancestor tag strings for `tag`, from outermost to `tag` itself.
+///
+/// For `#a/b/c` returns `["#a", "#a/b", "#a/b/c"]`. The prefix character is
+/// preserved. For a tag with no `/`, returns only the tag itself.
+pub fn ancestors(tag: &str) -> Vec<&str> {
+    let (prefix, rest) = if let Some(s) = tag.strip_prefix(['@', '$', '#']) {
+        (&tag[..1], s)
+    } else {
+        ("", tag)
+    };
+
+    let mut result = Vec::new();
+    let pos = prefix.len();
+    for (i, c) in rest.char_indices() {
+        if c == '/' {
+            result.push(&tag[..pos + i]);
+        }
+    }
+    result.push(tag); // include the tag itself
+    result
 }
 
 #[cfg(test)]
@@ -43,6 +94,7 @@ mod tests {
     fn context_tag() {
         assert_eq!(classify("@home"), TagKind::Context);
         assert_eq!(classify("@work"), TagKind::Context);
+        assert_eq!(classify("@work/frontend"), TagKind::Context);
     }
 
     #[test]
@@ -53,8 +105,9 @@ mod tests {
 
     #[test]
     fn freeform_tag() {
-        assert_eq!(classify("python"), TagKind::Freeform);
-        assert_eq!(classify("reading"), TagKind::Freeform);
+        assert_eq!(classify("#python"), TagKind::Freeform);
+        assert_eq!(classify("#work/backend"), TagKind::Freeform);
+        assert_eq!(classify("python"), TagKind::Freeform); // legacy bare name
         assert_eq!(classify(""), TagKind::Freeform);
     }
 
@@ -62,6 +115,73 @@ mod tests {
     fn bare_name_strips_prefix() {
         assert_eq!(bare_name("@home"), "home");
         assert_eq!(bare_name("$printer"), "printer");
+        assert_eq!(bare_name("#python"), "python");
+        assert_eq!(bare_name("#work/backend"), "work/backend");
         assert_eq!(bare_name("python"), "python");
+    }
+
+    // --- tag_matches ---
+
+    #[test]
+    fn exact_match() {
+        assert!(tag_matches("#abc", "#abc"));
+        assert!(tag_matches("@work", "@work"));
+        assert!(tag_matches("#abc/cde", "#abc/cde"));
+    }
+
+    #[test]
+    fn ancestor_matches_descendant() {
+        assert!(tag_matches("#abc", "#abc/cde"));
+        assert!(tag_matches("#abc/cde", "#abc/cde/fgh"));
+        assert!(tag_matches("@work", "@work/frontend"));
+    }
+
+    #[test]
+    fn partial_segment_does_not_match() {
+        assert!(!tag_matches("#abc/cd", "#abc/cde")); // "cd" is not a full segment of "cde"
+        assert!(!tag_matches("#ab", "#abc/cde")); // "ab" is not a full segment of "abc"
+        assert!(!tag_matches("#abc/cde", "#abc/cd")); // filter is longer than tag
+    }
+
+    #[test]
+    fn different_prefix_does_not_match() {
+        assert!(!tag_matches("#abc", "@abc")); // wrong kind
+        assert!(!tag_matches("@abc", "#abc"));
+    }
+
+    #[test]
+    fn no_false_cross_segment_match() {
+        // "#abc" should not match "#abcdef" (no slash boundary)
+        assert!(!tag_matches("#abc", "#abcdef"));
+    }
+
+    // --- ancestors ---
+
+    #[test]
+    fn ancestors_single_segment() {
+        assert_eq!(ancestors("#abc"), vec!["#abc"]);
+    }
+
+    #[test]
+    fn ancestors_two_segments() {
+        assert_eq!(ancestors("#abc/cde"), vec!["#abc", "#abc/cde"]);
+    }
+
+    #[test]
+    fn ancestors_three_segments() {
+        assert_eq!(
+            ancestors("#a/b/c"),
+            vec!["#a", "#a/b", "#a/b/c"]
+        );
+    }
+
+    #[test]
+    fn ancestors_context_tag() {
+        assert_eq!(ancestors("@work/frontend"), vec!["@work", "@work/frontend"]);
+    }
+
+    #[test]
+    fn ancestors_bare_name() {
+        assert_eq!(ancestors("python"), vec!["python"]);
     }
 }
