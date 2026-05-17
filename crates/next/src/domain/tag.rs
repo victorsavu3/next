@@ -1,12 +1,17 @@
 /// Classifies a tag string by its prefix convention.
+///
+/// All three kinds support hierarchical nesting via `/` separators.
+/// A filter on a parent segment matches any descendant: `@work` matches
+/// `@work/frontend`, `$office` matches `$office/printer`, `#lang` matches
+/// `#lang/rust`. Use [`tag_matches`] to test this relationship.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TagKind {
-    /// `@name` or `@parent/child` — working-environment context (e.g. `@home`, `@work`).
+    /// `@name` or `@parent/child` — working-environment context (e.g. `@home`, `@work/frontend`).
     Context,
-    /// `$name` — physical or situational resource (e.g. `$printer`, `$vacation`).
+    /// `$name` or `$parent/child` — physical or situational resource (e.g. `$printer`, `$office/desk`).
+    /// If a parent resource is unavailable, all its descendants are implicitly unavailable too.
     Resource,
-    /// `#name` or `#parent/child` — freeform hierarchical label (e.g. `#python`, `#work/backend`).
-    /// Segments are separated by `/`. A filter on a parent matches all descendants.
+    /// `#name` or `#parent/child` — freeform hierarchical label (e.g. `#python`, `#lang/rust`).
     Freeform,
 }
 
@@ -41,17 +46,20 @@ pub fn bare_name(tag: &str) -> &str {
 
 /// Returns `true` when `filter` matches `tag`.
 ///
-/// Matching rules (same for all prefix kinds):
+/// The same rules apply to all prefix kinds (`@`, `$`, `#`):
 /// - Exact match: `filter == tag`.
-/// - Ancestor match: `tag` starts with `filter` followed by `/`.
+/// - Ancestor match: `tag` starts with `filter` followed immediately by `/`.
 ///
 /// Examples:
 /// ```
 /// use next::domain::tag::tag_matches;
-/// assert!(tag_matches("#abc",     "#abc"));        // exact
-/// assert!(tag_matches("#abc",     "#abc/cde"));    // ancestor
-/// assert!(!tag_matches("#abc/cd", "#abc/cde"));   // not a segment boundary
-/// assert!(!tag_matches("#ab",     "#abc/cde"));   // different segment
+/// assert!(tag_matches("#abc",      "#abc"));         // exact
+/// assert!(tag_matches("#abc",      "#abc/cde"));     // ancestor
+/// assert!(tag_matches("@work",     "@work/frontend")); // context hierarchy
+/// assert!(tag_matches("$office",   "$office/desk"));  // resource hierarchy
+/// assert!(!tag_matches("#abc/cd",  "#abc/cde"));    // partial segment
+/// assert!(!tag_matches("#ab",      "#abc/cde"));    // different segment
+/// assert!(!tag_matches("#abc",     "#abcdef"));     // no slash boundary
 /// ```
 pub fn tag_matches(filter: &str, tag: &str) -> bool {
     if tag == filter {
@@ -151,8 +159,15 @@ mod tests {
 
     #[test]
     fn no_false_cross_segment_match() {
-        // "#abc" should not match "#abcdef" (no slash boundary)
         assert!(!tag_matches("#abc", "#abcdef"));
+    }
+
+    #[test]
+    fn resource_hierarchy() {
+        assert!(tag_matches("$office", "$office/printer"));
+        assert!(tag_matches("$office/printer", "$office/printer/color"));
+        assert!(!tag_matches("$office", "$officedesk")); // no slash boundary
+        assert!(!tag_matches("$office/desk", "$office/printer")); // sibling
     }
 
     // --- ancestors ---
