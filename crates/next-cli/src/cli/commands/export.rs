@@ -1,5 +1,4 @@
 use crate::AppContext;
-use crate::cli::filter::FilterArgs;
 
 /// Top-level `next export` subcommand.
 #[derive(clap::Args, Debug)]
@@ -39,16 +38,6 @@ pub struct IcalArgs {
 
 pub fn run(args: Args, _ctx: &mut AppContext) -> anyhow::Result<()> {
     match args.subcommand {
-        ExportSubcommand::Ical(a) => {
-            let mut filter = FilterArgs::parse(a.tokens);
-            filter.future = a.future;
-            filter.all = a.all;
-            filter.stage = a.stage;
-            println!(
-                "not yet implemented: export ical (output={:?}, filter={filter:?})",
-                a.output
-            );
-        }
+        ExportSubcommand::Ical(_) => anyhow::bail!("iCal export not yet implemented"),
     }
-    Ok(())
 }

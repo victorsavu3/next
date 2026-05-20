@@ -1,8 +1,8 @@
-use crate::AppContext;
+use crate::{resolve::resolve_task_id, AppContext};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
-    /// Task ID to cancel.
+    /// Task to cancel: UUID, UUID prefix, or slug.
     pub id: String,
 
     /// Output as JSON.
@@ -10,7 +10,21 @@ pub struct Args {
     pub json: bool,
 }
 
-pub fn run(args: Args, _ctx: &mut AppContext) -> anyhow::Result<()> {
-    println!("not yet implemented: cancel (id={})", args.id);
+pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
+    let id = resolve_task_id(&*ctx.store, &args.id)?;
+    let mut task = ctx.store.get_task(id)?;
+    task.mark_cancelled();
+    ctx.store.save_task(&task)?;
+
+    let task_path = next_storage::task_path(&ctx.repo_root, &task);
+    ctx.vcs
+        .commit(&[task_path], &format!("next: cancel {}", task.title))?;
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&task)?);
+    } else {
+        ctx.log
+            .info("cancel", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+    }
     Ok(())
 }

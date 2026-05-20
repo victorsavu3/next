@@ -1,4 +1,10 @@
-use crate::AppContext;
+use chrono::Local;
+use next::domain::{
+    date_parse::parse_date,
+    task::{Priority, Recurrence, Stage},
+};
+
+use crate::{resolve::resolve_task_id, AppContext};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -90,7 +96,123 @@ pub struct Args {
     pub json: bool,
 }
 
-pub fn run(args: Args, _ctx: &mut AppContext) -> anyhow::Result<()> {
-    println!("not yet implemented: edit (id={})", args.id);
+pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
+    let today = Local::now().date_naive();
+    let id = resolve_task_id(&*ctx.store, &args.id)?;
+    let mut task = ctx.store.get_task(id)?;
+
+    if let Some(title) = args.title {
+        task.title = title;
+    }
+
+    if args.clear_due {
+        task.due = None;
+    } else if let Some(expr) = args.due {
+        task.due = Some(parse_date(&expr, today)?);
+    }
+
+    if args.clear_start {
+        task.start = None;
+    } else if let Some(expr) = args.start {
+        task.start = Some(parse_date(&expr, today)?);
+    }
+
+    if let Some(p) = args.priority {
+        task.priority = parse_priority(&p)?;
+    }
+
+    if let Some(slug) = args.slug {
+        task.slug = Some(slug);
+    }
+
+    // Add tags (deduplicate).
+    for tag in args.tags {
+        if !task.tags.contains(&tag) {
+            task.tags.push(tag);
+        }
+    }
+    // Remove tags.
+    for tag in &args.remove_tags {
+        task.tags.retain(|t| t != tag);
+    }
+
+    if args.clear_parent {
+        task.parent_id = None;
+    } else if let Some(ref parent_ref) = args.parent {
+        task.parent_id = Some(resolve_task_id(&*ctx.store, parent_ref)?);
+    }
+
+    if args.clear_blocked_by {
+        task.blocked_by.clear();
+    } else {
+        for blocker_ref in &args.blocked_by {
+            let bid = resolve_task_id(&*ctx.store, blocker_ref)?;
+            if !task.blocked_by.contains(&bid) {
+                task.blocked_by.push(bid);
+            }
+        }
+    }
+
+    if let Some(notes) = args.notes {
+        task.notes = Some(notes);
+    }
+
+    if let Some(ref stage_str) = args.stage {
+        task.stage = parse_stage(stage_str)?;
+    }
+
+    if let Some(wait) = args.wait_for {
+        task.waiting_for = Some(wait);
+        task.stage = Stage::Waiting;
+    }
+
+    if let Some(rule) = args.recur_schedule {
+        task.recurrence = Some(Recurrence::Schedule { rule });
+    } else if let Some(interval) = args.recur_completion {
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: interval,
+        });
+    }
+
+    if args.long_term {
+        task.long_term = true;
+    }
+
+    if let Some(adj) = args.adjust {
+        task.score_adjustment = adj;
+    }
+
+    task.touch();
+    ctx.store.save_task(&task)?;
+
+    let task_path = next_storage::task_path(&ctx.repo_root, &task);
+    ctx.vcs
+        .commit(&[task_path], &format!("next: edit {}", task.title))?;
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&task)?);
+    } else {
+        ctx.log
+            .info("edit", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+    }
     Ok(())
+}
+
+fn parse_priority(s: &str) -> anyhow::Result<Priority> {
+    match s.to_lowercase().as_str() {
+        "low" => Ok(Priority::Low),
+        "medium" | "med" => Ok(Priority::Medium),
+        "high" => Ok(Priority::High),
+        _ => anyhow::bail!("unknown priority {s:?} — expected low, medium, or high"),
+    }
+}
+
+fn parse_stage(s: &str) -> anyhow::Result<Stage> {
+    match s.to_lowercase().as_str() {
+        "inbox" => Ok(Stage::Inbox),
+        "project" => Ok(Stage::Project),
+        "waiting" => Ok(Stage::Waiting),
+        "someday" => Ok(Stage::Someday),
+        _ => anyhow::bail!("unknown stage {s:?} — expected inbox, project, waiting, or someday"),
+    }
 }

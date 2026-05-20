@@ -1,5 +1,8 @@
+use chrono::Local;
+use next::domain::{filter, scoring};
+
+use crate::cli::{filter::FilterArgs, render};
 use crate::AppContext;
-use crate::cli::filter::FilterArgs;
 
 #[derive(clap::Args, Debug)]
 #[command(name = "next")]
@@ -29,12 +32,27 @@ pub struct Args {
 }
 
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
-    let mut filter = FilterArgs::parse(args.tokens);
-    filter.future = args.future;
-    filter.all = args.all;
-    filter.stage = args.stage;
-    filter.json = args.json;
+    let today = Local::now().date_naive();
     let count = args.count.unwrap_or(ctx.config.next_count);
-    println!("not yet implemented: next (count={count}, filter={filter:?})");
+
+    let mut filter_args = FilterArgs::parse(args.tokens);
+    filter_args.future = args.future;
+    filter_args.all = args.all;
+    filter_args.stage = args.stage;
+    filter_args.json = args.json;
+
+    let filter_set = filter_args.to_filter_set()?;
+    let state = ctx.store.get_state()?;
+    let all_tasks = ctx.store.list_tasks()?;
+
+    let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
+    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.config.scoring);
+    scored.truncate(count);
+
+    if filter_args.json {
+        println!("{}", serde_json::to_string_pretty(&scored)?);
+    } else {
+        render::render_task_list(&scored);
+    }
     Ok(())
 }

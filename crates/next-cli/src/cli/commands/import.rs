@@ -45,12 +45,7 @@ pub struct IcalArgs {
 
 pub fn run(args: Args, _ctx: &mut AppContext) -> anyhow::Result<()> {
     match args.subcommand {
-        ImportSubcommand::Forgejo(a) => {
-            println!("not yet implemented: import forgejo (repo={})", a.repo)
-        }
-        ImportSubcommand::Ical(a) => {
-            println!("not yet implemented: import ical (source={})", a.source)
-        }
+        ImportSubcommand::Forgejo(_) => anyhow::bail!("Forgejo import not yet implemented"),
+        ImportSubcommand::Ical(_) => anyhow::bail!("iCal import not yet implemented"),
     }
-    Ok(())
 }
