@@ -689,6 +689,7 @@ dependencies = [
  "next-remote-storage",
  "next-storage",
  "serde_json",
+ "tempfile",
  "toml",
  "uuid",
 ]
