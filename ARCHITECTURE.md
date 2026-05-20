@@ -300,7 +300,7 @@ pub struct FilterSet {
    - Exclude tasks whose `start` date is in the future
    - Exclude tasks that are explicitly blocked (open entry in `blocked_by`)
    - Exclude parent tasks that have any open direct child
-   - Exclude tasks with any unavailable `$resource` tag
+   - Exclude tasks with any unavailable `#resource` tag
    - Apply context filtering (tasks with no `@` tag always pass)
    - Apply user filtering (tasks with no `assignee` always pass)
 2. **Explicit filters** (always applied):

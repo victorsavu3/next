@@ -121,7 +121,7 @@ Tags are strings in the `tags` array of a task. Prefix conventions:
 | Prefix | Kind | Example |
 |--------|------|---------|
 | `@` | Context | `@home`, `@work` |
-| `$` | Resource | `$printer`, `$vacation` |
+| `#` | Resource | `#printer`, `#vacation` |
 | *(none)* | Freeform | `python`, `reading` |
 
 ### 3.1 Context filtering
@@ -138,10 +138,10 @@ single invocation.
 
 ### 3.2 Resource filtering
 
-A resource `$<name>` is available when `resources.<name> = true` in `state.toml` (absent
+A resource `#<name>` is available when `resources.<name> = true` in `state.toml` (absent
 keys default to **available**).
 
-Tasks that carry a `$<name>` tag where `<name>` is **unavailable** MUST be excluded from
+Tasks that carry a `#<name>` tag where `<name>` is **unavailable** MUST be excluded from
 the default list and from score computation.
 
 ### 3.3 User filtering
@@ -326,7 +326,7 @@ next context set <@tag>...          # replace active context set
 next context clear                  # clear all active contexts
 
 next resource                       # list resources and availability
-next resource set <$tag> on|off     # toggle a resource
+next resource set <#tag> on|off     # toggle a resource
 ```
 
 ### 8.5 Project commands

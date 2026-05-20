@@ -83,7 +83,7 @@ pub struct Task {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
 
-    /// Tags using the unified prefix convention: `@context`, `$resource`, or freeform.
+    /// Tags using the unified prefix convention: `@context`, `#resource`, or bare freeform.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 

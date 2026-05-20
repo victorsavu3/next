@@ -31,7 +31,7 @@ pub struct Args {
     #[arg(long)]
     pub assignee: Option<String>,
 
-    /// Tags to attach (repeatable). Use @ for context, $ for resource.
+    /// Tags to attach (repeatable). Use @ for context, # for resource.
     #[arg(long = "tag", action = clap::ArgAction::Append)]
     pub tags: Vec<String>,
 

@@ -20,13 +20,13 @@ pub struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum ResourceSubcommand {
-    /// Set availability of a $-prefixed resource tag.
+    /// Set availability of a #-prefixed resource tag.
     Set(SetArgs),
 }
 
 #[derive(clap::Args, Debug)]
 pub struct SetArgs {
-    /// Resource tag (e.g. $printer or $office/printer).
+    /// Resource tag (e.g. #printer or #office/printer).
     pub resource: String,
 
     /// Whether the resource is currently available.
@@ -47,7 +47,7 @@ fn show(ctx: &mut AppContext, json: bool) -> anyhow::Result<()> {
         let mut entries: Vec<String> = state
             .resources
             .iter()
-            .map(|(k, v)| format!("  \"${k}\": {v}"))
+            .map(|(k, v)| format!("  \"#{k}\": {v}"))
             .collect();
         entries.sort();
         println!("{{\n{}\n}}", entries.join(",\n"));
@@ -58,21 +58,21 @@ fn show(ctx: &mut AppContext, json: bool) -> anyhow::Result<()> {
         rows.sort_by_key(|(k, _)| *k);
         for (name, available) in rows {
             let status = if *available { "available" } else { "unavailable" };
-            println!("  ${name:<20} {status}");
+            println!("  #{name:<20} {status}");
         }
     }
     Ok(())
 }
 
 fn set(ctx: &mut AppContext, resource: String, availability: Availability) -> anyhow::Result<()> {
-    let resource = if resource.starts_with('$') {
+    let resource = if resource.starts_with('#') {
         resource
     } else {
-        anyhow::bail!("resource tags must start with '$', got: {resource}");
+        anyhow::bail!("resource tags must start with '#', got: {resource}");
     };
 
     let available = matches!(availability, Availability::On);
-    let bare = resource.trim_start_matches('$');
+    let bare = resource.trim_start_matches('#');
 
     let mut state = ctx.store.get_state()?;
     state.resources.insert(bare.to_owned(), available);

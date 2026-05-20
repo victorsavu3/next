@@ -68,7 +68,7 @@ All labels on a task are tags. Prefix conventions give some tags special meaning
 | Prefix | Kind | Example | Effect |
 |--------|------|---------|--------|
 | `@` | Context | `@home`, `@work` | Hidden when a different context is active |
-| `$` | Resource | `$printer`, `$vacation` | Hidden when resource is unavailable |
+| `#` | Resource | `#printer`, `#vacation` | Hidden when resource is unavailable |
 | *(none)* | Freeform | `python`, `reading` | No implicit filter |
 
 Tasks with no `@` tag are always shown regardless of the active context.
@@ -77,8 +77,8 @@ Tasks with no `@` tag are always shown regardless of the active context.
 next context set @home        # global context filter
 next context clear            # show all contexts
 
-next resource set $printer off  # hide printer tasks
-next resource set $printer on   # show them again
+next resource set #printer off  # hide printer tasks
+next resource set #printer on   # show them again
 ```
 
 ---

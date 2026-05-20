@@ -64,7 +64,7 @@ next add <title> [options]
 | `--start <expr>` | date expression | none | Task is hidden until this date. Same syntax as `--due`. Disables age scoring for this task. |
 | `--priority <level>` | `low\|medium\|high` | `medium` | Urgency priority. |
 | `--project <path>` | project path | none | Assign to a project. Use `/` for nesting, e.g. `work/infra`. |
-| `--tag <tag>` | string | none | Add a tag. Repeatable. Use `@` prefix for context tags, `$` prefix for resource tags. |
+| `--tag <tag>` | string | none | Add a tag. Repeatable. Use `@` prefix for context tags, `#` prefix for resource tags. |
 | `--parent <id>` | task ID | none | Makes this task a subtask of the given task. The parent is blocked until all children complete. |
 | `--blocked-by <id>` | task ID | none | Declares an explicit blocker. Repeatable. |
 | `--notes <text>` | string | none | Multi-line free-text notes. |
@@ -593,27 +593,27 @@ Toggle a resource available or unavailable. Tasks tagged with an unavailable res
 **Usage**
 
 ```
-next resource set <$resource> <on|off>
+next resource set <#resource> <on|off>
 ```
 
 **Arguments**
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
-| `<$resource>` | resource tag | — | The `$`-prefixed resource tag to configure. |
+| `<#resource>` | resource tag | — | The `#`-prefixed resource tag to configure. |
 | `<on\|off>` | `on\|off` | — | `on` = available, `off` = unavailable. |
 
 **Examples**
 
 ```sh
 # Printer is broken — hide printer tasks
-next resource set $printer off
+next resource set #printer off
 
 # Back from holiday
-next resource set $vacation off
+next resource set #vacation off
 
 # Printer repaired
-next resource set $printer on
+next resource set #printer on
 ```
 
 ---
@@ -730,7 +730,7 @@ next forecast
 next forecast --days 180
 
 # Only printer-requiring recurrences
-next forecast +$printer
+next forecast +#printer
 
 # Recurrences in the work project tree
 next forecast project:work
@@ -897,7 +897,7 @@ All list commands (`list`, `next`, `forecast`, `export ical`) accept filter toke
 
 | Token | Example | Meaning |
 |-------|---------|---------|
-| `+<tag>` | `+python`, `+@home`, `+$printer` | Task must have this tag. Multiple `+` tokens are ANDed. |
+| `+<tag>` | `+python`, `+@home`, `+#printer` | Task must have this tag. Multiple `+` tokens are ANDed. |
 | `-<tag>` | `-@work`, `-reading` | Task must not have this tag. Multiple `-` tokens are ANDed. |
 | `project:<path>` | `project:work`, `project:work/infra` | Task belongs to this project or any descendant. |
 | `context:<@tag>` | `context:@home` | Override the global active context for this query only. |
@@ -914,7 +914,7 @@ Unless `--all` is passed, the following tasks are always excluded from results:
 - Tasks with `status` other than `open`
 - Tasks whose `start` date is in the future
 - Tasks that are blocked (any open `blocked_by` entry, or the parent task of any open subtask)
-- Tasks carrying a `$resource` tag where that resource is currently unavailable
+- Tasks carrying a `#resource` tag where that resource is currently unavailable
 - Tasks whose `@context` tags do not match the active context set (when a context is active; tasks with no `@` tags are always shown)
 - Tasks whose `assignee` does not match the active user set (when `active_users` is non-empty; tasks with no `assignee` are always shown)
 
@@ -950,7 +950,7 @@ next list context:@home --future
 next list --all --stage someday
 
 # Upcoming recurrences that require the printer
-next forecast +$printer
+next forecast +#printer
 
 # Export only inbox tasks tagged @home
 next export ical --stage inbox +@home --output home-inbox.ics
@@ -972,15 +972,15 @@ Subtask and blocker relationships are also specified by prefix on the command li
 
 ### Tag prefixes on the CLI
 
-Tags are plain strings. The `@` and `$` prefix conventions are interpretive — there is no separate flag for "add a context tag" vs "add a freeform tag". The same `--tag` flag handles all three kinds:
+Tags are plain strings. The `@` and `#` prefix conventions are interpretive — there is no separate flag for "add a context tag" vs "add a freeform tag". The same `--tag` flag handles all three kinds:
 
 ```sh
-next add "Fix printer" --tag @home --tag $printer --tag hardware
+next add "Fix printer" --tag @home --tag #printer --tag hardware
 ```
 
-This keeps the `add` / `edit` interface simple and allows the prefix convention to be extended in future without changing the CLI surface. The special filtering behaviour of `@` and `$` tags is implicit and described in the documentation; the user writes the full tag string everywhere.
+This keeps the `add` / `edit` interface simple and allows the prefix convention to be extended in future without changing the CLI surface. The special filtering behaviour of `@` and `#` tags is implicit and described in the documentation; the user writes the full tag string everywhere.
 
-In filter tokens, the same convention applies: `+@home` targets a context tag, `+$printer` targets a resource tag, `+python` targets a freeform tag.
+In filter tokens, the same convention applies: `+@home` targets a context tag, `+#printer` targets a resource tag, `+python` targets a freeform tag.
 
 ### Why `context set` and `resource set` are separate sub-commands, not flags on `list`
 

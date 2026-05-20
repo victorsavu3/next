@@ -11,7 +11,7 @@ pub struct GlobalState {
     #[serde(default)]
     pub active_contexts: Vec<String>,
 
-    /// Resource availability map. Key is the bare resource name (without `$`),
+    /// Resource availability map. Key is the bare resource name (without `#`),
     /// optionally with `/`-separated path segments (e.g. `"office/printer"`).
     /// Absent keys default to available. If a parent is unavailable, all its
     /// descendants are implicitly unavailable too.
@@ -26,12 +26,12 @@ pub struct GlobalState {
 }
 
 impl GlobalState {
-    /// Returns `true` when `resource_tag` (with or without `$`) is available.
+    /// Returns `true` when `resource_tag` (with or without `#`) is available.
     ///
     /// Walks from the outermost ancestor down to the tag itself. If any ancestor
     /// is explicitly marked unavailable, the resource is considered unavailable.
-    /// This means marking `$office` as unavailable automatically makes
-    /// `$office/printer` and `$office/desk` unavailable too.
+    /// This means marking `#office` as unavailable automatically makes
+    /// `#office/printer` and `#office/desk` unavailable too.
     pub fn is_resource_available(&self, resource_tag: &str) -> bool {
         for ancestor in tag::ancestors(resource_tag) {
             let name = tag::bare_name(ancestor);
@@ -62,20 +62,19 @@ mod tests {
     #[test]
     fn known_available_resource() {
         let s = state_with_resources(&[("printer", true)]);
-        assert!(s.is_resource_available("$printer"));
-        assert!(s.is_resource_available("printer"));
+        assert!(s.is_resource_available("#printer"));
     }
 
     #[test]
     fn known_unavailable_resource() {
         let s = state_with_resources(&[("vacation", false)]);
-        assert!(!s.is_resource_available("$vacation"));
+        assert!(!s.is_resource_available("#vacation"));
     }
 
     #[test]
     fn unknown_resource_defaults_to_available() {
         let s = GlobalState::default();
-        assert!(s.is_resource_available("$printer"));
+        assert!(s.is_resource_available("#printer"));
     }
 
     #[test]
@@ -86,28 +85,28 @@ mod tests {
     #[test]
     fn parent_unavailable_makes_child_unavailable() {
         let s = state_with_resources(&[("office", false)]);
-        assert!(!s.is_resource_available("$office/printer"));
-        assert!(!s.is_resource_available("$office/desk"));
+        assert!(!s.is_resource_available("#office/printer"));
+        assert!(!s.is_resource_available("#office/desk"));
     }
 
     #[test]
     fn sibling_unavailability_does_not_affect_other_siblings() {
         let s = state_with_resources(&[("office/printer", false)]);
-        assert!(!s.is_resource_available("$office/printer"));
-        assert!(s.is_resource_available("$office/desk")); // sibling unaffected
-        assert!(s.is_resource_available("$office"));      // parent unaffected
+        assert!(!s.is_resource_available("#office/printer"));
+        assert!(s.is_resource_available("#office/desk")); // sibling unaffected
+        assert!(s.is_resource_available("#office"));      // parent unaffected
     }
 
     #[test]
     fn grandparent_unavailable_propagates_down() {
         let s = state_with_resources(&[("office", false)]);
-        assert!(!s.is_resource_available("$office/printer/color"));
+        assert!(!s.is_resource_available("#office/printer/color"));
     }
 
     #[test]
     fn child_can_be_unavailable_independently() {
         let s = state_with_resources(&[("office/printer", false), ("office", true)]);
-        assert!(s.is_resource_available("$office"));
-        assert!(!s.is_resource_available("$office/printer"));
+        assert!(s.is_resource_available("#office"));
+        assert!(!s.is_resource_available("#office/printer"));
     }
 }

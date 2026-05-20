@@ -46,15 +46,15 @@ All labels on a task are tags. Prefix conventions give some tags special meaning
 | Prefix | Kind | Example | Implicit filtering behaviour |
 |--------|------|---------|------------------------------|
 | `@` | Context | `@home`, `@work` | Only tasks matching an active context (or with no `@` tag) are shown |
-| `$` | Resource | `$printer`, `$vacation` | Tasks requiring an unavailable resource are hidden |
+| `#` | Resource | `#printer`, `#vacation` | Tasks requiring an unavailable resource are hidden |
 | *(none)* | Freeform | `python`, `reading` | No implicit effect; used for manual queries |
 
 **Active contexts** are set globally (e.g. `next context @home`). When one or more contexts
 are active, tasks with no `@` tag are always shown; tasks with at least one `@` tag are
 shown only if they share a tag with the active set.
 
-**Resource availability** is set globally (e.g. `next resource $printer off`). Tasks
-carrying a `$resource` tag whose resource is marked unavailable are hidden from the
+**Resource availability** is set globally (e.g. `next resource #printer off`). Tasks
+carrying a `#resource` tag whose resource is marked unavailable are hidden from the
 default list and excluded from scoring.
 
 ### Nested tasks (subtasks)
@@ -90,7 +90,7 @@ Urgency score computed per task (Taskwarrior-style) from:
 - **User adjustment** — a manual numeric boost or penalty the user can apply to any task
 
 The default `next` / `list` command ranks tasks by score descending, after filtering out
-blocked tasks, tasks with unavailable `$` tags, and tasks not matching the active `@`
+blocked tasks, tasks with unavailable `#` tags, and tasks not matching the active `@`
 contexts. Tasks with a `start` date in the future are hidden entirely until that date.
 
 ### Query interface
@@ -111,7 +111,7 @@ Examples:
 next list +python project:work          # python-tagged tasks in the work project tree
 next list context:@home --future        # upcoming tasks available at home
 next list --all --stage someday         # everything in someday/maybe, unfiltered
-next forecast +$printer                 # upcoming recurrences that need the printer
+next forecast +#printer                 # upcoming recurrences that need the printer
 ```
 
 ### Reminders

@@ -49,7 +49,7 @@ pub struct FilterSet {
 /// 2. Task must not be hidden by `start_date` (unless `include_future`).
 /// 3. Task must not be blocked by an open `blocked_by` task.
 /// 4. Task must not be a parent with open children (work on the children instead).
-/// 5. Task must not carry any unavailable `$resource` tag.
+/// 5. Task must not carry any unavailable `#resource` tag.
 /// 6. If contexts are active, task must have at least one matching `@context` tag.
 ///
 /// **Explicit filters** (always applied):
@@ -315,7 +315,7 @@ mod tests {
         state.resources.insert("printer".into(), false);
 
         let mut task = Task::new("Print document");
-        task.tags = vec!["$printer".into()];
+        task.tags = vec!["#printer".into()];
 
         let result = apply(vec![task], &FilterSet::default(), &state, today());
         assert!(result.is_empty());
@@ -327,7 +327,7 @@ mod tests {
         state.resources.insert("office".into(), false);
 
         let mut task = Task::new("Use office printer");
-        task.tags = vec!["$office/printer".into()];
+        task.tags = vec!["#office/printer".into()];
 
         let result = apply(vec![task], &FilterSet::default(), &state, today());
         assert!(result.is_empty());
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn available_resource_not_excluded() {
         let mut task = Task::new("Print document");
-        task.tags = vec!["$printer".into()];
+        task.tags = vec!["#printer".into()];
         let result = run(vec![task], FilterSet::default());
         assert_eq!(result.len(), 1);
     }
