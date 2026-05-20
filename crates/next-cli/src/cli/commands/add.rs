@@ -27,6 +27,10 @@ pub struct Args {
     #[arg(long)]
     pub slug: Option<String>,
 
+    /// Assign to a specific user.
+    #[arg(long)]
+    pub assignee: Option<String>,
+
     /// Tags to attach (repeatable). Use @ for context, $ for resource.
     #[arg(long = "tag", action = clap::ArgAction::Append)]
     pub tags: Vec<String>,
@@ -89,6 +93,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     }
 
     task.slug = args.slug;
+    task.assignee = args.assignee;
     task.tags = args.tags;
     task.notes = args.notes;
     task.long_term = args.long_term;

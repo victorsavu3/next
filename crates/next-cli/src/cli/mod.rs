@@ -52,6 +52,9 @@ pub enum Command {
     /// Manage resource availability.
     Resource(commands::resource::Args),
 
+    /// Manage the active user filter.
+    User(commands::user::Args),
+
     /// Show a due-date forecast.
     Forecast(commands::forecast::Args),
 

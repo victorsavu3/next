@@ -31,6 +31,14 @@ pub struct Args {
     #[arg(long)]
     pub slug: Option<String>,
 
+    /// Assign to a user (or change assignee).
+    #[arg(long)]
+    pub assignee: Option<String>,
+
+    /// Remove the assignee (make the task unassigned).
+    #[arg(long)]
+    pub clear_assignee: bool,
+
     /// Tags to attach (repeatable).
     #[arg(long = "tag", action = clap::ArgAction::Append)]
     pub tags: Vec<String>,
@@ -123,6 +131,12 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 
     if let Some(slug) = args.slug {
         task.slug = Some(slug);
+    }
+
+    if args.clear_assignee {
+        task.assignee = None;
+    } else if let Some(assignee) = args.assignee {
+        task.assignee = Some(assignee);
     }
 
     // Add tags (deduplicate).

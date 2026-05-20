@@ -15,3 +15,4 @@ pub mod resource;
 pub mod review;
 pub mod show;
 pub mod sync;
+pub mod user;

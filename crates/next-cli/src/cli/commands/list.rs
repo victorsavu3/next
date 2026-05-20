@@ -18,11 +18,15 @@ pub struct Args {
     #[arg(long)]
     pub stage: Option<String>,
 
+    /// Show tasks for all users, ignoring the active user filter.
+    #[arg(long)]
+    pub all_users: bool,
+
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
 
-    /// Filter tokens: +tag, -tag, project:path, context:@name.
+    /// Filter tokens: +tag, -tag, project:path, context:@name, user:name.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub tokens: Vec<String>,
 }
@@ -33,6 +37,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let mut filter_args = FilterArgs::parse(args.tokens);
     filter_args.future = args.future;
     filter_args.all = args.all;
+    filter_args.all_users = args.all_users;
     filter_args.stage = args.stage;
     filter_args.json = args.json;
 

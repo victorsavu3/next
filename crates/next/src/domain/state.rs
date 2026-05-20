@@ -17,6 +17,12 @@ pub struct GlobalState {
     /// descendants are implicitly unavailable too.
     #[serde(default)]
     pub resources: HashMap<String, bool>,
+
+    /// Active user filter. When non-empty, the task list is limited to tasks
+    /// assigned to one of these users, plus all unassigned tasks (which are
+    /// shared across everyone). Multiple users can be active simultaneously.
+    #[serde(default)]
+    pub active_users: Vec<String>,
 }
 
 impl GlobalState {

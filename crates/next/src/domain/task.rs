@@ -75,6 +75,14 @@ pub struct Task {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<Uuid>,
 
+    /// The user responsible for this task.
+    ///
+    /// `None` means the task is unassigned and visible to all users. When a user
+    /// filter is active, only unassigned tasks and tasks matching the active users
+    /// are shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+
     /// Tags using the unified prefix convention: `@context`, `$resource`, or freeform.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
@@ -134,6 +142,7 @@ impl Task {
             long_term: false,
             slug: None,
             parent_id: None,
+            assignee: None,
             tags: Vec::new(),
             waiting_for: None,
             blocked_by: Vec::new(),

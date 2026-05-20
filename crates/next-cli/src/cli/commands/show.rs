@@ -64,6 +64,9 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
             .collect();
         println!("Blocked:  {}", blocker_strs.join(", "));
     }
+    if let Some(ref assignee) = task.assignee {
+        println!("Assignee: {assignee}");
+    }
     if let Some(ref wf) = task.waiting_for {
         println!("Waiting:  {wf}");
     }

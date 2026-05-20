@@ -28,10 +28,11 @@ pub fn render_task_list(tasks: &[ScoredTask]) {
             task.tags.join(" ")
         };
 
+        let assignee = task.assignee.as_deref().unwrap_or("").to_owned();
         let score = format!("{:.1}", st.score);
 
         println!(
-            "{short_id}  {title:<45}  {score:>5}  {due:<14}  {tags}",
+            "{short_id}  {title:<45}  {score:>5}  {due:<14}  {assignee:<12}  {tags}",
         );
     }
 }

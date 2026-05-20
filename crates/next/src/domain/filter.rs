@@ -26,11 +26,16 @@ pub struct FilterSet {
     /// `Some(v)` → use `v` (pass an empty vec to disable context filtering entirely).
     pub context_override: Option<Vec<String>>,
 
+    /// Override active users for this query.
+    /// `None` → use `state.active_users`.
+    /// `Some(v)` → use `v` (pass an empty vec to disable user filtering entirely).
+    pub user_override: Option<Vec<String>>,
+
     /// Include tasks hidden by `start_date` in the future.
     pub include_future: bool,
 
     /// Skip the implicit visibility gate entirely (show everything regardless
-    /// of status, blocking, resources, or context).
+    /// of status, blocking, resources, context, or user).
     pub disable_implicit: bool,
 }
 
@@ -72,6 +77,15 @@ pub fn apply(
             .unwrap_or(&state.active_contexts)
     };
 
+    let active_users: &[String] = if filter.disable_implicit {
+        &[]
+    } else {
+        filter
+            .user_override
+            .as_deref()
+            .unwrap_or(&state.active_users)
+    };
+
     tasks
         .into_iter()
         .filter(|task| {
@@ -98,6 +112,15 @@ pub fn apply(
                 }
                 if !active_contexts.is_empty() && !task_matches_contexts(task, active_contexts) {
                     return false;
+                }
+                // User filter: unassigned tasks are always visible; assigned tasks
+                // must match one of the active users.
+                if !active_users.is_empty() {
+                    if let Some(ref assignee) = task.assignee {
+                        if !active_users.iter().any(|u| u == assignee) {
+                            return false;
+                        }
+                    }
                 }
             }
 
@@ -526,6 +549,95 @@ mod tests {
             ..Default::default()
         };
         let result = apply(vec![task], &filter, &state, today());
+        assert_eq!(result.len(), 1);
+    }
+
+    // ── User filtering ───────────────────────────────────────────────────────
+
+    #[test]
+    fn no_active_users_shows_all_tasks() {
+        let mut assigned = Task::new("Alice task");
+        assigned.assignee = Some("alice".into());
+        let unassigned = Task::new("Shared task");
+        let result = run(vec![assigned, unassigned], FilterSet::default());
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn active_user_hides_other_users_tasks() {
+        let mut state = GlobalState::default();
+        state.active_users = vec!["alice".into()];
+
+        let mut alice_task = Task::new("Alice task");
+        alice_task.assignee = Some("alice".into());
+        let mut bob_task = Task::new("Bob task");
+        bob_task.assignee = Some("bob".into());
+
+        let result = apply(vec![alice_task, bob_task], &FilterSet::default(), &state, today());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Alice task");
+    }
+
+    #[test]
+    fn unassigned_tasks_visible_when_user_filter_active() {
+        let mut state = GlobalState::default();
+        state.active_users = vec!["alice".into()];
+
+        let unassigned = Task::new("Shared task");
+        let result = apply(vec![unassigned], &FilterSet::default(), &state, today());
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn multiple_active_users_shows_all_their_tasks() {
+        let mut state = GlobalState::default();
+        state.active_users = vec!["alice".into(), "bob".into()];
+
+        let mut alice_task = Task::new("Alice task");
+        alice_task.assignee = Some("alice".into());
+        let mut bob_task = Task::new("Bob task");
+        bob_task.assignee = Some("bob".into());
+        let mut carol_task = Task::new("Carol task");
+        carol_task.assignee = Some("carol".into());
+
+        let result = apply(
+            vec![alice_task, bob_task, carol_task],
+            &FilterSet::default(),
+            &state,
+            today(),
+        );
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn user_override_empty_bypasses_user_filter() {
+        let mut state = GlobalState::default();
+        state.active_users = vec!["alice".into()];
+
+        let mut bob_task = Task::new("Bob task");
+        bob_task.assignee = Some("bob".into());
+
+        let filter = FilterSet {
+            user_override: Some(vec![]), // override: no filter
+            ..Default::default()
+        };
+        let result = apply(vec![bob_task], &filter, &state, today());
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn disable_implicit_bypasses_user_filter() {
+        let mut state = GlobalState::default();
+        state.active_users = vec!["alice".into()];
+
+        let mut bob_task = Task::new("Bob task");
+        bob_task.assignee = Some("bob".into());
+
+        let filter = FilterSet {
+            disable_implicit: true,
+            ..Default::default()
+        };
+        let result = apply(vec![bob_task], &filter, &state, today());
         assert_eq!(result.len(), 1);
     }
 
