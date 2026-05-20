@@ -33,6 +33,7 @@ A task MAY carry the following optional fields:
 | `waiting_for` | string | Free-text; meaningful when `stage = "waiting"` |
 | `blocked_by` | array of UUID strings | Explicit blockers |
 | `score_adjustment` | float | Added directly to computed score |
+| `assignee` | string | Username of the person responsible for the task |
 | `notes` | string | Multi-line free text |
 
 External-reference fields (set by importers, never by the user):
@@ -70,6 +71,7 @@ Global state MUST be stored in `state.toml` at the repository root.
 
 ```toml
 active_contexts = ["@home"]                       # active @ tags (empty = no filter)
+active_users    = ["alice"]                       # active user filter (empty = no filter)
 [resources]
 printer = true
 vacation = false
@@ -99,26 +101,13 @@ File names MUST follow this rule: if the task has a `slug`, the file is named
 lower-case with spaces replaced by `-` and non-alphanumeric characters stripped.
 Example: `"Water plants"` with no slug and UUID `a1b2c3d4-…` → `water-plants-a1b2c3d4.toml`.
 
-### 2.2 SQLite cache
-
-The SQLite database MUST be stored at `$XDG_CACHE_HOME/task-manager/cache.db`,
-defaulting to `~/.cache/task-manager/cache.db`. It MUST NOT be inside the git
-repository.
-
-Before executing any command, the tool MUST compare the git `HEAD` hash recorded in the
-DB against the current `HEAD`. If they differ or the DB does not exist, the tool MUST
-rebuild the DB from the TOML files before proceeding.
-
-The rebuild MUST be a full replace (drop and re-import all rows) to avoid drift.
-
-### 2.3 Sync
+### 2.2 Sync
 
 `next sync` MUST execute the following steps in order, stopping on any error:
 
 1. `git pull` from the configured remote (fast-forward or merge)
 2. If merge conflicts exist, print an actionable error message and exit with code 2
-3. Rebuild the SQLite cache
-4. `git push` local commits to the remote
+3. `git push` local commits to the remote
 
 All mutations (add, edit, done, import) MUST produce a git commit automatically. The
 commit message MUST identify the operation and the task title.
@@ -154,6 +143,19 @@ keys default to **available**).
 
 Tasks that carry a `$<name>` tag where `<name>` is **unavailable** MUST be excluded from
 the default list and from score computation.
+
+### 3.3 User filtering
+
+When one or more usernames are present in `active_users`:
+- Tasks with **no** `assignee` MUST always be included (unassigned = shared backlog)
+- Tasks whose `assignee` matches any name in `active_users` MUST be included
+- Tasks whose `assignee` is set to a name **not** in `active_users` MUST be excluded
+
+When `active_users` is empty, all tasks MUST be shown regardless of their `assignee`.
+
+A query-time `user:<name>` filter token MUST override the global active-user set for that
+single invocation. The `--all-users` flag MUST bypass the user filter entirely for that
+invocation.
 
 ---
 
@@ -191,8 +193,10 @@ All list commands MUST accept the following filter tokens, freely combinable:
 | `-<tag>` | Task must not have this tag |
 | `project:<path>` | Task is in this project or any descendant |
 | `context:<@tag>` | Use this context instead of the active set for this query |
+| `user:<name>` | Use this user instead of the active-user set for this query |
 | `--future` | Include tasks with future `start` date and planned recurrence instances |
 | `--all` | Disable all implicit filtering (contexts, resources, blocked, start date) |
+| `--all-users` | Bypass the user filter for this query |
 | `--stage <stage>` | Restrict to one GTD stage |
 
 Multiple `+tag` tokens MUST be combined with AND (task must have all of them).
@@ -287,6 +291,7 @@ next add <title> [options]
 | `--wait-for <who>` | Sets `waiting_for` and `stage = waiting` |
 | `--blocked-by <id-or-slug>` | Repeatable; accepts UUID, UUID prefix, or slug |
 | `--adjust <float>` | Sets `score_adjustment` |
+| `--assignee <name>` | Sets `assignee` |
 
 ### 8.2 `next list` and `next next`
 
@@ -296,7 +301,8 @@ next next [N] [filters...]  # top N tasks by score (default N=10)
 ```
 
 Both commands MUST show overdue and due-today tasks visually distinct (e.g. coloured or
-prefixed) at the top of the output.
+prefixed) at the top of the output. Both MUST accept `--all-users` to bypass the user
+filter.
 
 ### 8.3 Task actions
 
@@ -334,7 +340,20 @@ next project add <title> [options]  # shorthand for `next add --stage project`
 next project show <id-or-slug>      # show the task and all its descendants (any stage)
 ```
 
-### 8.6 Review
+### 8.6 User management
+
+```
+next user                       # show active user filter
+next user set <name>...         # replace active user set
+next user clear                 # clear user filter (show all users' tasks)
+next user list                  # list all assignees found across all tasks
+```
+
+The user filter is NOT an access-control mechanism. All tasks are visible to all
+operators. `active_users` is a personal workflow aid to focus the default view on the
+tasks you are currently responsible for.
+
+### 8.7 Review
 
 ```
 next review
@@ -344,15 +363,15 @@ Walks through GTD stages in order: **inbox → waiting-for → someday/maybe →
 For each item the tool presents the task and prompts the user to choose an action (e.g.
 process, skip, move, done, delete). MUST be interruptible (Ctrl-C leaves tasks unchanged).
 
-### 8.7 Sync
+### 8.8 Sync
 
 ```
-next sync
+next sync [--push-only] [--pull-only]
 ```
 
-See §2.3.
+See §2.2.
 
-### 8.8 Forecasting
+### 8.9 Forecasting
 
 ```
 next forecast [filters...]
@@ -362,9 +381,41 @@ See §7.2.
 
 ---
 
-## 9. Integrations
+## 9. Backend configuration
 
-### 9.1 Forgejo
+The storage backend is selected in `$XDG_CONFIG_HOME/task-manager/config.toml`.
+
+### 9.1 Local backend (default)
+
+Tasks are stored as TOML files in a git repository. The git repository root is determined
+by walking up from the current working directory until a `.git` directory is found.
+
+```toml
+[backend]
+kind = "local"
+```
+
+### 9.2 Remote backend
+
+Tasks are stored on a hosted server over HTTP. A git repository is not required locally.
+
+```toml
+[backend]
+kind = "remote"
+
+[backend.remote]
+url   = "https://tasks.example.com"
+token = "my-bearer-token"   # optional bearer token
+```
+
+The remote backend is currently a stub — all operations return "not yet implemented"
+errors. The VCS operations are no-ops (the server handles its own persistence).
+
+---
+
+## 10. Integrations
+
+### 10.1 Forgejo
 
 ```
 next import forgejo <owner/repo> [--project <path>] [--tag <tag>]
@@ -380,7 +431,7 @@ next import forgejo <owner/repo> [--project <path>] [--tag <tag>]
 When `next done` is called on a task with a `forgejo_issue` field, the tool MUST close
 the corresponding issue via the Forgejo API. No other field is written back to Forgejo.
 
-### 9.2 iCalendar (WebCal)
+### 10.2 iCalendar (WebCal)
 
 ```
 next import ical <file-or-url>
@@ -403,7 +454,7 @@ next export ical [filters...] [--output <file>]
 
 ---
 
-## 10. Output
+## 11. Output
 
 - Every list/show command MUST support `--json` emitting valid, stable JSON
 - Plain-text output SHOULD use colour when stdout is a TTY; MUST fall back to plain

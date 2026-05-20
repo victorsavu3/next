@@ -28,6 +28,10 @@ A GTD-style task manager with automatic urgency scoring. The binary is called `n
 | `next forecast` | Show upcoming recurrence dates |
 | `next review` | Interactive GTD weekly review walkthrough |
 | `next sync` | Pull from git remote, rebuild cache, push |
+| `next user` | Show active user filter |
+| `next user set` | Set the global active user filter |
+| `next user clear` | Clear the user filter |
+| `next user list` | List all assignees across all tasks |
 | `next import forgejo` | Import issues from a Forgejo repository |
 | `next import ical` | Import VTODO entries from an iCalendar file or URL |
 | `next export ical` | Export tasks as an iCalendar VTODO file |
@@ -70,6 +74,7 @@ next add <title> [options]
 | `--recur completion <days>` | positive integer | none | Creates a completion-based recurring task. Next instance is created `<days>` after the completion date. |
 | `--long-term` | flag | false | Disables the age factor from scoring. Suitable for background or low-priority ideas. |
 | `--adjust <value>` | float | 0.0 | Manual score adjustment added directly to the computed urgency score. Positive boosts, negative penalises. |
+| `--assignee <name>` | string | none | Assign the task to a user. Used by the user filter. |
 | `--json` | flag | false | Emit the created task as JSON on stdout. |
 
 **Examples**
@@ -109,6 +114,7 @@ next list [filters...]
 |------|------|---------|-------------|
 | `--future` | flag | false | Include tasks with a future `start` date and planned recurrence instances. |
 | `--all` | flag | false | Disable all implicit filtering: contexts, resources, blocked tasks, and future `start` dates. |
+| `--all-users` | flag | false | Bypass the user filter; show tasks for all assignees. |
 | `--stage <stage>` | `inbox\|project\|waiting\|someday` | none | Restrict output to one GTD stage. |
 | `--json` | flag | false | Emit task list as JSON. |
 
@@ -300,6 +306,8 @@ Same flags as `next add`, plus:
 | `--clear-parent` | flag | false | Remove the parent relationship (promote to top-level task). |
 | `--remove-tag <tag>` | string | — | Remove a specific tag. Repeatable. |
 | `--clear-blocked-by` | flag | false | Remove all explicit blockers. |
+| `--assignee <name>` | string | — | Assign the task to a user. |
+| `--clear-assignee` | flag | false | Remove the assignee. |
 | `--json` | flag | false | Emit the updated task as JSON. |
 
 **Examples**
@@ -610,6 +618,87 @@ next resource set $printer on
 
 ---
 
+### `next user`
+
+Show the currently active user filter.
+
+**Usage**
+
+```
+next user
+```
+
+**Examples**
+
+```sh
+next user
+# Active users: alice, bob
+```
+
+---
+
+### `next user set`
+
+Set the global active user filter. Tasks assigned to users not in this set are hidden from
+the default list. Unassigned tasks are always visible.
+
+**Usage**
+
+```
+next user set <name>...
+```
+
+**Arguments**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `<name>...` | one or more usernames | — | The new active user set. Replaces any previously set users. |
+
+**Examples**
+
+```sh
+# Focus on your own tasks
+next user set alice
+
+# Show tasks for two team members
+next user set alice bob
+```
+
+---
+
+### `next user clear`
+
+Clear the user filter. After this, all tasks are shown regardless of their `assignee`.
+
+**Usage**
+
+```
+next user clear
+```
+
+---
+
+### `next user list`
+
+List all usernames that appear as `assignee` on any task. Marks active users with `*`.
+
+**Usage**
+
+```
+next user list
+```
+
+**Examples**
+
+```sh
+next user list
+# * alice
+#   bob
+#   carol
+```
+
+---
+
 ### `next forecast`
 
 Show upcoming recurrence due dates for all matching recurring tasks, projected over a configurable horizon (default: 90 days). Accepts the same filter tokens as `next list`.
@@ -627,6 +716,7 @@ next forecast [filters...] [--days <N>]
 | `--days <N>` | positive integer | 90 | Forecast horizon in days. |
 | `--future` | flag | false | Include tasks with a future `start` date. |
 | `--all` | flag | false | Disable all implicit filtering. |
+| `--all-users` | flag | false | Bypass the user filter. |
 | `--stage <stage>` | `inbox\|project\|waiting\|someday` | none | Filter by stage. |
 | `--json` | flag | false | Emit forecast as JSON. |
 
@@ -811,8 +901,10 @@ All list commands (`list`, `next`, `forecast`, `export ical`) accept filter toke
 | `-<tag>` | `-@work`, `-reading` | Task must not have this tag. Multiple `-` tokens are ANDed. |
 | `project:<path>` | `project:work`, `project:work/infra` | Task belongs to this project or any descendant. |
 | `context:<@tag>` | `context:@home` | Override the global active context for this query only. |
+| `user:<name>` | `user:alice` | Override the global user filter for this query only. |
 | `--future` | | Include tasks with a future `start` date and planned recurrence instances from recurring tasks. |
-| `--all` | | Disable all implicit filtering: context, resource, blocked, future start. |
+| `--all` | | Disable all implicit filtering: context, resource, user, blocked, future start. |
+| `--all-users` | | Bypass the user filter only; context and resource filters remain active. |
 | `--stage <stage>` | `--stage inbox` | Restrict to one GTD stage. |
 
 ### Implicit filtering (default behaviour)
@@ -824,6 +916,7 @@ Unless `--all` is passed, the following tasks are always excluded from results:
 - Tasks that are blocked (any open `blocked_by` entry, or the parent task of any open subtask)
 - Tasks carrying a `$resource` tag where that resource is currently unavailable
 - Tasks whose `@context` tags do not match the active context set (when a context is active; tasks with no `@` tags are always shown)
+- Tasks whose `assignee` does not match the active user set (when `active_users` is non-empty; tasks with no `assignee` are always shown)
 
 ### Context override
 
