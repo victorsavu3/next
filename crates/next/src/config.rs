@@ -87,6 +87,43 @@ impl Default for ScoringConfig {
     }
 }
 
+// ── BackendConfig ─────────────────────────────────────────────────────────────
+
+/// Which storage backend to use.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BackendKind {
+    /// Local TOML files backed by a local git repository (default).
+    #[default]
+    Local,
+    /// Tasks stored on a remote `next-server` instance over HTTP.
+    Remote,
+}
+
+/// Connection settings for the remote HTTP backend.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RemoteBackendConfig {
+    /// Base URL of the `next-server` instance, e.g. `https://tasks.example.com`.
+    #[serde(default)]
+    pub url: String,
+
+    /// Bearer token for authentication (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+/// Selects the storage backend and, for the remote backend, its connection details.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BackendConfig {
+    /// Which storage implementation to use.
+    #[serde(default)]
+    pub kind: BackendKind,
+
+    /// Connection settings; required when `kind = "remote"`.
+    #[serde(default)]
+    pub remote: Option<RemoteBackendConfig>,
+}
+
 // ── ForgejoConfig ─────────────────────────────────────────────────────────────
 
 /// Connection settings for the Forgejo integration.
@@ -109,7 +146,7 @@ pub struct ForgejoConfig {
 /// All fields are optional; missing fields use the values shown in
 /// [`Config::default`].
 ///
-/// Example config file:
+/// Example config file (local backend, default):
 /// ```toml
 /// forecast_horizon_days = 60
 /// next_count = 5
@@ -122,8 +159,22 @@ pub struct ForgejoConfig {
 /// priority_high = 3.0          # only override what you want to change
 /// age_max       = 3.0
 /// ```
+///
+/// Example config file (remote backend):
+/// ```toml
+/// [backend]
+/// kind = "remote"
+///
+/// [backend.remote]
+/// url   = "https://tasks.example.com"
+/// token = "my-bearer-token"
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Storage backend selection (local TOML+git or remote HTTP server).
+    #[serde(default)]
+    pub backend: BackendConfig,
+
     /// Urgency scoring weights.
     #[serde(default)]
     pub scoring: ScoringConfig,
@@ -144,6 +195,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            backend: BackendConfig::default(),
             scoring: ScoringConfig::default(),
             forgejo: ForgejoConfig::default(),
             forecast_horizon_days: default_forecast_horizon_days(),

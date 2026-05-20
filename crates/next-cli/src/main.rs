@@ -8,7 +8,7 @@ use anyhow::Context as _;
 use clap::Parser;
 use cli::{Cli, Command};
 use log::Logger;
-use next::{Config, Store, VcsBackend};
+use next::{BackendKind, Config, Store, VcsBackend};
 
 pub struct AppContext {
     pub config: Config,
@@ -21,16 +21,43 @@ pub struct AppContext {
 
 impl AppContext {
     fn new() -> anyhow::Result<Self> {
-        let repo_root = find_repo_root()
-            .context("not inside a task repository — run `git init` and `next add` to start")?;
         let config = load_config();
-        let (store, vcs) = next_storage::open(repo_root.clone())
-            .context("failed to open task store")?;
+
+        let (store, vcs, repo_root): (Box<dyn Store>, Box<dyn VcsBackend>, PathBuf) =
+            match config.backend.kind {
+                BackendKind::Local => {
+                    let root = find_repo_root().context(
+                        "not inside a task repository — run `git init` and `next add` to start",
+                    )?;
+                    let (s, v) = next_storage::open(root.clone())
+                        .context("failed to open local task store")?;
+                    (Box::new(s), Box::new(v), root)
+                }
+                BackendKind::Remote => {
+                    let remote = config.backend.remote.as_ref().context(
+                        "backend.kind = \"remote\" but no [backend.remote] section in config",
+                    )?;
+                    // Use the current directory as repo_root for the log; the
+                    // remote backend does not require a git repository.
+                    let root = std::env::current_dir()
+                        .context("cannot determine current directory")?;
+                    let store = next_remote_storage::RemoteStore::new(
+                        &remote.url,
+                        remote.token.as_deref(),
+                    );
+                    let vcs = next_remote_storage::RemoteVcs::new(
+                        &remote.url,
+                        remote.token.as_deref(),
+                    );
+                    (Box::new(store), Box::new(vcs), root)
+                }
+            };
+
         let log = Logger::new(&repo_root);
         Ok(Self {
             config,
-            store: Box::new(store),
-            vcs: Box::new(vcs),
+            store,
+            vcs,
             repo_root,
             log,
         })

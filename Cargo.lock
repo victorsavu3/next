@@ -686,9 +686,18 @@ dependencies = [
  "clap",
  "dirs",
  "next",
+ "next-remote-storage",
  "next-storage",
  "serde_json",
  "toml",
+ "uuid",
+]
+
+[[package]]
+name = "next-remote-storage"
+version = "0.1.0"
+dependencies = [
+ "next",
  "uuid",
 ]
 

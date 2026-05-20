@@ -1,0 +1,8 @@
+[package]
+name = "next-remote-storage"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+next = { path = "../next" }
+uuid = { version = "1", features = ["serde"] }
