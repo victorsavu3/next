@@ -71,6 +71,41 @@ pub fn tag_matches(filter: &str, tag: &str) -> bool {
     }
 }
 
+/// Validates a tag string. Returns an `Err` with a description if the tag is malformed.
+///
+/// Rules applied to the name part (after stripping any `@` or `#` prefix), split by `/`:
+/// - Each segment must start with an ASCII letter.
+/// - Subsequent characters may be ASCII letters, digits, `-`, or `_`.
+/// - Empty segments (e.g. trailing `/` or `//`) are rejected.
+///
+/// Context (`@`) and resource (`#`) tags follow the same rules for their name part.
+pub fn validate_tag(tag: &str) -> Result<(), String> {
+    let name = bare_name(tag);
+    if name.is_empty() {
+        return Err(format!("tag {tag:?} has an empty name after the prefix"));
+    }
+    for segment in name.split('/') {
+        if segment.is_empty() {
+            return Err(format!("tag {tag:?} contains an empty path segment"));
+        }
+        let mut chars = segment.chars();
+        let first = chars.next().unwrap();
+        if !first.is_ascii_alphabetic() {
+            return Err(format!(
+                "tag {tag:?}: each segment must start with a letter, got {first:?}"
+            ));
+        }
+        for c in chars {
+            if !c.is_ascii_alphanumeric() && c != '_' && c != '-' {
+                return Err(format!(
+                    "tag {tag:?}: segments may only contain letters, digits, '-', or '_', got {c:?}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Returns all ancestor tag strings for `tag`, from outermost to `tag` itself.
 ///
 /// For `#a/b/c` returns `["#a", "#a/b", "#a/b/c"]`. The prefix character is
@@ -201,5 +236,46 @@ mod tests {
     #[test]
     fn ancestors_bare_name() {
         assert_eq!(ancestors("python"), vec!["python"]);
+    }
+
+    // --- validate_tag ---
+
+    #[test]
+    fn valid_tags_pass_validation() {
+        assert!(validate_tag("python").is_ok());
+        assert!(validate_tag("lang-rust").is_ok());
+        assert!(validate_tag("lang_rust").is_ok());
+        assert!(validate_tag("@home").is_ok());
+        assert!(validate_tag("#printer").is_ok());
+        assert!(validate_tag("work/backend").is_ok());
+        assert!(validate_tag("@work/front-end").is_ok());
+        assert!(validate_tag("#office/printer").is_ok());
+    }
+
+    #[test]
+    fn empty_name_rejected() {
+        assert!(validate_tag("@").is_err());
+        assert!(validate_tag("#").is_err());
+        assert!(validate_tag("").is_err());
+    }
+
+    #[test]
+    fn segment_must_start_with_letter() {
+        assert!(validate_tag("1task").is_err());
+        assert!(validate_tag("_task").is_err());
+        assert!(validate_tag("-task").is_err());
+    }
+
+    #[test]
+    fn invalid_characters_rejected() {
+        assert!(validate_tag("ta!g").is_err());
+        assert!(validate_tag("ta g").is_err());
+        assert!(validate_tag("ta@g").is_err());
+    }
+
+    #[test]
+    fn empty_path_segment_rejected() {
+        assert!(validate_tag("work//backend").is_err());
+        assert!(validate_tag("work/").is_err());
     }
 }

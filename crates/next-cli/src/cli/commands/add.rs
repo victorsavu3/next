@@ -1,6 +1,7 @@
 use chrono::Local;
 use next::domain::{
     date_parse::parse_date,
+    tag,
     task::{Priority, Recurrence, Stage, Task},
 };
 
@@ -94,6 +95,9 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 
     task.slug = args.slug;
     task.assignee = args.assignee;
+    for t in &args.tags {
+        tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
+    }
     task.tags = args.tags;
     task.notes = args.notes;
     task.long_term = args.long_term;

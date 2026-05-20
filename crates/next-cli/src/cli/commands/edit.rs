@@ -1,6 +1,7 @@
 use chrono::Local;
 use next::domain::{
     date_parse::parse_date,
+    tag,
     task::{Priority, Recurrence, Stage},
 };
 
@@ -102,6 +103,10 @@ pub struct Args {
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
+
+    /// Trailing +tag / -tag tokens to add or remove tags.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub tag_tokens: Vec<String>,
 }
 
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
@@ -139,15 +144,29 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         task.assignee = Some(assignee);
     }
 
-    // Add tags (deduplicate).
-    for tag in args.tags {
-        if !task.tags.contains(&tag) {
-            task.tags.push(tag);
+    // Validate and add tags from --tag flags (deduplicate).
+    for t in &args.tags {
+        tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
+        if !task.tags.contains(t) {
+            task.tags.push(t.clone());
         }
     }
-    // Remove tags.
-    for tag in &args.remove_tags {
-        task.tags.retain(|t| t != tag);
+    // Remove tags from --remove-tag flags.
+    for t in &args.remove_tags {
+        task.tags.retain(|existing| existing != t);
+    }
+    // Process trailing +tag / -tag tokens.
+    for token in &args.tag_tokens {
+        if let Some(t) = token.strip_prefix('+') {
+            tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
+            if !task.tags.contains(&t.to_owned()) {
+                task.tags.push(t.to_owned());
+            }
+        } else if let Some(t) = token.strip_prefix('-') {
+            task.tags.retain(|existing| existing != t);
+        } else {
+            anyhow::bail!("unrecognised trailing argument {token:?} — use +tag to add or -tag to remove");
+        }
     }
 
     if args.clear_parent {

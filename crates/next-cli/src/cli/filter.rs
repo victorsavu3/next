@@ -21,21 +21,17 @@ pub struct FilterArgs {
     pub all: bool,
     pub stage: Option<String>,
     pub json: bool,
-    /// Raw tokens that were not recognised as tag/project/context filters.
-    pub raw_tokens: Vec<String>,
 }
 
 impl FilterArgs {
     /// Parse a flat list of positional token strings into a [`FilterArgs`].
     ///
-    /// Recognised token forms
-    /// ----------------------
-    /// * `+tag`           → required_tags
-    /// * `-tag`           → excluded_tags
-    /// * `project:path`   → project
-    /// * `context:@name`  → context_override
-    ///
-    /// Everything else is placed in `raw_tokens`.
+    /// Recognised token forms:
+    /// - `+tag` or bare `tag` → required_tags
+    /// - `-tag`               → excluded_tags
+    /// - `project:path`       → project
+    /// - `context:@name`      → context_override
+    /// - `user:name`          → user_override
     pub fn parse(tokens: Vec<String>) -> Self {
         let mut args = FilterArgs::default();
         for token in tokens {
@@ -52,7 +48,8 @@ impl FilterArgs {
                     .get_or_insert_with(Vec::new)
                     .push(user.to_owned());
             } else {
-                args.raw_tokens.push(token);
+                // Bare token: treat as required tag (same as +tag).
+                args.required_tags.push(token);
             }
         }
         args
