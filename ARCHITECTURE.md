@@ -8,24 +8,24 @@ This document describes the internal design of `next`. Read `REQUIREMENTS.md` fo
 ## 1. Component overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                       next binary                           │
-│                                                             │
-│  ┌──────────┐   ┌──────────────┐   ┌─────────────────────┐ │
-│  │   CLI    │──▶│    Domain    │──▶│      Storage        │ │
-│  │ (clap)   │   │  (pure Rust) │   │ TOML files + git2   │ │
-│  └──────────┘   └──────┬───────┘   └─────────────────────┘ │
-│                        │                                    │
-│  ┌──────────┐   ┌──────▼───────┐                           │
-│  │  Output  │◀──│   Filter /   │                           │
-│  │text/JSON │   │   Scoring    │                           │
-│  └──────────┘   └──────────────┘                           │
-│                                                             │
-│  ┌────────────────────────────────────────────────────┐    │
-│  │                Integrations (planned)              │    │
-│  │   Forgejo (HTTP/REST)   │   iCalendar (ical)       │    │
-│  └────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                         next binary                              │
+│                                                                  │
+│  ┌──────────┐   ┌──────────────┐   ┌──────────────────────────┐ │
+│  │   CLI    │──▶│    Domain    │──▶│        Storage           │ │
+│  │ (clap)   │   │  (pure Rust) │   │  CachedStore (SQLite)    │ │
+│  └──────────┘   └──────┬───────┘   │    └── TomlStore (TOML) │ │
+│                        │           │    └── GitBackend (git2) │ │
+│  ┌──────────┐   ┌──────▼───────┐   └──────────────────────────┘ │
+│  │  Output  │◀──│   Filter /   │                                │
+│  │text/JSON │   │   Scoring    │                                │
+│  └──────────┘   └──────────────┘                                │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────┐       │
+│  │                  Integrations (planned)              │       │
+│  │    Forgejo (HTTP/REST)   │   iCalendar (ical)        │       │
+│  └──────────────────────────────────────────────────────┘       │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 The domain layer is pure logic with no I/O. Storage calls into domain types but not
@@ -135,19 +135,47 @@ pub enum AppError {
 }
 ```
 
-### `next-storage` — local TOML + git backend
+### `next-storage` — local TOML + SQLite cache + git backend
 
 ```
 crates/next-storage/src/
-  lib.rs            # pub fn open(root: PathBuf) -> Result<(TomlStore, GitBackend)>
+  lib.rs            # pub fn open(root: PathBuf) -> Result<(CachedStore, GitBackend)>
                     # pub fn task_path(root, task) -> PathBuf
-  toml_store.rs     # TomlStore: implements Store
+  cached_store.rs   # CachedStore: wraps TomlStore with an SQLite read cache
+  toml_store.rs     # TomlStore: source-of-truth TOML file I/O
   git_backend.rs    # GitBackend: implements VcsBackend (via git2)
 ```
 
+**`CachedStore`** is the `Store` implementation returned by `open()`. It wraps
+`TomlStore` and maintains an SQLite database at `<repo>/.next.db`:
+
+- **Reads** (`list_tasks`, `get_task`, `get_task_by_slug`, prefix/forgejo/webcal
+  lookups) query SQLite directly — no per-task TOML file reads.
+- **Writes** (`save_task`, `delete_task`, `save_state`) write to TOML first
+  (authoritative), then update the SQLite cache in-place.
+- **Cache invalidation**: on `open()`, `CachedStore` compares the stored git HEAD hash
+  against the current HEAD (from `GitBackend::head_hash()`). A mismatch triggers a full
+  rebuild: all TOML files are read via `TomlStore::list_tasks()` and the SQLite tables
+  are repopulated. The new HEAD hash is stored in the `meta` table.
+
+SQLite schema:
+
+```sql
+CREATE TABLE meta  (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE tasks (
+    id            TEXT PRIMARY KEY,
+    slug          TEXT,
+    forgejo_issue TEXT,
+    webcal_uid    TEXT,
+    data          TEXT NOT NULL   -- full Task serialised as JSON
+);
+CREATE INDEX idx_tasks_slug    ON tasks(slug);
+CREATE INDEX idx_tasks_forgejo ON tasks(forgejo_issue);
+CREATE INDEX idx_tasks_webcal  ON tasks(webcal_uid);
+```
+
 **`TomlStore`** reads and writes one `.toml` file per task in `tasks/`. The state is
-stored in `state.toml` at the repository root. No SQLite; all reads scan the `tasks/`
-directory.
+stored in `state.toml` at the repository root.
 
 **`GitBackend`** wraps `Mutex<git2::Repository>` to satisfy `Send + Sync`. Commit
 messages follow the pattern `next: <verb> "<task title>"`.
@@ -168,7 +196,9 @@ before any server is reachable.
 
 ```
 crates/next-cli/src/
-  main.rs           # entry point: build AppContext, dispatch command, log errors
+  main.rs           # entry point: Init handled before AppContext; dispatches all others
+  app_context.rs    # AppContext struct + ::new() (selects backend, opens store)
+  lib.rs            # re-exports AppContext; makes commands importable from tests
   log.rs            # Logger: append-only next.log with 1 MB rotation
   resolve.rs        # fn resolve_task_id(store, id_str) -> Result<Uuid>
   cli/
@@ -176,6 +206,7 @@ crates/next-cli/src/
     filter.rs       # FilterArgs -> FilterSet conversion
     render.rs       # task list and detail rendering (text and --json)
     commands/
+      init.rs       # next init — no AppContext needed; runs git init, creates tasks/
       add.rs        cancel.rs   context.rs  delete.rs
       done.rs       edit.rs     export.rs   forecast.rs
       import.rs     list.rs     mod.rs      move_cmd.rs
@@ -210,22 +241,26 @@ pub struct AppContext {
 
 ## 5. Command execution lifecycle
 
-Every command follows this sequence:
+`next init` is the only command that runs before `AppContext` is constructed:
 
 ```
 1. Parse CLI args (clap)
-2. AppContext::new(): locate repository root, select backend, open store
-3. Execute command logic (reads from store; writes to store + vcs)
-4. If mutation: vcs.commit(changed_paths, message)
-5. Render output (text or JSON to stdout)
-6. On error: ctx.log.error(cmd_name, message); propagate to main
+2. If command is Init → run init::run(args, cwd); exit
+3. AppContext::new(): locate repository root, select backend, open CachedStore
+4. Execute command logic (reads from store; writes to store + vcs)
+5. If mutation: vcs.commit(changed_paths, message)
+6. Render output (text or JSON to stdout)
+7. On error: ctx.log.error(cmd_name, message); propagate to main
 ```
 
-Read-only commands (list, show, forecast) skip step 4.
+Read-only commands (list, show, forecast) skip step 5.
 
 ---
 
 ## 6. Storage layer
+
+`next_storage::open(root)` returns `(CachedStore, GitBackend)`. `CachedStore` satisfies
+the `Store` trait; callers box it as `Box<dyn Store>` inside `AppContext`.
 
 ### 6.1 TOML file conventions
 
@@ -442,10 +477,13 @@ propagates the `anyhow::Error` to produce a non-zero exit code.
 
 ## 14. Testing strategy
 
-| Layer | Approach |
-|-------|----------|
-| `domain::scoring` | Unit tests with fixed dates; each factor tested independently |
-| `domain::filter` | Unit tests: build `FilterSet` + `Vec<Task>`, assert filtered output; covers user filter, context filter, resource filter |
-| `domain::date_parse` | Unit tests: fixed "today", assert parsed date for common expressions |
-| `next-storage` | Round-trip tests: write task to `tempdir`, read back, assert equal fields |
-| `next-storage` git | Integration tests against `tempdir` git repo; assert commits created |
+| Layer | Location | Approach |
+|-------|----------|----------|
+| `domain::scoring` | `crates/next/src/domain/scoring.rs` | Unit tests with fixed dates; each factor tested independently |
+| `domain::filter` | `crates/next/src/domain/filter.rs` | Unit tests: build `FilterSet` + `Vec<Task>`, assert filtered output |
+| `domain::date_parse` | `crates/next/src/domain/date_parse.rs` | Unit tests: fixed "today", assert parsed date for common expressions |
+| `TomlStore` | `crates/next-storage/src/toml_store.rs` | Round-trip tests: write task to `tempdir`, read back, assert equal fields |
+| `GitBackend` | `crates/next-storage/src/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
+| `CachedStore` | `crates/next-storage/src/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |
+| Cache sync | `crates/next-storage/tests/cache_sync.rs` | Integration tests: write-through consistency (SQLite ↔ TOML), git pull propagation (HEAD change triggers rebuild), cache-reuse (same HEAD = no rebuild) |
+| CLI commands | `crates/next-cli/tests/` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |

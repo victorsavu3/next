@@ -8,6 +8,7 @@ A GTD-style task manager with automatic urgency scoring. The binary is called `n
 
 | Command | Short description |
 |---------|------------------|
+| `next init` | Initialise a task repository in the current directory |
 | `next add` | Add a task to the inbox |
 | `next list` | List tasks sorted by urgency score |
 | `next next` | Show the top N highest-scored tasks |
@@ -39,6 +40,25 @@ A GTD-style task manager with automatic urgency scoring. The binary is called `n
 ---
 
 ## Command Reference
+
+### `next init`
+
+Initialise a new task repository in the current directory. Safe to run on an existing repository.
+
+**Usage**
+
+```
+next init
+```
+
+What it does:
+
+1. Runs `git init` (skipped if `.git` already exists)
+2. Creates `tasks/` directory
+3. Appends `.next.db` to `.gitignore` (or creates `.gitignore`; never duplicates the entry)
+4. Creates an initial git commit when git user config is available
+
+---
 
 ### `next add`
 

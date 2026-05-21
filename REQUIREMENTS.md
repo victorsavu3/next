@@ -90,7 +90,8 @@ vacation = false
     work-infra.toml              # project task with slug "work-infra"
     deploy-db-e5f6a7b8.toml
   state.toml
-  .gitignore                     # must include the DB path if it is inside the repo
+  .gitignore                     # MUST contain ".next.db"
+  .next.db                       # SQLite read cache; MUST NOT be committed to git
 ```
 
 All task files MUST reside in the flat `tasks/` directory. There is no `projects/`
@@ -268,6 +269,21 @@ upcoming due dates for all matching recurrence series for a configurable horizon
 
 The binary MUST be named `next`. All commands MUST support `--json` to emit JSON output.
 Exit codes: `0` success, `1` user/input error, `2` system error.
+
+### 8.0 `next init`
+
+```
+next init
+```
+
+Initialises a new task repository in the current directory:
+
+1. Runs `git init` if no `.git` directory exists (idempotent on existing repos)
+2. Creates the `tasks/` directory if it does not exist
+3. Appends `.next.db` to `.gitignore` (creates the file if absent; does not duplicate the entry)
+4. Attempts an initial git commit; skips silently if git user is not configured
+
+MUST be safe to run more than once — subsequent runs MUST NOT corrupt existing data or duplicate `.gitignore` entries.
 
 ### 8.1 `next add`
 

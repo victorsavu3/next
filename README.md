@@ -8,6 +8,10 @@ files in a git repository, enabling offline-first sync across machines.
 ## Quick start
 
 ```sh
+# One-time setup: initialise a task repository
+mkdir ~/tasks && cd ~/tasks
+next init
+
 # Capture a task
 next add "Call dentist"
 
@@ -33,16 +37,22 @@ next review
 
 Every task is a `.toml` file inside a `tasks/` directory at the repository root. `git`
 is the transport layer — `next sync` runs pull then push. The TOML files are the single
-source of truth; nothing is derived or cached outside the repository.
+source of truth.
+
+`next` also maintains an SQLite database (`.next.db`) as a read cache. It is rebuilt
+automatically whenever the git HEAD changes (e.g. after a pull), so it is always
+consistent with the TOML files. Add it to `.gitignore`; `next init` does this for you.
 
 ```
 my-tasks/
   .git/
+  .gitignore                   # contains ".next.db"
   tasks/
     call-dentist-a1b2c3d4.toml
     water-plants.toml          # task with slug "water-plants"
   state.toml                   # active contexts, active users, resource availability
   next.log                     # append-only command log (rotated at 1 MB)
+  .next.db                     # SQLite read cache — not committed
 ```
 
 ---
@@ -137,6 +147,7 @@ All list commands accept filter tokens in any order:
 
 | Command | Description |
 |---------|-------------|
+| `next init` | Initialise a task repository in the current directory |
 | `next add` | Add a task to the inbox |
 | `next list` | List tasks sorted by urgency score |
 | `next next [N]` | Show top N highest-scored tasks (default 10) |

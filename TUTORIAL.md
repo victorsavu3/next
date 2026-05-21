@@ -8,20 +8,25 @@ This tutorial walks through everyday use of `next`, a GTD-style task manager tha
 
 ### Create a repository
 
-`next` stores tasks inside a git repository. Create one (or use an existing project):
+`next` stores tasks inside a git repository. Use `next init` to set everything up in one step:
 
 ```
 mkdir ~/tasks && cd ~/tasks
-git init
+next init
 ```
 
-You do not need a remote. All task data lives in `tasks/` as TOML files and is versioned automatically — every `add`, `done`, or `edit` operation creates a git commit.
+This runs `git init`, creates the `tasks/` directory, and adds `.next.db` to `.gitignore` automatically. You do not need a remote. All task data lives in `tasks/` as TOML files and is versioned automatically — every `add`, `done`, or `edit` operation creates a git commit.
 
-Add `.next.db` to `.gitignore` to exclude the SQLite read-cache:
+The repository layout looks like this after the first task is added:
 
 ```
-echo ".next.db" >> .gitignore
-git add .gitignore && git commit -m "init: add .gitignore"
+~/tasks/
+  .git/
+  .gitignore          # contains ".next.db"
+  tasks/
+    buy-milk-3a7f1b2c.toml
+  state.toml          # active contexts, resources, user filter
+  .next.db            # SQLite read-cache — excluded from git
 ```
 
 ### Add your first task
