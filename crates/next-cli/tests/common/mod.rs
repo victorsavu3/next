@@ -24,7 +24,9 @@ pub fn setup() -> TestEnv {
     TestEnv { _dir: dir, ctx }
 }
 
-fn init_git_repo(dir: &Path) {
+/// Initialise a git repo with test user config at `dir` (used by `setup` and
+/// by tests that need a pre-existing repo before running `next init`).
+pub fn setup_in(dir: &Path) {
     for args in [
         vec!["init", "-q"],
         vec!["config", "user.email", "test@test.com"],
@@ -37,4 +39,8 @@ fn init_git_repo(dir: &Path) {
             .unwrap();
         assert!(status.success(), "git {args:?} failed");
     }
+}
+
+fn init_git_repo(dir: &Path) {
+    setup_in(dir);
 }

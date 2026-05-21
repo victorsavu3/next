@@ -22,7 +22,7 @@ impl AppContext {
             match config.backend.kind {
                 BackendKind::Local => {
                     let root = find_repo_root().context(
-                        "not inside a task repository — run `git init` and `next add` to start",
+                        "not inside a task repository — run `next init` to set one up",
                     )?;
                     let (s, v) = next_storage::open(root.clone())
                         .context("failed to open local task store")?;

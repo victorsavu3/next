@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use clap::Parser;
 use next_cli::{
     AppContext,
@@ -6,9 +7,17 @@ use next_cli::{
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // Init runs before the repository exists — handle it before AppContext.
+    if let Command::Init(args) = cli.command {
+        let dir = std::env::current_dir().context("cannot determine current directory")?;
+        return commands::init::run(args, &dir);
+    }
+
     let mut ctx = AppContext::new()?;
 
     let cmd_name = match &cli.command {
+        Command::Init(_) => unreachable!("handled above"),
         Command::Add(_) => "add",
         Command::List(_) => "list",
         Command::Next(_) => "next",
@@ -30,6 +39,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let result = match cli.command {
+        Command::Init(_) => unreachable!("handled above"),
         Command::Add(args) => commands::add::run(args, &mut ctx),
         Command::List(args) => commands::list::run(args, &mut ctx),
         Command::Next(args) => commands::next_cmd::run(args, &mut ctx),

@@ -14,6 +14,9 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Initialise a new task repository in the current directory.
+    Init(commands::init::Args),
+
     /// Add a new task.
     Add(commands::add::Args),
 

@@ -1,4 +1,5 @@
 pub mod add;
+pub mod init;
 pub mod cancel;
 pub mod context;
 pub mod delete;
