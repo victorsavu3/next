@@ -91,6 +91,12 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         "Updated:  {}",
         task.updated_at.format("%Y-%m-%d %H:%M UTC")
     );
+    if let Some(ref url) = task.url {
+        println!("URL:      {url}");
+    }
+    if let Some(ref desc) = task.description {
+        println!("\nDescription:\n{desc}");
+    }
     if let Some(ref notes) = task.notes {
         println!("\nNotes:\n{notes}");
     }

@@ -56,6 +56,22 @@ pub struct Args {
     #[arg(long = "blocked-by", action = clap::ArgAction::Append)]
     pub blocked_by: Vec<String>,
 
+    /// Longer description.
+    #[arg(long)]
+    pub description: Option<String>,
+
+    /// Remove the description.
+    #[arg(long)]
+    pub clear_description: bool,
+
+    /// URL associated with this task.
+    #[arg(long)]
+    pub url: Option<String>,
+
+    /// Remove the URL.
+    #[arg(long)]
+    pub clear_url: bool,
+
     /// Free-text notes.
     #[arg(long)]
     pub notes: Option<String>,
@@ -186,6 +202,19 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         }
     }
 
+    if args.clear_description {
+        task.description = None;
+    } else if let Some(d) = args.description {
+        task.description = Some(d);
+    }
+
+    if args.clear_url {
+        task.url = None;
+    } else if let Some(ref u) = args.url {
+        validate_url(u)?;
+        task.url = args.url;
+    }
+
     if let Some(notes) = args.notes {
         task.notes = Some(notes);
     }
@@ -229,6 +258,14 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
             .info("edit", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
     }
     Ok(())
+}
+
+fn validate_url(u: &str) -> anyhow::Result<()> {
+    if u.starts_with("http://") || u.starts_with("https://") {
+        Ok(())
+    } else {
+        anyhow::bail!("url must start with http:// or https://")
+    }
 }
 
 fn parse_priority(s: &str) -> anyhow::Result<Priority> {

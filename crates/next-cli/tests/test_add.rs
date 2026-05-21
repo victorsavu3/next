@@ -13,6 +13,8 @@ fn args(title: &str) -> add::Args {
         tags: vec![],
         parent: None,
         blocked_by: vec![],
+        description: None,
+        url: None,
         notes: None,
         stage: None,
         wait_for: None,

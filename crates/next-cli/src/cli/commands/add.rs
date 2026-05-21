@@ -44,6 +44,14 @@ pub struct Args {
     #[arg(long = "blocked-by", action = clap::ArgAction::Append)]
     pub blocked_by: Vec<String>,
 
+    /// Longer description (multi-line context or detail).
+    #[arg(long)]
+    pub description: Option<String>,
+
+    /// URL associated with this task (ticket, doc, reference link).
+    #[arg(long)]
+    pub url: Option<String>,
+
     /// Free-text notes.
     #[arg(long)]
     pub notes: Option<String>,
@@ -99,6 +107,11 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
     }
     task.tags = args.tags;
+    task.description = args.description;
+    if let Some(ref u) = args.url {
+        validate_url(u)?;
+    }
+    task.url = args.url;
     task.notes = args.notes;
     task.long_term = args.long_term;
 
@@ -146,6 +159,14 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn validate_url(u: &str) -> anyhow::Result<()> {
+    if u.starts_with("http://") || u.starts_with("https://") {
+        Ok(())
+    } else {
+        anyhow::bail!("url must start with http:// or https://")
+    }
 }
 
 fn parse_priority(s: &str) -> anyhow::Result<Priority> {

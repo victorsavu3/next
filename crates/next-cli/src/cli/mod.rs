@@ -30,6 +30,9 @@ pub enum Command {
     /// Show details for a task.
     Show(commands::show::Args),
 
+    /// Open the URL attached to a task in the default browser.
+    Open(commands::open::Args),
+
     /// Mark a task as done.
     Done(commands::done::Args),
 

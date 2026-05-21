@@ -99,6 +99,14 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub score_adjustment: f64,
 
+    /// Multi-line free-form description providing context or detail beyond the title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// A URL associated with the task (e.g. a ticket, doc, or reference link).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+
     /// Free-form notes in Markdown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
@@ -147,6 +155,8 @@ impl Task {
             waiting_for: None,
             blocked_by: Vec::new(),
             score_adjustment: 0.0,
+            description: None,
+            url: None,
             notes: None,
             forgejo_issue: None,
             webcal_uid: None,
