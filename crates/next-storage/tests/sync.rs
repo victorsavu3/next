@@ -246,7 +246,7 @@ fn pull_reports_conflicts() {
     task.slug = Some("shared".into());
     a_store.save_task(&task).unwrap();
     let task_path_a = next_storage::task_path(a_dir.path(), &task);
-    a_vcs.commit(&[task_path_a.clone()], "next: add \"Shared task\"").unwrap();
+    a_vcs.commit(std::slice::from_ref(&task_path_a), "next: add \"Shared task\"").unwrap();
     a_vcs.push().unwrap();
 
     // B clones.

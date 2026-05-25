@@ -17,4 +17,6 @@ pub mod project;
 pub mod resource;
 pub mod show;
 pub mod sync;
+pub mod tag;
+pub mod tree;
 pub mod user;

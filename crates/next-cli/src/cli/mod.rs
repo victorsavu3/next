@@ -75,4 +75,10 @@ pub enum Command {
 
     /// Export tasks to an external format.
     Export(commands::export::Args),
+
+    /// Manage tag descriptions.
+    Tag(commands::tag::Args),
+
+    /// Show all tasks in a tree view.
+    Tree(commands::tree::Args),
 }

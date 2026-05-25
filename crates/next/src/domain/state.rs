@@ -23,6 +23,12 @@ pub struct GlobalState {
     /// shared across everyone). Multiple users can be active simultaneously.
     #[serde(default)]
     pub active_users: Vec<String>,
+
+    /// Human-readable descriptions for tags, contexts, and resources.
+    /// Key is the full tag string including prefix (e.g. `"@work"`, `"#printer"`, `"python"`).
+    /// Used to document where/when each tag applies, for both humans and AI agents.
+    #[serde(default)]
+    pub tag_descriptions: HashMap<String, String>,
 }
 
 impl GlobalState {

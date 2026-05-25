@@ -43,7 +43,6 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 fn show(ctx: &mut AppContext, json: bool) -> anyhow::Result<()> {
     let state = ctx.store.get_state()?;
     if json {
-        // Emit a simple JSON object keyed by resource name.
         let mut entries: Vec<String> = state
             .resources
             .iter()
@@ -57,8 +56,12 @@ fn show(ctx: &mut AppContext, json: bool) -> anyhow::Result<()> {
         let mut rows: Vec<(&String, &bool)> = state.resources.iter().collect();
         rows.sort_by_key(|(k, _)| *k);
         for (name, available) in rows {
-            let status = if *available { "available" } else { "unavailable" };
-            println!("  #{name:<20} {status}");
+            let tag = format!("#{name}");
+            let status = if *available { "available  " } else { "unavailable" };
+            match state.tag_descriptions.get(&tag) {
+                Some(desc) => println!("  {tag:<22} {status}  {desc}"),
+                None => println!("  {tag:<22} {status}"),
+            }
         }
     }
     Ok(())

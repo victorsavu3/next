@@ -37,7 +37,10 @@ fn show(ctx: &mut AppContext) -> anyhow::Result<()> {
     } else {
         println!("Active contexts:");
         for c in &state.active_contexts {
-            println!("  {c}");
+            match state.tag_descriptions.get(c) {
+                Some(desc) => println!("  {c:<28}  {desc}"),
+                None => println!("  {c}"),
+            }
         }
     }
     Ok(())

@@ -37,6 +37,8 @@ fn main() -> anyhow::Result<()> {
         Command::Sync(_) => "sync",
         Command::Import(_) => "import",
         Command::Export(_) => "export",
+        Command::Tag(_) => "tag",
+        Command::Tree(_) => "tree",
     };
 
     let result = match cli.command {
@@ -60,6 +62,8 @@ fn main() -> anyhow::Result<()> {
         Command::Sync(args) => commands::sync::run(args, &mut ctx),
         Command::Import(args) => commands::import::run(args, &mut ctx),
         Command::Export(args) => commands::export::run(args, &mut ctx),
+        Command::Tag(args) => commands::tag::run(args, &mut ctx),
+        Command::Tree(args) => commands::tree::run(args, &mut ctx),
     };
 
     if let Err(ref e) = result {

@@ -241,6 +241,7 @@ fn save_state_syncs_to_both_stores() {
         active_contexts: vec!["@work".into(), "@home".into()],
         active_users: vec!["alice".into()],
         resources: HashMap::from([("printer".into(), false)]),
+        ..Default::default()
     };
     store.save_state(&state).unwrap();
 
