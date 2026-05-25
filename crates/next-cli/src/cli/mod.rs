@@ -33,6 +33,9 @@ pub enum Command {
     /// Open the URL attached to a task in the default browser.
     Open(commands::open::Args),
 
+    /// Read or write individual keys in a task's data map.
+    Data(commands::data::Args),
+
     /// Mark a task as done.
     Done(commands::done::Args),
 

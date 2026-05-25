@@ -56,14 +56,6 @@ pub struct Args {
     #[arg(long = "blocked-by", action = clap::ArgAction::Append)]
     pub blocked_by: Vec<String>,
 
-    /// Set or update a key=value data entry (repeatable).
-    #[arg(long = "data", value_name = "KEY=VALUE", action = clap::ArgAction::Append)]
-    pub data: Vec<String>,
-
-    /// Remove a key from the data map (repeatable).
-    #[arg(long = "unset-data", value_name = "KEY", action = clap::ArgAction::Append)]
-    pub unset_data: Vec<String>,
-
     /// Longer description.
     #[arg(long)]
     pub description: Option<String>,
@@ -210,14 +202,6 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         }
     }
 
-    for pair in &args.data {
-        let (k, v) = parse_data_pair(pair)?;
-        task.data.insert(k, v);
-    }
-    for key in &args.unset_data {
-        task.data.remove(key);
-    }
-
     if args.clear_description {
         task.description = None;
     } else if let Some(d) = args.description {
@@ -274,20 +258,6 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
             .info("edit", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
     }
     Ok(())
-}
-
-fn parse_data_pair(pair: &str) -> anyhow::Result<(String, serde_json::Value)> {
-    let (key, raw) = pair
-        .split_once('=')
-        .ok_or_else(|| anyhow::anyhow!("--data {pair:?} must be KEY=VALUE"))?;
-    if key.is_empty() {
-        anyhow::bail!("--data key must not be empty");
-    }
-    let value = serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::String(raw.to_owned()));
-    if value.is_null() {
-        anyhow::bail!("--data value must not be null");
-    }
-    Ok((key.to_owned(), value))
 }
 
 fn validate_url(u: &str) -> anyhow::Result<()> {
