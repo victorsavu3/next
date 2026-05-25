@@ -13,23 +13,28 @@ A task manager with automatic urgency scoring. The binary is called `next`.
 | `next list` | List tasks sorted by urgency score |
 | `next next` | Show the top N highest-scored tasks |
 | `next show` | Show full details of a single task |
+| `next tree` | Show all tasks in a parent-child tree |
 | `next done` | Mark a task complete (triggers recurrence if applicable) |
 | `next cancel` | Mark a task cancelled |
 | `next edit` | Edit fields on an existing task |
 | `next delete` | Permanently delete a task (with confirmation) |
 | `next move` | Change the parent of a task |
 | `next open` | Open the task's URL in the default browser |
-| `next project list` | List all project tasks in a tree view |
-| `next project add` | Create a new project task |
-| `next project show` | Show a project and all its descendants |
 | `next data set` | Set a key in the task's data map |
 | `next data unset` | Remove a key from the task's data map |
 | `next data get` | Print the value of one key from the task's data map |
+| `next tag` | List all tags with descriptions, grouped by kind |
+| `next tag describe` | Set a description for any tag |
+| `next tag clear-description` | Remove a tag description |
 | `next context` | Show active contexts |
 | `next context set` | Set the global active context filter |
 | `next context clear` | Clear all active contexts |
+| `next context describe` | Set a description for a context tag |
+| `next context clear-description` | Remove a context description |
 | `next resource` | List resources and their availability |
 | `next resource set` | Toggle a resource available or unavailable |
+| `next resource describe` | Set a description for a resource tag |
+| `next resource clear-description` | Remove a resource description |
 | `next forecast` | Show upcoming recurrence dates |
 | `next sync` | Pull from git remote, rebuild cache, push |
 | `next user` | Show active user filter |
@@ -109,8 +114,11 @@ next add "Call dentist"
 # Task with deadline and context tag
 next add "Submit tax forms" --due "April 15" --tag @home --priority high
 
-# Subtask under an existing task
-next add "Write unit tests" --parent work-backend
+# Project task (just a task with the "project" tag)
+next add "Launch blog" --slug launch-blog --tag project --priority high
+
+# Subtask under an existing project
+next add "Write first post" --parent launch-blog
 
 # Recurring task: water plants 7 days after last watering
 next add "Water plants" --slug water-plants --recur-completion 7 --tag @home
@@ -183,13 +191,8 @@ Same filter flags as `next list`.
 **Examples**
 
 ```sh
-# Show top 10 tasks (default)
 next next
-
-# Top 5 tasks in the work context
 next next 5 context:@work
-
-# Top 10 tasks with JSON output
 next next --json
 ```
 
@@ -217,19 +220,42 @@ next show <id>
 |------|------|---------|-------------|
 | `--json` | flag | false | Emit full task details as JSON. |
 
+---
+
+### `next tree`
+
+Show all tasks in a parent-child tree. Root tasks (no parent) are listed at the top;
+child tasks are indented under their parent. Tasks tagged `project` that have children
+are marked with `[project]`.
+
+**Usage**
+
+```
+next tree [options]
+```
+
+**Options**
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--all` | flag | false | Include done and cancelled tasks. Default shows open tasks only. |
+| `--json` | flag | false | Emit a flat task list as JSON (with `parent_id` fields). |
+
 **Examples**
 
 ```sh
-next show water-plants
-next show a1b2
-next show a1b2 --json
+# Tree of open tasks
+next tree
+
+# Full tree including completed work
+next tree --all
 ```
 
 ---
 
 ### `next done`
 
-Mark a task as complete. If the task has a recurrence rule, the next instance is created automatically. If the task has a linked Forgejo issue, the issue is closed via the API.
+Mark a task as complete. If the task has a recurrence rule, the next instance is created automatically.
 
 **Usage**
 
@@ -290,7 +316,7 @@ Same flags as `next add`, plus:
 | `--clear-url` | flag | false | Remove the URL. |
 | `--json` | flag | false | Emit the updated task as JSON. |
 
-Trailing `+tag` and `-tag` tokens may also be used to add or remove tags without `--tag` / `--remove-tag`:
+Trailing `+tag` and `-tag` tokens may also be used to add or remove tags:
 
 ```sh
 next edit water-plants +@garden -urgent
@@ -299,16 +325,9 @@ next edit water-plants +@garden -urgent
 **Examples**
 
 ```sh
-# Move a task's deadline forward
 next edit a1b2 --due "next Friday"
-
-# Change priority and add a tag
 next edit a1b2 --priority high --tag @work
-
-# Remove a tag and clear the due date
 next edit a1b2 --remove-tag @home --clear-due
-
-# Set a URL and description
 next edit a1b2 --url "https://example.com/ticket-42" --description "See comments in ticket"
 ```
 
@@ -352,10 +371,7 @@ next move <id> [--parent <id-or-slug>]
 **Examples**
 
 ```sh
-# Make a task a subtask of another
-next move a1b2 --parent work-infra
-
-# Remove the parent relationship (promote to top-level)
+next move a1b2 --parent launch-blog
 next move a1b2 --parent none
 ```
 
@@ -363,85 +379,13 @@ next move a1b2 --parent none
 
 ### `next open`
 
-Open the URL associated with a task in the default browser (uses `xdg-open` on Linux, `open` on macOS). Fails with an error if the task has no `url` field.
+Open the URL associated with a task in the default browser. Fails with an error if the task has no `url` field.
 
 **Usage**
 
 ```
 next open <id>
 ```
-
-**Examples**
-
-```sh
-next open a1b2
-next open my-ticket
-```
-
----
-
-### `next project list`
-
-List all open tasks tagged `"project"` in a tree view with their open subtask count.
-
-**Usage**
-
-```
-next project list
-```
-
-**Options**
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--json` | flag | false | Emit the project list as JSON. |
-
----
-
-### `next project add`
-
-Create a new project task (shorthand for `next add --tag project`).
-
-**Usage**
-
-```
-next project add <title> [options]
-```
-
-**Options**
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--slug <slug>` | string | none | Stable short identifier for the project. |
-| `--priority <level>` | `low\|medium\|high` | `medium` | Project priority; affects child task scoring. |
-| `--notes <text>` | string | none | Free-text description of the project. |
-| `--parent <id>` | task ID | none | Make this project a sub-project. |
-| `--json` | flag | false | Emit the new project task as JSON. |
-
-**Examples**
-
-```sh
-next project add "Launch blog" --slug launch-blog --priority high
-next project add "Work infrastructure" --slug work-infra --notes "Server and CI work"
-```
-
----
-
-### `next project show`
-
-Show a project task and all its descendants in a tree view.
-
-**Usage**
-
-```
-next project show <id>
-```
-
-**Options**
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--json` | flag | false | Emit the tree as JSON. |
 
 ---
 
@@ -490,9 +434,57 @@ next data get <id> <key>
 
 ---
 
+### `next tag`
+
+List all tags that appear on any task, together with any tags that have a stored
+description. Tags are grouped into three sections: Contexts (`@`), Resources (`#`), and
+Freeform. Descriptions are shown inline.
+
+**Usage**
+
+```
+next tag
+```
+
+---
+
+### `next tag describe`
+
+Set a human-readable description for a tag, context, or resource. The description is
+stored in `state.toml` under `tag_descriptions` and is shown in `next tag`,
+`next context`, and `next resource` output.
+
+**Usage**
+
+```
+next tag describe <tag> <description>
+```
+
+**Examples**
+
+```sh
+next tag describe @work "Tasks at the standing desk — laptop required"
+next tag describe #printer "Office laser printer, 2nd floor"
+next tag describe python "Python-related development work"
+```
+
+---
+
+### `next tag clear-description`
+
+Remove the stored description for a tag. Errors if no description is set.
+
+**Usage**
+
+```
+next tag clear-description <tag>
+```
+
+---
+
 ### `next context`
 
-Show the currently active context filters.
+Show the currently active context filters and their descriptions (if any).
 
 **Usage**
 
@@ -533,9 +525,42 @@ next context clear
 
 ---
 
+### `next context describe`
+
+Set a human-readable description for a context tag. Equivalent to
+`next tag describe <@tag> <description>` but validates that the tag starts with `@`.
+
+**Usage**
+
+```
+next context describe <@tag> <description>
+```
+
+**Examples**
+
+```sh
+next context describe @home "Home tasks: kitchen, garden, errands"
+next context describe @work/frontend "Frontend development at the office"
+```
+
+---
+
+### `next context clear-description`
+
+Remove the stored description for a context tag.
+
+**Usage**
+
+```
+next context clear-description <@tag>
+```
+
+---
+
 ### `next resource`
 
-List all known resources and their current availability status.
+List all known resources and their current availability status. Descriptions are shown
+inline when set.
 
 **Usage**
 
@@ -560,6 +585,38 @@ next resource set <#resource> <on|off>
 ```sh
 next resource set #printer off   # printer is broken — hide printer tasks
 next resource set #printer on    # printer repaired
+```
+
+---
+
+### `next resource describe`
+
+Set a human-readable description for a resource tag. Equivalent to
+`next tag describe <#tag> <description>` but validates that the tag starts with `#`.
+
+**Usage**
+
+```
+next resource describe <#tag> <description>
+```
+
+**Examples**
+
+```sh
+next resource describe #printer "Office laser printer, 2nd floor"
+next resource describe #vacation "Away from keyboard — all resource tasks hidden"
+```
+
+---
+
+### `next resource clear-description`
+
+Remove the stored description for a resource tag.
+
+**Usage**
+
+```
+next resource clear-description <#tag>
 ```
 
 ---
@@ -633,14 +690,6 @@ next forecast [filters...] [--days <N>]
 | `--all-users` | flag | false | Bypass the user filter. |
 | `--json` | flag | false | Emit forecast as JSON. |
 
-**Examples**
-
-```sh
-next forecast
-next forecast --days 180
-next forecast +#printer
-```
-
 ---
 
 ### `next sync`
@@ -657,7 +706,7 @@ next sync
 
 ### `next import forgejo`
 
-Import issues from a Forgejo repository as tasks. On the first run, creates one task per issue. On subsequent runs, updates only the `status` of previously imported tasks; user-edited fields are never overwritten.
+Import issues from a Forgejo repository as tasks. On the first run, creates one task per open issue. On subsequent runs, updates only the `status` of previously imported tasks.
 
 **Usage**
 
@@ -676,7 +725,7 @@ next import forgejo <owner/repo> [options]
 
 ### `next import ical`
 
-Import VTODO entries from an iCalendar (`.ics`) file or a webcal URL. Only the `STATUS` field is imported. Matching is done by `UID`.
+Import VTODO entries from an iCalendar (`.ics`) file or a webcal URL.
 
 **Usage**
 
@@ -688,7 +737,7 @@ next import ical <file-or-url>
 
 ### `next export ical`
 
-Export matching tasks as a valid iCalendar file. Accepts the same filter tokens as `next list`. Output goes to stdout by default.
+Export matching tasks as a valid iCalendar file. Output goes to stdout by default.
 
 **Usage**
 
@@ -708,24 +757,24 @@ next export ical [filters...] [--output <file>]
 
 ## Filter Syntax
 
-All list commands (`list`, `next`, `forecast`, `export ical`) accept filter tokens that can be combined freely in any order. Multiple tokens of the same type are combined with AND.
+All list commands (`list`, `next`, `forecast`, `export ical`) accept filter tokens that can be combined freely in any order.
 
 ### Token reference
 
 | Token | Example | Meaning |
 |-------|---------|---------|
-| `+<tag>` | `+python`, `+@home`, `+#printer` | Task must have this tag. Multiple `+` tokens are ANDed. |
-| `-<tag>` | `-@work`, `-reading` | Task must not have this tag. Multiple `-` tokens are ANDed. |
-| `project:<path>` | `project:work`, `project:work-infra` | Task belongs to this project or any descendant. |
+| `+<tag>` | `+python`, `+@home`, `+#printer` | Task must have this tag. |
+| `-<tag>` | `-@work`, `-reading` | Task must not have this tag. |
+| `project:<path>` | `project:work`, `project:launch-blog` | Task belongs to this project or any descendant. |
 | `context:<@tag>` | `context:@home` | Override the global active context for this query only. |
 | `user:<name>` | `user:alice` | Override the global user filter for this query only. |
 | `--future` | | Include tasks with a future `start` date. |
-| `--all` | | Disable all implicit filtering: context, resource, user, blocked, future start. |
-| `--all-users` | | Bypass the user filter only; context and resource filters remain active. |
+| `--all` | | Disable all implicit filtering. |
+| `--all-users` | | Bypass the user filter only. |
 
 ### Implicit filtering (default behaviour)
 
-Unless `--all` is passed, the following tasks are always excluded from results:
+Unless `--all` is passed, the following tasks are always excluded:
 
 - Tasks with `status` other than `open`
 - Tasks whose `start` date is in the future
@@ -734,66 +783,36 @@ Unless `--all` is passed, the following tasks are always excluded from results:
 - Tasks whose `@context` tags do not match the active context set (tasks with no `@` tags are always shown)
 - Tasks whose `assignee` does not match the active user set (tasks with no `assignee` are always shown)
 
-### Examples
-
-```sh
-# Python-tagged tasks
-next list +python
-
-# Tasks available at home, including future and not-yet-started
-next list context:@home --future
-
-# Everything, no filters
-next list --all
-
-# Upcoming recurrences that require the printer
-next forecast +#printer
-```
-
 ---
 
 ## Design Notes
 
-### Binary name: `next`
-
-The binary is named `next`, reflecting the tool's primary purpose: surfacing what to work
-on next. The sub-command that lists the top N tasks is also called `next`, making
-`next next` a natural invocation.
-
 ### Task ID references
 
 Task IDs are UUID v4 values. On the command line, any unambiguous prefix of at least 4
-hex characters is accepted. If the prefix matches more than one task, the command fails
-with an error listing the ambiguous matches. Slugs are also accepted wherever an ID is
-expected.
+hex characters is accepted. Slugs are also accepted wherever an ID is expected.
 
-### Projects
+### Projects and subtasks
 
-A project is any task tagged `"project"`. There is no separate project entity. The
-`next project add` command is a shorthand for `next add --tag project`. Child tasks
-attach via `--parent`. A parent task is hidden from the default list while any of its
-direct children are still open.
+A project is any task tagged `"project"`. There is no separate project entity — projects
+are plain tasks. Give a task the `project` tag when you want it to act as a container.
+Child tasks attach via `--parent`. A parent task is hidden from the default scored list
+while any of its direct children are still open.
 
-The project-priority factor in scoring means that tasks parented to a high-priority
-project get a small score boost (+0.5), and tasks parented to a low-priority project get
-a small penalty (−0.5).
+Use `next tree` to see all tasks in their parent-child structure. Use `next show <id>`
+to inspect a single task and its direct children.
+
+### Tag descriptions
+
+Descriptions are stored in `state.toml` under `[tag_descriptions]` as a flat map from
+full tag string to description text. All three commands (`next tag describe`,
+`next context describe`, `next resource describe`) write to the same map. The key is
+always the full tag including prefix (`@work`, `#printer`, `python`).
 
 ### `data` field
 
-The `data` map stores arbitrary key-value pairs. Values can be strings, numbers, or
-booleans — null is not allowed. This field is intended for AI-provided metadata and tool
-integrations rather than user-entered data.
-
-### `next move` vs `next edit --parent`
-
-`next move` is a focused command for changing a task's parent. It accepts only `--parent`
-(and `--json`). `next edit` can accomplish the same thing but is more verbose.
-
-### Why `done`, `cancel`, and `delete` are separate commands
-
-- `done` — marks complete; triggers recurrence; may call an external API (Forgejo).
-- `cancel` — marks abandoned; releases downstream blockers; no recurrence.
-- `delete` — removes the TOML file from the repository permanently.
+The `data` map stores arbitrary key-value pairs (strings, numbers, booleans — null is
+not allowed). Intended for AI-provided metadata and tool integrations.
 
 ### Exit codes
 

@@ -58,9 +58,9 @@ are shown first; `next next` shows only the top 10 as a quick "what do I do now?
 
 ### Tasks, subtasks, and projects
 
-Any task can have child tasks via `--parent`. A task becomes a **project** when you give
-it the `project` tag (or create it with `next project add`). A parent task is hidden from
-`next list` while any of its subtasks are still open.
+Any task can have child tasks via `--parent`. A task is a **project** when it carries the
+`project` tag — there are no special project commands, just the tag. A parent task is
+hidden from `next list` while any of its subtasks are still open.
 
 ---
 
@@ -182,13 +182,37 @@ by `@work` will include tasks tagged `@work/berlin`.
 
 ---
 
+## Tag descriptions
+
+Any tag can carry a human-readable description stored in `state.toml`. Descriptions
+appear in `next tag`, `next context`, and `next resource` output. They document what
+each tag means — for both humans and AI agents reading the repository.
+
+```
+next tag describe @work "Tasks at the standing desk — laptop required"
+next tag describe #printer "Office laser printer, 2nd floor"
+next tag describe python "Python-related development work"
+
+next tag                           # list all tags with descriptions, grouped by kind
+next tag clear-description python  # remove a description
+```
+
+Contexts and resources have dedicated subcommands that validate the prefix:
+
+```
+next context describe @home "Home tasks: kitchen, garden, errands"
+next resource describe #vacation "Away from keyboard — all tasks hidden"
+```
+
+---
+
 ## Contexts
 
 Contexts filter your view to tasks relevant to where you are right now.
 
 ```
 next context set @home         # only show tasks tagged @home (or descendants)
-next context                   # show active contexts
+next context                   # show active contexts (with descriptions)
 next context clear             # show everything again
 ```
 
@@ -203,7 +227,7 @@ Resources represent equipment or conditions. Mark a resource unavailable to hide
 ```
 next resource set #printer off   # printer is broken — hide printer tasks
 next resource set #printer on    # printer is fixed
-next resource                    # list all resource states
+next resource                    # list all resource states (with descriptions)
 ```
 
 ---
@@ -213,16 +237,28 @@ next resource                    # list all resource states
 Create a project task and add subtasks to it:
 
 ```
-next project add "Launch blog" --slug launch-blog
+next add "Launch blog" --slug launch-blog --tag project
 next add "Write first post" --parent launch-blog
 next add "Set up hosting" --parent launch-blog
 
-next project list              # tree view of all projects
-next project show launch-blog  # show project and all subtasks
+next tree                      # see all tasks in a parent-child tree
+next show launch-blog          # show the project task and its direct children
 ```
 
 A parent task is hidden from `next list` while any of its subtasks are still open.
 Long-running projects should use `--long-term` to avoid accumulating age-based urgency.
+
+---
+
+## Viewing the task tree
+
+`next tree` shows all tasks in their parent-child structure. Tasks tagged `project` that
+have children are marked with `[project]`.
+
+```
+next tree           # open tasks only
+next tree --all     # include done and cancelled tasks
+```
 
 ---
 

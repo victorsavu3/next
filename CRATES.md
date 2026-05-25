@@ -175,8 +175,8 @@ crates/next-cli/src/
       delete.rs     done.rs     edit.rs     export.rs
       forecast.rs   import.rs   init.rs     list.rs
       mod.rs        move_cmd.rs next_cmd.rs open.rs
-      project.rs    resource.rs show.rs     sync.rs
-      user.rs
+      resource.rs   show.rs     sync.rs     tag.rs
+      tree.rs       user.rs
 ```
 
 Each `commands/*.rs` file contains:

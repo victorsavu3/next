@@ -60,10 +60,10 @@ Exactly one of `rule` or `interval_days` MUST be present in a `[recurrence]` tab
 There is no separate project type. Any task can have child tasks by setting `parent_id`
 on the children. Hierarchy nests to unlimited depth.
 
-A task is a **project** when it carries the `"project"` tag. The `next project` commands
-are convenience wrappers: `next project add` creates a task with the `"project"` tag;
-`next project list` lists all open tasks carrying that tag; `next project show` shows a
-task and all its descendants.
+A task is a **project** when it carries the `"project"` tag. There are no separate
+project commands — projects are plain tasks. Use `next add --tag project` to create one,
+`next tree` to see the full parent-child hierarchy, and `next show` to inspect a single
+task and its direct children.
 
 A task's slug (e.g. `"work-infra"`) can be used instead of its UUID when specifying
 `parent_id` or `blocked_by` on the command line. The tool resolves the slug to a UUID
@@ -79,7 +79,15 @@ active_users    = ["alice"]                       # active user filter (empty = 
 [resources]
 printer = true
 vacation = false
+[tag_descriptions]
+"@home" = "Home tasks: kitchen, garden, errands"
+"#printer" = "Office laser printer, 2nd floor"
+python = "Python-related development work"
 ```
+
+Tag descriptions are human-readable notes attached to any tag (context, resource, or
+freeform). They are stored in `state.toml` and used for both human documentation and
+AI agent context. The key is always the full tag string including its prefix.
 
 ---
 
@@ -342,27 +350,43 @@ All `<id-or-slug>` arguments MUST accept a full UUID, an unambiguous UUID prefix
 ### 8.4 Context and resource management
 
 ```
-next context                        # show active contexts
-next context set <@tag>...          # replace active context set
-next context clear                  # clear all active contexts
+next context                             # show active contexts (with descriptions)
+next context set <@tag>...               # replace active context set
+next context clear                       # clear all active contexts
+next context describe <@tag> <text>      # set a description for a context
+next context clear-description <@tag>    # remove a context description
 
-next resource                       # list resources and availability
-next resource set <#tag> on|off     # toggle a resource
+next resource                            # list resources and availability (with descriptions)
+next resource set <#tag> on|off          # toggle a resource
+next resource describe <#tag> <text>     # set a description for a resource
+next resource clear-description <#tag>   # remove a resource description
 ```
 
-### 8.5 Project commands
-
-`next project` commands are convenience wrappers for tasks carrying the `"project"` tag.
+### 8.5 Tag descriptions
 
 ```
-next project list                   # list tasks tagged "project" (tree view via parent_id)
-next project add <title> [options]  # shorthand for `next add --tag project`
-next project show <id-or-slug>      # show the task and all its descendants
+next tag                                 # list all tags grouped by kind, with descriptions
+next tag describe <tag> <text>           # set a description for any tag
+next tag clear-description <tag>         # remove a tag description
 ```
 
-`next project add` accepts `--slug`, `--priority`, `--notes`, `--parent`, and `--json`.
+Tags, contexts, and resources share a single `tag_descriptions` map in `state.toml`.
+All three command families (`next tag`, `next context`, `next resource`) read and write
+the same map. `next context describe` and `next resource describe` validate the prefix
+(`@` and `#` respectively) before writing.
 
-### 8.6 User management
+### 8.6 Tree view
+
+```
+next tree [--all]
+```
+
+Shows all tasks in their parent-child hierarchy. Top-level tasks (no parent) appear as
+roots; children are indented under their parent. Tasks tagged `project` that have
+children are marked with `[project]`. `--all` includes done and cancelled tasks;
+the default shows open tasks only.
+
+### 8.7 User management
 
 ```
 next user                       # show active user filter
@@ -375,7 +399,7 @@ The user filter is NOT an access-control mechanism. All tasks are visible to all
 operators. `active_users` is a personal workflow aid to focus the default view on the
 tasks you are currently responsible for.
 
-### 8.7 `next data`
+### 8.8 `next data`
 
 Manage arbitrary key-value pairs on a task. Values may be any JSON type except null.
 
@@ -388,7 +412,7 @@ next data get <id-or-slug> <key>             # print value for one key
 String values that are valid JSON numbers or booleans are coerced automatically
 (e.g. `"42"` becomes the number `42`, `"true"` becomes boolean `true`).
 
-### 8.8 Sync
+### 8.9 Sync
 
 ```
 next sync [--push-only] [--pull-only]
@@ -396,7 +420,7 @@ next sync [--push-only] [--pull-only]
 
 See §2.2.
 
-### 8.9 Forecasting
+### 8.10 Forecasting
 
 ```
 next forecast [filters...]

@@ -214,8 +214,9 @@ crates/next-cli/src/
       add.rs        cancel.rs   context.rs  data.rs
       delete.rs     done.rs     edit.rs     export.rs
       forecast.rs   import.rs   list.rs     mod.rs
-      move_cmd.rs   next_cmd.rs open.rs     project.rs
-      resource.rs   show.rs     sync.rs     user.rs
+      move_cmd.rs   next_cmd.rs open.rs     resource.rs
+      show.rs       sync.rs     tag.rs      tree.rs
+      user.rs
 ```
 
 ---

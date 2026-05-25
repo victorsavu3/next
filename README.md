@@ -47,7 +47,7 @@ my-tasks/
   tasks/
     call-dentist-a1b2c3d4.toml
     water-plants.toml          # task with slug "water-plants"
-  state.toml                   # active contexts, active users, resource availability
+  state.toml                   # active contexts, active users, resource availability, tag descriptions
   next.log                     # append-only command log (rotated at 1 MB)
   .next.db                     # SQLite read cache — not committed
 ```
@@ -56,15 +56,16 @@ my-tasks/
 
 ## Projects and subtasks
 
-Any task can act as a project. Mark a task as a project by giving it the `project` tag
-(or use `next project add` as a shorthand). Subtasks attach via `--parent`. A parent
-task is hidden from the default scored list until all its direct children are resolved.
+Any task can have subtasks. Give a task the `project` tag to mark it as a project.
+Subtasks attach via `--parent`. A parent task is hidden from the default scored list
+until all its direct children are resolved.
 
 ```sh
-next project add "Launch blog" --slug launch-blog
+next add "Launch blog" --slug launch-blog --tag project
 next add "Write first post" --parent launch-blog
 next add "Set up hosting" --parent launch-blog
-next project list
+next tree                      # show all tasks in a parent-child tree
+next show launch-blog          # show full details for a single task
 ```
 
 ---
@@ -82,11 +83,25 @@ All labels on a task are tags. Prefix conventions give some tags special meaning
 Tasks with no `@` tag are always shown regardless of the active context.
 
 ```sh
-next context set @home        # global context filter
-next context clear            # show all contexts
+next context set @home          # global context filter
+next context clear              # show all contexts
 
 next resource set #printer off  # hide printer tasks
 next resource set #printer on   # show them again
+```
+
+### Tag descriptions
+
+Any tag (context, resource, or freeform) can carry a human-readable description. These
+descriptions are stored in `state.toml` and are visible in `next tag`, `next context`,
+and `next resource` output. They serve both as documentation for users and as structured
+metadata for AI agents reading the repository.
+
+```sh
+next tag describe @work "Tasks at the standing desk — laptop required"
+next context describe @home "Home tasks: kitchen, garden, errands"
+next resource describe #printer "Office laser printer, 2nd floor"
+next tag                        # list all tags with their descriptions
 ```
 
 ---
@@ -101,9 +116,6 @@ backlog).
 next user set alice bob   # only show tasks for alice and bob
 next user clear           # no user filter
 next user list            # all assignees across all tasks
-
-next list --all-users     # temporarily bypass the user filter
-next list user:alice      # override for one query
 ```
 
 ---
@@ -137,7 +149,6 @@ All list commands accept filter tokens in any order:
 | `user:<name>` | `user:alice` | Override user filter for this query |
 | `--future` | | Include tasks with a future `start` date |
 | `--all` | | Disable all implicit filtering |
-| `--all-users` | | Bypass user filter |
 
 ---
 
@@ -150,16 +161,17 @@ All list commands accept filter tokens in any order:
 | `next list` | List tasks sorted by urgency score |
 | `next next [N]` | Show top N highest-scored tasks (default 10) |
 | `next show <id>` | Full details of a single task |
+| `next tree` | Show all tasks in a parent-child tree |
 | `next done <id>` | Mark done; triggers recurrence if applicable |
 | `next cancel <id>` | Mark cancelled |
 | `next edit <id>` | Modify fields on an existing task |
 | `next delete <id>` | Permanently remove a task |
 | `next move <id>` | Change parent task |
 | `next open <id>` | Open the task's URL in the browser |
-| `next project list/add/show` | Tree view of project tasks |
 | `next data set/unset/get` | Manage arbitrary key-value data on a task |
-| `next context [set/clear]` | Manage global context filter |
-| `next resource [set]` | Manage resource availability |
+| `next tag [describe/clear-description]` | List tags with descriptions; set/remove a tag description |
+| `next context [set/clear/describe/clear-description]` | Manage global context filter and descriptions |
+| `next resource [set/describe/clear-description]` | Manage resource availability and descriptions |
 | `next user [set/clear/list]` | Manage user filter |
 | `next forecast` | Show upcoming due dates grouped by time |
 | `next sync` | Pull from remote, push local commits |
