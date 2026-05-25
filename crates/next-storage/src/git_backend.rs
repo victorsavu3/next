@@ -119,21 +119,32 @@ impl VcsBackend for GitBackend {
         }
 
         if analysis.is_fast_forward() {
-            let refname = {
-                let head = repo
-                    .head()
-                    .map_err(|e| AppError::Other(format!("git HEAD: {e}")))?;
-                head.name()
-                    .ok_or_else(|| AppError::Other("invalid HEAD reference".into()))?
-                    .to_owned()
-            };
-            let mut reference = repo
-                .find_reference(&refname)
-                .map_err(|e| AppError::Other(format!("find ref: {e}")))?;
-            reference
-                .set_target(fetch_commit.id(), "pull: fast-forward")
-                .map_err(|e| AppError::Other(format!("fast-forward: {e}")))?;
-            drop(reference);
+            if analysis.is_unborn() {
+                // Local branch does not exist yet (fresh clone / init with no commits).
+                // Create the branch reference directly instead of updating an existing one.
+                let refname = repo
+                    .find_reference("HEAD")
+                    .ok()
+                    .and_then(|h| h.symbolic_target().map(str::to_owned))
+                    .unwrap_or_else(|| "refs/heads/master".to_owned());
+                repo.reference(&refname, fetch_commit.id(), true, "pull: initial")
+                    .map_err(|e| AppError::Other(format!("create branch ref: {e}")))?;
+            } else {
+                let refname = {
+                    let head = repo
+                        .head()
+                        .map_err(|e| AppError::Other(format!("git HEAD: {e}")))?;
+                    head.name()
+                        .ok_or_else(|| AppError::Other("invalid HEAD reference".into()))?
+                        .to_owned()
+                };
+                let mut reference = repo
+                    .find_reference(&refname)
+                    .map_err(|e| AppError::Other(format!("find ref: {e}")))?;
+                reference
+                    .set_target(fetch_commit.id(), "pull: fast-forward")
+                    .map_err(|e| AppError::Other(format!("fast-forward: {e}")))?;
+            }
             repo.checkout_head(Some(CheckoutBuilder::default().force()))
                 .map_err(|e| AppError::Other(format!("checkout HEAD: {e}")))?;
             return Ok(PullResult::Clean);
