@@ -7,7 +7,7 @@ next/                             # workspace root
   Cargo.toml                      # [workspace] manifest
   crates/
     next/                         # library: domain logic + storage traits + config
-    next-storage/                 # library: TOML + git2 backend
+    next-storage/                 # library: TOML + git2 backend + SQLite cache
     next-remote-storage/          # library: stub HTTP backend
     next-cli/                     # binary: clap CLI wrapper
 ```
@@ -46,11 +46,11 @@ Everything a caller needs to use the task manager programmatically.
 
 | Module | Contents |
 |--------|----------|
-| `task` | `Task`, `Status`, `Stage`, `Priority`, `Recurrence` |
+| `task` | `Task`, `Status`, `Priority`, `Recurrence` |
 | `state` | `GlobalState` (active contexts, active users, resource map) |
 | `tag` | `TagKind` (Context / Resource / Freeform); tag parsing helpers |
-| `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
-| `scoring` | `ScoredTask`, `ScoringWeights`, `fn score_and_sort(tasks, state, weights)` |
+| `filter` | `FilterSet`, `fn apply(tasks, filter, state, today) -> Vec<Task>` |
+| `scoring` | `ScoredTask`, `ScoringWeights`, `fn score_and_sort(tasks, all_tasks, today, weights)` |
 | `date_parse` | `fn parse_date(expr, today) -> Result<NaiveDate>` |
 
 **Storage traits** (`next::store`):
@@ -103,21 +103,28 @@ pub struct AppContext {
 
 ---
 
-### `next-storage` — local TOML + git backend
+### `next-storage` — local TOML + SQLite cache + git backend
 
 Implements `Store` and `VcsBackend` against real files and git.
 
 ```
 crates/next-storage/src/
-  lib.rs            # pub fn open(root: PathBuf) -> Result<(TomlStore, GitBackend)>
+  lib.rs            # pub fn open(root: PathBuf) -> Result<(CachedStore, GitBackend)>
                     # pub fn task_path(root: &Path, task: &Task) -> PathBuf
-  toml_store.rs     # TomlStore: implements Store via TOML files
+  cached_store.rs   # CachedStore: wraps TomlStore with an SQLite read cache
+  toml_store.rs     # TomlStore: source-of-truth TOML file I/O
   git_backend.rs    # GitBackend: implements VcsBackend via git2
 ```
 
+**`CachedStore`** is the `Store` implementation returned by `open()`. It wraps
+`TomlStore` and maintains an SQLite database at `<repo>/.next.db`:
+
+- **Reads** query SQLite directly (no TOML file reads per query)
+- **Writes** write to TOML first (authoritative), then update SQLite in-place
+- **Cache invalidation**: on `open()`, HEAD hash mismatch triggers a full rebuild from TOML
+
 **`TomlStore`** holds the repo root path. It reads and writes one `.toml` file per task
-in the `tasks/` subdirectory and `state.toml` at the root. There is no SQLite cache;
-reads scan all files in `tasks/`.
+in the `tasks/` subdirectory and `state.toml` at the root.
 
 **`GitBackend`** wraps `Mutex<git2::Repository>` for `Send + Sync`. Commit messages
 follow the pattern `next: <verb> "<task title>"`.
@@ -131,6 +138,7 @@ follow the pattern `next: <verb> "<task title>"`.
 |-------|---------|
 | `git2` | git commit / pull / push |
 | `toml` | TOML file serialisation |
+| `rusqlite` | SQLite read cache |
 
 ---
 
@@ -145,9 +153,6 @@ crates/next-remote-storage/src/
 
 `RemoteStore { url, token }` — construction never fails; errors are returned lazily when
 any method is called, so the binary starts up cleanly even before a server is reachable.
-
-`RemoteVcs { url, token }` — VCS is a no-op because the server owns persistence and
-handles its own sync.
 
 ---
 
@@ -166,22 +171,18 @@ crates/next-cli/src/
     filter.rs       # FilterArgs -> FilterSet; parses +tag, -tag, user:name, context:@x tokens
     render.rs       # task list and detail rendering (text columns or --json)
     commands/
-      add.rs        cancel.rs   context.rs  delete.rs
-      done.rs       edit.rs     export.rs   forecast.rs
-      import.rs     list.rs     mod.rs      move_cmd.rs
-      next_cmd.rs   project.rs  resource.rs review.rs
-      show.rs       sync.rs     user.rs
+      add.rs        cancel.rs   context.rs  data.rs
+      delete.rs     done.rs     edit.rs     export.rs
+      forecast.rs   import.rs   init.rs     list.rs
+      mod.rs        move_cmd.rs next_cmd.rs open.rs
+      project.rs    resource.rs show.rs     sync.rs
+      user.rs
 ```
 
 Each `commands/*.rs` file contains:
 1. A clap `Args` struct (pure parsing, no logic)
 2. A `fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()>` that converts args
    to typed domain values, calls store/vcs methods, and renders output
-
-`main.rs`:
-1. Constructs `AppContext` (selects backend, opens store, sets up logger)
-2. Dispatches to the matched command's `run` function
-3. On error: `ctx.log.error(cmd_name, &format!("{e:#}"))` then propagates
 
 **External crates used only in `next-cli`**:
 
@@ -202,6 +203,7 @@ Each `commands/*.rs` file contains:
 | `clap` | `next-cli` only |
 | `git2` | `next-storage` only |
 | `toml` | `next-storage` only |
+| `rusqlite` | `next-storage` only |
 | `serde`, `serde_json` | `next` (domain types), `next-cli` (JSON output) |
 | `chrono` | `next` (domain types), `next-cli` (date computations) |
 | `interim` | `next` (date_parse module) |

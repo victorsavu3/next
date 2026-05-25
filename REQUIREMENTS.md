@@ -15,7 +15,6 @@ Each task MUST carry the following fields:
 | `id` | UUID v4 string | Assigned on creation, never changed |
 | `title` | non-empty string | |
 | `status` | `open` \| `done` \| `cancelled` | |
-| `stage` | `inbox` \| `project` \| `waiting` \| `someday` | |
 | `created_at` | RFC 3339 datetime | Set on creation |
 | `updated_at` | RFC 3339 datetime | Updated on every write |
 
@@ -30,11 +29,13 @@ A task MAY carry the following optional fields:
 | `slug` | string | User-provided identifier (e.g. `"water-plants"`); must be unique |
 | `parent_id` | UUID string | UUID of the parent task; used for subtasks and project membership |
 | `tags` | array of strings | See §3 |
-| `waiting_for` | string | Free-text; meaningful when `stage = "waiting"` |
 | `blocked_by` | array of UUID strings | Explicit blockers |
 | `score_adjustment` | float | Added directly to computed score |
 | `assignee` | string | Username of the person responsible for the task |
+| `description` | string | Multi-line free-form description providing context beyond the title |
+| `url` | string | URL associated with the task (ticket, doc, reference link); must be http/https |
 | `notes` | string | Multi-line free text |
+| `data` | map of string → JSON value | Arbitrary key-value pairs for tool integrations or AI-provided metadata; values may be any JSON type except null |
 
 External-reference fields (set by importers, never by the user):
 
@@ -57,9 +58,12 @@ Exactly one of `rule` or `interval_days` MUST be present in a `[recurrence]` tab
 ### 1.2 Projects and subtasks
 
 There is no separate project type. Any task can have child tasks by setting `parent_id`
-on the children. Hierarchy nests to unlimited depth. The `stage = "project"` value is a
-GTD workflow marker (meaning "active committed project") but is not required for a task
-to act as a parent — any task at any stage can have subtasks.
+on the children. Hierarchy nests to unlimited depth.
+
+A task is a **project** when it carries the `"project"` tag. The `next project` commands
+are convenience wrappers: `next project add` creates a task with the `"project"` tag;
+`next project list` lists all open tasks carrying that tag; `next project show` shows a
+task and all its descendants.
 
 A task's slug (e.g. `"work-infra"`) can be used instead of its UUID when specifying
 `parent_id` or `blocked_by` on the command line. The tool resolves the slug to a UUID
@@ -123,7 +127,7 @@ Tags are strings in the `tags` array of a task. Prefix conventions:
 |--------|------|---------|
 | `@` | Context | `@home`, `@work` |
 | `#` | Resource | `#printer`, `#vacation` |
-| *(none)* | Freeform | `python`, `reading` |
+| *(none)* | Freeform | `python`, `reading`, `project` |
 
 ### 3.1 Context filtering
 
@@ -171,7 +175,7 @@ The score MUST be the sum of the following weighted factors:
 |--------|-----------|
 | **Due proximity** | Always; rises as due date approaches; highest value when overdue |
 | **Priority** | Always; `low` / `medium` / `high` map to fixed additive weights |
-| **Project priority** | When `project` is set; project's priority adds an offset |
+| **Project factor** | When `parent_id` is set; parent task's priority contributes an offset |
 | **Age** | Only when `long_term = false` AND (`start` is unset OR `start` ≤ today) |
 | **User adjustment** | Always; `score_adjustment` added directly |
 
@@ -198,7 +202,6 @@ All list commands MUST accept the following filter tokens, freely combinable:
 | `--future` | Include tasks with future `start` date and planned recurrence instances |
 | `--all` | Disable all implicit filtering (contexts, resources, blocked, start date) |
 | `--all-users` | Bypass the user filter for this query |
-| `--stage <stage>` | Restrict to one GTD stage |
 
 Multiple `+tag` tokens MUST be combined with AND (task must have all of them).
 Multiple `-tag` tokens MUST be combined with AND (task must have none of them).
@@ -229,8 +232,7 @@ Blocking is **not** transitive through depth: a grandparent is only blocked by i
 direct children (who are in turn blocked by their own children).
 
 Project tasks that are long-running SHOULD use `long_term = true` to suppress age-based
-scoring while the project is in progress; this prevents them from rising to the top of
-the list merely because they are old.
+scoring while the project is in progress.
 
 ---
 
@@ -299,13 +301,13 @@ next add <title> [options]
 | `--slug <slug>` | User-provided identifier; must be unique; used as the filename |
 | `--tag <tag>` | Repeatable |
 | `--parent <id-or-slug>` | Sets `parent_id`; accepts UUID, UUID prefix, or slug |
-| `--notes <text>` | |
-| `--stage <stage>` | Default: `inbox` |
-| `--recur schedule <rule>` | Creates a schedule-based recurring task |
-| `--recur completion <days>` | Creates a completion-based recurring task |
-| `--long-term` | Sets `long_term = true` |
-| `--wait-for <who>` | Sets `waiting_for` and `stage = waiting` |
 | `--blocked-by <id-or-slug>` | Repeatable; accepts UUID, UUID prefix, or slug |
+| `--description <text>` | Multi-line description providing context beyond the title |
+| `--url <url>` | URL associated with this task (must be http or https) |
+| `--notes <text>` | Free-text notes |
+| `--recur-schedule <rule>` | Creates a schedule-based recurring task |
+| `--recur-completion <days>` | Creates a completion-based recurring task |
+| `--long-term` | Sets `long_term = true` |
 | `--adjust <float>` | Sets `score_adjustment` |
 | `--assignee <name>` | Sets `assignee` |
 
@@ -326,13 +328,16 @@ filter.
 next show <id-or-slug>             # full task details including subtasks and blockers
 next done <id-or-slug>             # mark done; triggers recurrence if applicable
 next cancel <id-or-slug>           # mark cancelled
-next edit <id-or-slug> [options]   # modify fields (same options as add)
+next edit <id-or-slug> [options]   # modify fields (same options as add, plus --clear-* flags)
 next delete <id-or-slug>           # permanently remove (prompts for confirmation)
-next move <id-or-slug> --parent <id-or-slug> --stage <stage>  # relocate a task
+next move <id-or-slug> --parent <id-or-slug>  # change the parent task
+next open <id-or-slug>             # open the task's URL in the default browser
 ```
 
 All `<id-or-slug>` arguments MUST accept a full UUID, an unambiguous UUID prefix
 (minimum 4 hex characters), or a task's slug.
+
+`next open` MUST fail with an error when the task has no `url` field set.
 
 ### 8.4 Context and resource management
 
@@ -347,14 +352,15 @@ next resource set <#tag> on|off     # toggle a resource
 
 ### 8.5 Project commands
 
-`next project` commands are convenience wrappers. Any task can have subtasks; `project`
-commands simply default `--stage project` and present output in a tree view.
+`next project` commands are convenience wrappers for tasks carrying the `"project"` tag.
 
 ```
-next project list                   # list tasks with stage=project (tree view via parent_id)
-next project add <title> [options]  # shorthand for `next add --stage project`
-next project show <id-or-slug>      # show the task and all its descendants (any stage)
+next project list                   # list tasks tagged "project" (tree view via parent_id)
+next project add <title> [options]  # shorthand for `next add --tag project`
+next project show <id-or-slug>      # show the task and all its descendants
 ```
+
+`next project add` accepts `--slug`, `--priority`, `--notes`, `--parent`, and `--json`.
 
 ### 8.6 User management
 
@@ -369,15 +375,18 @@ The user filter is NOT an access-control mechanism. All tasks are visible to all
 operators. `active_users` is a personal workflow aid to focus the default view on the
 tasks you are currently responsible for.
 
-### 8.7 Review
+### 8.7 `next data`
+
+Manage arbitrary key-value pairs on a task. Values may be any JSON type except null.
 
 ```
-next review
+next data set <id-or-slug> <key> <value>     # set one key (string, number, or bool)
+next data unset <id-or-slug> <key>           # remove one key (errors if absent)
+next data get <id-or-slug> <key>             # print value for one key
 ```
 
-Walks through GTD stages in order: **inbox → waiting-for → someday/maybe → projects**.
-For each item the tool presents the task and prompts the user to choose an action (e.g.
-process, skip, move, done, delete). MUST be interruptible (Ctrl-C leaves tasks unchanged).
+String values that are valid JSON numbers or booleans are coerced automatically
+(e.g. `"42"` becomes the number `42`, `"true"` becomes boolean `true`).
 
 ### 8.8 Sync
 
@@ -434,7 +443,7 @@ errors. The VCS operations are no-ops (the server handles its own persistence).
 ### 10.1 Forgejo
 
 ```
-next import forgejo <owner/repo> [--project <path>] [--tag <tag>]
+next import forgejo <owner/repo> [--tag <tag>]
 ```
 
 - MUST fetch all issues (open and closed) from the Forgejo API

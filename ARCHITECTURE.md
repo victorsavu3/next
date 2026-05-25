@@ -73,12 +73,16 @@ next
 
 | Module | Contents |
 |--------|----------|
-| `task` | `Task`, `Status`, `Stage`, `Priority`, `Recurrence` |
+| `task` | `Task`, `Status`, `Priority`, `Recurrence` |
 | `state` | `GlobalState` (active contexts, active users, resource map) |
-| `tag` | `Tag`, `TagKind` (Context / Resource / Freeform) |
+| `tag` | `TagKind` (Context / Resource / Freeform); tag parsing helpers |
 | `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
-| `scoring` | `ScoredTask`, `ScoringWeights`, `fn score_and_sort(tasks, state, weights)` |
+| `scoring` | `ScoredTask`, `ScoringWeights`, `fn score_and_sort(tasks, all_tasks, today, weights)` |
 | `date_parse` | `fn parse_date(expr, today) -> Result<NaiveDate>` |
+
+Key `Task` fields: `id`, `title`, `status`, `priority`, `due`, `start`, `long_term`,
+`slug`, `parent_id`, `assignee`, `tags`, `blocked_by`, `score_adjustment`, `description`,
+`url`, `notes`, `data` (arbitrary JSON map), `recurrence`, `created_at`, `updated_at`.
 
 **Storage traits** (`next::store`):
 
@@ -207,11 +211,11 @@ crates/next-cli/src/
     render.rs       # task list and detail rendering (text and --json)
     commands/
       init.rs       # next init — no AppContext needed; runs git init, creates tasks/
-      add.rs        cancel.rs   context.rs  delete.rs
-      done.rs       edit.rs     export.rs   forecast.rs
-      import.rs     list.rs     mod.rs      move_cmd.rs
-      next_cmd.rs   project.rs  resource.rs review.rs
-      show.rs       sync.rs     user.rs
+      add.rs        cancel.rs   context.rs  data.rs
+      delete.rs     done.rs     edit.rs     export.rs
+      forecast.rs   import.rs   list.rs     mod.rs
+      move_cmd.rs   next_cmd.rs open.rs     project.rs
+      resource.rs   show.rs     sync.rs     user.rs
 ```
 
 ---
@@ -233,7 +237,7 @@ pub struct AppContext {
 `AppContext::new()` selects the backend based on `config.backend.kind`:
 
 - **Local**: walk up from CWD for `.git`; call `next_storage::open(root)` to get
-  `(TomlStore, GitBackend)`; fail if no git repo is found.
+  `(CachedStore, GitBackend)`; fail if no git repo is found.
 - **Remote**: use CWD as `repo_root`; construct `RemoteStore` + `RemoteVcs` from
   the configured URL and token.
 
@@ -270,6 +274,7 @@ the `Store` trait; callers box it as `Box<dyn Store>` inside `AppContext`.
 - Title slug: lowercase, spaces → `-`, strip non-alphanumeric except `-`
 - Optional fields are omitted rather than written as empty strings or nulls
 - The `[recurrence]` table is only present when the task recurs
+- The `[data]` table is only present when at least one key has been set
 
 ### 6.2 Git operations
 
@@ -322,13 +327,12 @@ pub struct FilterSet {
     pub excluded_tags: Vec<String>,        // -tag
     pub context_override: Option<Vec<String>>,
     pub user_override: Option<Vec<String>>,
-    pub stage: Option<Stage>,
     pub include_future: bool,
     pub disable_implicit: bool,            // --all
 }
 ```
 
-`fn apply(tasks: Vec<Task>, filter: &FilterSet, state: &GlobalState) -> Vec<Task>`:
+`fn apply(tasks: Vec<Task>, filter: &FilterSet, state: &GlobalState, today: NaiveDate) -> Vec<Task>`:
 
 1. **Implicit gate** (skipped when `disable_implicit`):
    - Exclude tasks with `status != open`
@@ -341,7 +345,6 @@ pub struct FilterSet {
 2. **Explicit filters** (always applied):
    - `required_tags`: task must contain all
    - `excluded_tags`: task must contain none
-   - `stage`: exact match
 3. `include_future`: also include tasks with `start` date in the future
 
 ### User filter semantics
@@ -381,7 +384,8 @@ Scores are computed at query time (not stored) by `domain::scoring::score_and_so
 score(task) =
     due_factor(task.due, today)
   + priority_factor(task.priority)
-  + age_factor(task.created_at, today, task.long_term, task.start)
+  + project_factor(parent.priority)   // 0.0 when no parent
+  + age_factor(task, today)
   + task.score_adjustment
 ```
 
@@ -399,6 +403,8 @@ score(task) =
 | Due in 31+ days | `max(0.0, 2.0 − days × 0.01)` |
 
 **`priority_factor`**: `low` → 0.0, `medium` → 1.0, `high` → 2.0
+
+**`project_factor`** (parent task priority): `low` → −0.5, `medium` → 0.0, `high` → +0.5
 
 **`age_factor`**: `min(age_days × 0.01, 2.0)` — returns `0.0` when `long_term = true`
 or `start > today`.
@@ -443,6 +449,9 @@ due_month_per_day   = 0.1
 priority_low        = 0.0
 priority_medium     = 1.0
 priority_high       = 2.0
+project_low         = -0.5
+project_medium      = 0.0
+project_high        = 0.5
 age_per_day         = 0.01
 age_max             = 2.0
 ```

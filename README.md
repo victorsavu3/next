@@ -1,7 +1,7 @@
 # next
 
-A GTD-style CLI task manager with automatic urgency scoring. Tasks are stored as TOML
-files in a git repository, enabling offline-first sync across machines.
+A CLI task manager with automatic urgency scoring. Tasks are stored as TOML files in a
+git repository, enabling offline-first sync across machines.
 
 ---
 
@@ -26,9 +26,6 @@ next list
 
 # Mark done
 next done a1b2c3d4
-
-# Weekly review
-next review
 ```
 
 ---
@@ -57,17 +54,18 @@ my-tasks/
 
 ---
 
-## GTD stages
+## Projects and subtasks
 
-| Stage | Meaning |
-|-------|---------|
-| `inbox` | Default landing zone — process later |
-| `project` | Active committed outcome |
-| `waiting` | Blocked on someone else |
-| `someday` | Low-commitment ideas |
+Any task can act as a project. Mark a task as a project by giving it the `project` tag
+(or use `next project add` as a shorthand). Subtasks attach via `--parent`. A parent
+task is hidden from the default scored list until all its direct children are resolved.
 
-Any task can have subtasks via `--parent`. A parent task is hidden from the default scored
-list until all its direct children are resolved.
+```sh
+next project add "Launch blog" --slug launch-blog
+next add "Write first post" --parent launch-blog
+next add "Set up hosting" --parent launch-blog
+next project list
+```
 
 ---
 
@@ -79,7 +77,7 @@ All labels on a task are tags. Prefix conventions give some tags special meaning
 |--------|------|---------|--------|
 | `@` | Context | `@home`, `@work` | Hidden when a different context is active |
 | `#` | Resource | `#printer`, `#vacation` | Hidden when resource is unavailable |
-| *(none)* | Freeform | `python`, `reading` | No implicit filter |
+| *(none)* | Freeform | `python`, `project` | No implicit filter |
 
 Tasks with no `@` tag are always shown regardless of the active context.
 
@@ -115,11 +113,12 @@ next list user:alice      # override for one query
 Every visible task receives a numeric score used for ranking:
 
 ```
-score = due_factor + priority_factor + age_factor + score_adjustment
+score = due_factor + priority_factor + project_factor + age_factor + score_adjustment
 ```
 
 - **Due factor** — rises sharply as the deadline approaches; peaks when overdue
 - **Priority** — `high` (+2), `medium` (+1), `low` (0)
+- **Project factor** — parent task's priority offsets the score (+0.5 / 0.0 / −0.5)
 - **Age** — older tasks float up; capped at +2; zeroed when `long_term = true`
 - **Adjustment** — manual boost/penalty via `--adjust`
 
@@ -136,7 +135,6 @@ All list commands accept filter tokens in any order:
 | `project:<path>` | `project:work` | Task belongs to this project tree |
 | `context:<@tag>` | `context:@home` | Override active context for this query |
 | `user:<name>` | `user:alice` | Override user filter for this query |
-| `--stage <stage>` | `--stage inbox` | Restrict to one GTD stage |
 | `--future` | | Include tasks with a future `start` date |
 | `--all` | | Disable all implicit filtering |
 | `--all-users` | | Bypass user filter |
@@ -148,7 +146,7 @@ All list commands accept filter tokens in any order:
 | Command | Description |
 |---------|-------------|
 | `next init` | Initialise a task repository in the current directory |
-| `next add` | Add a task to the inbox |
+| `next add` | Add a task |
 | `next list` | List tasks sorted by urgency score |
 | `next next [N]` | Show top N highest-scored tasks (default 10) |
 | `next show <id>` | Full details of a single task |
@@ -156,13 +154,14 @@ All list commands accept filter tokens in any order:
 | `next cancel <id>` | Mark cancelled |
 | `next edit <id>` | Modify fields on an existing task |
 | `next delete <id>` | Permanently remove a task |
-| `next move <id>` | Change stage or parent |
+| `next move <id>` | Change parent task |
+| `next open <id>` | Open the task's URL in the browser |
 | `next project list/add/show` | Tree view of project tasks |
+| `next data set/unset/get` | Manage arbitrary key-value data on a task |
 | `next context [set/clear]` | Manage global context filter |
 | `next resource [set]` | Manage resource availability |
 | `next user [set/clear/list]` | Manage user filter |
 | `next forecast` | Show upcoming due dates grouped by time |
-| `next review` | Interactive GTD weekly review |
 | `next sync` | Pull from remote, push local commits |
 | `next import forgejo` | Import issues from Forgejo (not yet implemented) |
 | `next import ical` | Import VTODO from iCalendar (not yet implemented) |

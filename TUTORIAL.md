@@ -1,6 +1,7 @@
 # Tutorial
 
-This tutorial walks through everyday use of `next`, a GTD-style task manager that stores tasks as TOML files in a git repository.
+This tutorial walks through everyday use of `next`, a task manager that stores tasks as
+TOML files in a git repository and surfaces what to work on via automatic urgency scoring.
 
 ---
 
@@ -15,7 +16,9 @@ mkdir ~/tasks && cd ~/tasks
 next init
 ```
 
-This runs `git init`, creates the `tasks/` directory, and adds `.next.db` to `.gitignore` automatically. You do not need a remote. All task data lives in `tasks/` as TOML files and is versioned automatically — every `add`, `done`, or `edit` operation creates a git commit.
+This runs `git init`, creates the `tasks/` directory, and adds `.next.db` to `.gitignore`
+automatically. All task data lives in `tasks/` as TOML files and is versioned
+automatically — every `add`, `done`, or `edit` operation creates a git commit.
 
 The repository layout looks like this after the first task is added:
 
@@ -47,20 +50,17 @@ The eight-character code is the beginning of the task UUID and can be used to re
 
 ## Core concepts
 
-### GTD stages
-
-Every task lives in one of four stages:
-
-| Stage | Meaning |
-|-------|---------|
-| `inbox` | Captured, not yet processed (default) |
-| `project` | Part of a committed multi-step project |
-| `waiting` | Delegated or blocked on someone else |
-| `someday` | Maybe later — excluded from the default list |
-
 ### Urgency score
 
-`next list` sorts tasks by a computed urgency score. The score goes up with priority, proximity to the due date, task age, and parent priority. You can see raw scores with `next list --json`.
+`next list` sorts tasks by a computed urgency score. The score rises with priority,
+proximity to the due date, task age, and parent priority. Tasks with the highest score
+are shown first; `next next` shows only the top 10 as a quick "what do I do now?"
+
+### Tasks, subtasks, and projects
+
+Any task can have child tasks via `--parent`. A task becomes a **project** when you give
+it the `project` tag (or create it with `next project add`). A parent task is hidden from
+`next list` while any of its subtasks are still open.
 
 ---
 
@@ -70,15 +70,14 @@ Every task lives in one of four stages:
 next list
 ```
 
-Shows all open, unblocked tasks that are not in the future and not in `someday`, sorted by urgency.
+Shows all open, unblocked tasks whose start date is not in the future, sorted by urgency.
 
 Useful flags:
 
 | Flag | Effect |
 |------|--------|
-| `--all` | Include done and cancelled tasks |
+| `--all` | Include done and cancelled tasks; disable all implicit filtering |
 | `--future` | Include tasks whose start date is in the future |
-| `--stage inbox` | Show only inbox tasks |
 
 ### Filter tokens
 
@@ -87,7 +86,6 @@ Pass filter tokens after any other arguments:
 ```
 next list +@work          # only tasks tagged @work
 next list -@home          # exclude tasks tagged @home
-next list @work           # bare tag — same as +@work
 next list +urgent -@home  # combine filters
 ```
 
@@ -120,8 +118,8 @@ Common options:
 | `--tag <tag>` | Repeatable; use `@context`, `#resource`, or bare words |
 | `--parent <id>` | UUID prefix or slug of the parent task |
 | `--blocked-by <id>` | UUID prefix or slug of a blocking task |
-| `--stage <stage>` | One of `inbox`, `project`, `waiting`, `someday` |
-| `--wait-for <name>` | Sets stage to `waiting` and records who you're waiting on |
+| `--description <text>` | Multi-line context beyond the title |
+| `--url <url>` | http/https URL for the task (ticket, doc, link) |
 | `--assignee <user>` | Person responsible for the task |
 | `--notes <text>` | Multi-line free text |
 | `--recur-schedule "every Monday"` | Schedule-based recurrence |
@@ -159,6 +157,14 @@ next edit water-plants +@home -urgent
 next edit water-plants --tag @garden --remove-tag urgent
 ```
 
+Set or clear the description and URL:
+
+```
+next edit my-ticket --url "https://example.com/ticket-42"
+next edit my-ticket --description "See comment from Alice in the ticket"
+next edit my-ticket --clear-url
+```
+
 ---
 
 ## Tags
@@ -169,11 +175,10 @@ Tags come in three flavours:
 |--------|------|---------|
 | `@` | Context | `@work`, `@home/office` |
 | `#` | Resource | `#printer`, `#office/projector` |
-| *(none)* | Freeform | `urgent`, `someday`, `python` |
+| *(none)* | Freeform | `urgent`, `project`, `python` |
 
-Tags can be hierarchical using `/`. `@work/berlin` is a descendant of `@work`. Filtering by `@work` will include tasks tagged `@work/berlin`.
-
-Freeform tags must start with a letter and may contain letters, digits, `-`, and `_`.
+Tags can be hierarchical using `/`. `@work/berlin` is a descendant of `@work`. Filtering
+by `@work` will include tasks tagged `@work/berlin`.
 
 ---
 
@@ -196,68 +201,28 @@ Active contexts are stored in `state.toml` and persist across sessions.
 Resources represent equipment or conditions. Mark a resource unavailable to hide tasks that require it:
 
 ```
-next resource set #printer false   # printer is broken — hide printer tasks
-next resource set #printer true    # printer is fixed
-next resource                      # list all resource states
+next resource set #printer off   # printer is broken — hide printer tasks
+next resource set #printer on    # printer is fixed
+next resource                    # list all resource states
 ```
 
 ---
 
 ## Projects and subtasks
 
-Any task can act as a project. Create a parent first, then add subtasks:
+Create a project task and add subtasks to it:
 
 ```
-next add "Launch blog" --stage project --slug launch-blog
+next project add "Launch blog" --slug launch-blog
 next add "Write first post" --parent launch-blog
-next add "Set up hosting"   --parent launch-blog --blocked-by "write-first-post"
+next add "Set up hosting" --parent launch-blog
+
+next project list              # tree view of all projects
+next project show launch-blog  # show project and all subtasks
 ```
 
 A parent task is hidden from `next list` while any of its subtasks are still open.
-
----
-
-## Getting the most urgent task
-
-```
-next next
-```
-
-Shows the top five tasks sorted by urgency. Useful as a quick "what do I do now?" command. Pass `--count N` to change the number shown.
-
----
-
-## Waiting tasks
-
-When you're waiting on someone:
-
-```
-next add "Review PR #42" --wait-for alice
-```
-
-Or convert an existing task:
-
-```
-next edit review-pr --wait-for alice
-```
-
-Waiting tasks are hidden from the default list. Show them with `--stage waiting`:
-
-```
-next list --stage waiting
-```
-
----
-
-## Someday / maybe
-
-Capture ideas you're not committing to yet:
-
-```
-next add "Learn Japanese" --stage someday
-```
-
-Someday tasks are excluded from `next list` by default. Include them with `--stage someday` or `--all`.
+Long-running projects should use `--long-term` to avoid accumulating age-based urgency.
 
 ---
 
@@ -270,6 +235,33 @@ next add "Deploy to staging" --blocked-by "write-tests"
 ```
 
 Blocked tasks are hidden from `next list` until all their blockers are completed.
+
+---
+
+## Opening URLs
+
+When a task has a URL (e.g. a ticket or doc), open it directly:
+
+```
+next open my-ticket
+next open a1b2c3d4
+```
+
+---
+
+## Task data
+
+Store arbitrary key-value metadata on a task:
+
+```
+next data set a1b2 source "github"
+next data set a1b2 score 42
+next data set a1b2 urgent true
+next data get a1b2 source
+next data unset a1b2 source
+```
+
+This is useful for AI-provided metadata or tool integrations.
 
 ---
 
@@ -287,8 +279,8 @@ next show 3a7f1b2c
 Schedule-based: repeats on a calendar pattern regardless of when you complete it.
 
 ```
-next add "Weekly review" --recur-schedule "every Monday"
-next add "Pay rent"      --recur-schedule "1st of every month"
+next add "Pay rent"     --recur-schedule "1st of every month"
+next add "Team standup" --recur-schedule "every weekday"
 ```
 
 Completion-based: repeats a fixed number of days after you mark it done.
@@ -304,10 +296,11 @@ When you mark a recurring task done, a new instance is automatically created.
 
 ## Forecast
 
-See which tasks are due in the next 30 days:
+See which tasks are due in the coming months:
 
 ```
 next forecast
+next forecast --days 180
 ```
 
 ---
@@ -338,7 +331,8 @@ If you have a git remote:
 next sync
 ```
 
-This runs `git pull` (fast-forward), rebuilds the SQLite cache if HEAD changed, then `git push`. Conflicts are reported as file paths for manual resolution.
+This runs `git pull` (fast-forward), rebuilds the SQLite cache if HEAD changed, then
+`git push`. Conflicts are reported as file paths for manual resolution.
 
 ---
 
@@ -347,7 +341,7 @@ This runs `git pull` (fast-forward), rebuilds the SQLite cache if HEAD changed, 
 ### Forgejo issues
 
 ```
-next import forgejo https://forgejo.example.com/owner/repo
+next import forgejo owner/repo
 ```
 
 Creates a task for each open issue. Re-running updates existing tasks; it does not create duplicates.
@@ -376,16 +370,20 @@ next export ical > tasks.ics
 next delete 3a7f1b2c
 ```
 
-Asks for confirmation before permanently removing the task file. Pass `--force` to skip the prompt.
+Asks for confirmation before permanently removing the task file.
 
 ---
 
 ## Tips
 
-**Slugs are your friend.** Give tasks you reference often a slug (`--slug water-plants`). Slugs are stable across renames and are far easier to type than UUID prefixes.
+**Slugs are your friend.** Give tasks you reference often a slug (`--slug water-plants`).
+Slugs are stable across renames and are far easier to type than UUID prefixes.
 
-**Review weekly.** `next review` walks you through a GTD weekly review: process inbox, review projects, check waiting tasks, and clear stale someday items.
+**Score adjustment.** Use `--adjust 10` to manually boost a task that should float to
+the top, or `--adjust -5` to push it down.
 
-**Score adjustment.** Use `--adjust 10` to manually boost a task that should float to the top, or `--adjust -5` to push it down.
+**Long-term tasks.** Use `--long-term` on tasks that are permanently in progress (like
+"exercise daily"). This disables age-based scoring so they do not accumulate urgency.
 
-**Long-term tasks.** Use `--long-term` on tasks that are permanently in progress (like "exercise daily"). This disables age-based scoring so they do not accumulate urgency.
+**Description vs notes.** Use `--description` for a brief context summary that appears
+in the task list output; use `--notes` for longer free-form reference material.
