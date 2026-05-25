@@ -34,11 +34,13 @@ fn describe(tag_str: &str, desc: &str) -> tag::Args {
     }
 }
 
-fn clear(tag_str: &str) -> tag::Args {
+fn clear_description(tag_str: &str) -> tag::Args {
     tag::Args {
-        subcommand: Some(tag::TagSubcommand::Clear(tag::ClearArgs {
-            tag: tag_str.to_owned(),
-        })),
+        subcommand: Some(tag::TagSubcommand::ClearDescription(
+            tag::ClearDescriptionArgs {
+                tag: tag_str.to_owned(),
+            },
+        )),
     }
 }
 
@@ -110,7 +112,7 @@ fn tag_describe_rejects_invalid_tag() {
 fn tag_clear_removes_description() {
     let mut env = common::setup();
     tag::run(describe("python", "Python tasks"), &mut env.ctx).unwrap();
-    tag::run(clear("python"), &mut env.ctx).unwrap();
+    tag::run(clear_description("python"), &mut env.ctx).unwrap();
 
     let state = env.ctx.store.get_state().unwrap();
     assert!(!state.tag_descriptions.contains_key("python"));
@@ -119,7 +121,7 @@ fn tag_clear_removes_description() {
 #[test]
 fn tag_clear_errors_when_no_description_exists() {
     let mut env = common::setup();
-    let result = tag::run(clear("@nonexistent"), &mut env.ctx);
+    let result = tag::run(clear_description("@nonexistent"), &mut env.ctx);
     assert!(result.is_err());
 }
 

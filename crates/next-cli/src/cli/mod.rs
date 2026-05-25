@@ -52,9 +52,6 @@ pub enum Command {
     #[command(name = "move")]
     Move(commands::move_cmd::Args),
 
-    /// Manage projects.
-    Project(commands::project::Args),
-
     /// Manage active contexts.
     Context(commands::context::Args),
 

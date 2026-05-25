@@ -13,7 +13,6 @@ pub mod import;
 pub mod list;
 pub mod move_cmd;
 pub mod next_cmd;
-pub mod project;
 pub mod resource;
 pub mod show;
 pub mod sync;

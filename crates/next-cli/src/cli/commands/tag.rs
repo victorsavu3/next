@@ -16,7 +16,8 @@ pub enum TagSubcommand {
     /// Set a human-readable description for a tag, context, or resource.
     Describe(DescribeArgs),
     /// Remove the description for a tag.
-    Clear(ClearArgs),
+    #[command(name = "clear-description")]
+    ClearDescription(ClearDescriptionArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -28,7 +29,7 @@ pub struct DescribeArgs {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct ClearArgs {
+pub struct ClearDescriptionArgs {
     /// Tag whose description should be removed.
     pub tag: String,
 }
@@ -37,7 +38,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     match args.subcommand {
         None => list(ctx),
         Some(TagSubcommand::Describe(a)) => describe(ctx, a),
-        Some(TagSubcommand::Clear(a)) => clear(ctx, a),
+        Some(TagSubcommand::ClearDescription(a)) => clear_description(ctx, a),
     }
 }
 
@@ -113,15 +114,18 @@ fn describe(ctx: &mut AppContext, args: DescribeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn clear(ctx: &mut AppContext, args: ClearArgs) -> anyhow::Result<()> {
+fn clear_description(ctx: &mut AppContext, args: ClearDescriptionArgs) -> anyhow::Result<()> {
     let mut state = ctx.store.get_state()?;
     if state.tag_descriptions.remove(&args.tag).is_none() {
         anyhow::bail!("no description set for tag {:?}", args.tag);
     }
     ctx.store.save_state(&state)?;
     let state_path = ctx.repo_root.join("state.toml");
-    ctx.vcs
-        .commit(&[state_path], &format!("next: tag clear {}", args.tag))?;
-    ctx.log.info("tag", &format!("cleared description for {}", args.tag));
+    ctx.vcs.commit(
+        &[state_path],
+        &format!("next: tag clear-description {}", args.tag),
+    )?;
+    ctx.log
+        .info("tag", &format!("cleared description for {}", args.tag));
     Ok(())
 }
