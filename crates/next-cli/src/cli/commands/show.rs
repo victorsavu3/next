@@ -91,6 +91,13 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         "Updated:  {}",
         task.updated_at.format("%Y-%m-%d %H:%M UTC")
     );
+    if !task.data.is_empty() {
+        let mut keys: Vec<&String> = task.data.keys().collect();
+        keys.sort();
+        for key in keys {
+            println!("Data[{key}]: {}", task.data[key]);
+        }
+    }
     if let Some(ref url) = task.url {
         println!("URL:      {url}");
     }

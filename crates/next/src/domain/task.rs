@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +102,11 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub score_adjustment: f64,
 
+    /// Arbitrary key-value pairs for tool integrations or AI-provided metadata.
+    /// Values are any JSON-compatible type (string, number, bool, array, object).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub data: HashMap<String, JsonValue>,
+
     /// Multi-line free-form description providing context or detail beyond the title.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -155,6 +163,7 @@ impl Task {
             waiting_for: None,
             blocked_by: Vec::new(),
             score_adjustment: 0.0,
+            data: HashMap::new(),
             description: None,
             url: None,
             notes: None,

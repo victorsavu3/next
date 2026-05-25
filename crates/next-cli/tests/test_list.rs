@@ -16,6 +16,7 @@ fn add_args(title: &str) -> add::Args {
         tags: vec![],
         parent: None,
         blocked_by: vec![],
+        data: vec![],
         description: None,
         url: None,
         notes: None,
