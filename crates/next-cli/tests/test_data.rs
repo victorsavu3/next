@@ -16,8 +16,6 @@ fn add_args(title: &str) -> add::Args {
         description: None,
         url: None,
         notes: None,
-        stage: None,
-        wait_for: None,
         recur_schedule: None,
         recur_completion: None,
         long_term: false,

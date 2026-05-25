@@ -231,7 +231,7 @@ impl Store for TomlStore {
 mod tests {
     use std::collections::HashMap;
 
-    use next::domain::task::{Priority, Recurrence, Stage, Status};
+    use next::domain::task::{Priority, Recurrence, Status};
 
     use super::*;
 
@@ -250,7 +250,6 @@ mod tests {
         assert_eq!(loaded.title, task.title);
         assert_eq!(loaded.id, task.id);
         assert_eq!(loaded.status, Status::Open);
-        assert_eq!(loaded.stage, Stage::Inbox);
         assert_eq!(loaded.priority, Priority::Medium);
     }
 
@@ -263,7 +262,6 @@ mod tests {
         task.due = Some(NaiveDate::from_ymd_opt(2026, 12, 31).unwrap());
         task.start = Some(NaiveDate::from_ymd_opt(2026, 6, 1).unwrap());
         task.priority = Priority::High;
-        task.stage = Stage::Project;
         task.tags = vec!["@work".into(), "$laptop".into()];
         task.notes = Some("Some notes".into());
         task.score_adjustment = 1.5;
@@ -277,7 +275,6 @@ mod tests {
         assert_eq!(loaded.due, task.due);
         assert_eq!(loaded.start, task.start);
         assert_eq!(loaded.priority, task.priority);
-        assert_eq!(loaded.stage, task.stage);
         assert_eq!(loaded.tags, task.tags);
         assert_eq!(loaded.notes, task.notes);
         assert_eq!(loaded.score_adjustment, task.score_adjustment);
@@ -403,14 +400,16 @@ mod tests {
         let default = store.get_state().unwrap();
         assert!(default.active_contexts.is_empty());
 
-        let mut state = GlobalState::default();
-        state.active_contexts = vec!["@work".into(), "@home".into()];
-        state.resources = HashMap::from([("printer".into(), false)]);
+        let state = GlobalState {
+            active_contexts: vec!["@work".into(), "@home".into()],
+            resources: HashMap::from([("printer".into(), false)]),
+            ..Default::default()
+        };
         store.save_state(&state).unwrap();
 
         let loaded = store.get_state().unwrap();
         assert_eq!(loaded.active_contexts, state.active_contexts);
-        assert_eq!(loaded.resources["printer"], false);
+        assert!(!loaded.resources["printer"]);
     }
 
     #[test]

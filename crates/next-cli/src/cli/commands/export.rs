@@ -23,13 +23,9 @@ pub struct IcalArgs {
     #[arg(long)]
     pub future: bool,
 
-    /// Show all tasks regardless of status or stage.
+    /// Show all tasks regardless of implicit filtering.
     #[arg(long)]
     pub all: bool,
-
-    /// Filter by stage.
-    #[arg(long)]
-    pub stage: Option<String>,
 
     /// Filter tokens: +tag, -tag, project:path, context:@name.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]

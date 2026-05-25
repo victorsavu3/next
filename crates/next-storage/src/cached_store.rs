@@ -400,8 +400,7 @@ mod tests {
         let default = store.get_state().unwrap();
         assert!(default.active_contexts.is_empty());
 
-        let mut state = GlobalState::default();
-        state.active_contexts = vec!["@work".into()];
+        let state = GlobalState { active_contexts: vec!["@work".into()], ..Default::default() };
         store.save_state(&state).unwrap();
 
         let loaded = store.get_state().unwrap();

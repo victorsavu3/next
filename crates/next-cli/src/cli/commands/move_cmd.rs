@@ -1,5 +1,3 @@
-use next::domain::task::Stage;
-
 use crate::{resolve::resolve_task_id, AppContext};
 
 #[derive(clap::Args, Debug)]
@@ -12,10 +10,6 @@ pub struct Args {
     #[arg(long)]
     pub parent: Option<String>,
 
-    /// New GTD stage (inbox, project, waiting, someday).
-    #[arg(long)]
-    pub stage: Option<String>,
-
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
@@ -24,10 +18,6 @@ pub struct Args {
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let id = resolve_task_id(&*ctx.store, &args.id)?;
     let mut task = ctx.store.get_task(id)?;
-
-    if let Some(ref stage_str) = args.stage {
-        task.stage = parse_stage(stage_str)?;
-    }
 
     match args.parent.as_deref() {
         Some("none") => task.parent_id = None,
@@ -51,14 +41,4 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
             .info("move", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
     }
     Ok(())
-}
-
-fn parse_stage(s: &str) -> anyhow::Result<Stage> {
-    match s.to_lowercase().as_str() {
-        "inbox" => Ok(Stage::Inbox),
-        "project" => Ok(Stage::Project),
-        "waiting" => Ok(Stage::Waiting),
-        "someday" => Ok(Stage::Someday),
-        _ => anyhow::bail!("unknown stage {s:?} — expected inbox, project, waiting, or someday"),
-    }
 }

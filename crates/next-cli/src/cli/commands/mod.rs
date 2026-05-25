@@ -15,7 +15,6 @@ pub mod move_cmd;
 pub mod next_cmd;
 pub mod project;
 pub mod resource;
-pub mod review;
 pub mod show;
 pub mod sync;
 pub mod user;

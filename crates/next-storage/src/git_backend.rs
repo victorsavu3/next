@@ -304,7 +304,7 @@ mod tests {
 
         let file = dir.path().join("a.txt");
         fs::write(&file, "v1").unwrap();
-        backend.commit(&[file.clone()], "first").unwrap();
+        backend.commit(std::slice::from_ref(&file), "first").unwrap();
         let hash1 = backend.head_hash().unwrap();
 
         fs::write(&file, "v2").unwrap();
@@ -322,7 +322,7 @@ mod tests {
 
         let file = dir.path().join("to-delete.txt");
         fs::write(&file, "data").unwrap();
-        backend.commit(&[file.clone()], "add file").unwrap();
+        backend.commit(std::slice::from_ref(&file), "add file").unwrap();
 
         fs::remove_file(&file).unwrap();
         backend.commit(&[file], "remove file").unwrap();

@@ -1,7 +1,4 @@
-use next::domain::{
-    filter::FilterSet,
-    task::Stage,
-};
+use next::domain::filter::FilterSet;
 
 /// Shared filter arguments used across list-style commands.
 ///
@@ -19,7 +16,6 @@ pub struct FilterArgs {
     pub all_users: bool,
     pub future: bool,
     pub all: bool,
-    pub stage: Option<String>,
     pub json: bool,
 }
 
@@ -57,7 +53,6 @@ impl FilterArgs {
 
     /// Converts to a domain [`FilterSet`].
     pub fn to_filter_set(&self) -> anyhow::Result<FilterSet> {
-        let stage = self.stage.as_deref().map(parse_stage).transpose()?;
         let user_override = if self.all_users {
             Some(vec![]) // empty = bypass user filter
         } else {
@@ -66,7 +61,6 @@ impl FilterArgs {
         Ok(FilterSet {
             required_tags: self.required_tags.clone(),
             excluded_tags: self.excluded_tags.clone(),
-            stage,
             context_override: self
                 .context_override
                 .as_ref()
@@ -75,15 +69,5 @@ impl FilterArgs {
             include_future: self.future,
             disable_implicit: self.all,
         })
-    }
-}
-
-fn parse_stage(s: &str) -> anyhow::Result<Stage> {
-    match s.to_lowercase().as_str() {
-        "inbox" => Ok(Stage::Inbox),
-        "project" => Ok(Stage::Project),
-        "waiting" => Ok(Stage::Waiting),
-        "someday" => Ok(Stage::Someday),
-        _ => anyhow::bail!("unknown stage {s:?} — expected inbox, project, waiting, or someday"),
     }
 }

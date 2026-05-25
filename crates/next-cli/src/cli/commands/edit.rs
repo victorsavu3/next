@@ -1,8 +1,9 @@
 use chrono::Local;
+use super::add::validate_url;
 use next::domain::{
     date_parse::parse_date,
     tag,
-    task::{Priority, Recurrence, Stage},
+    task::{Priority, Recurrence},
 };
 
 use crate::{resolve::resolve_task_id, AppContext};
@@ -75,14 +76,6 @@ pub struct Args {
     /// Free-text notes.
     #[arg(long)]
     pub notes: Option<String>,
-
-    /// GTD stage (inbox, project, waiting, someday).
-    #[arg(long)]
-    pub stage: Option<String>,
-
-    /// Who this task is waiting on (sets stage to waiting).
-    #[arg(long)]
-    pub wait_for: Option<String>,
 
     /// Schedule-based recurrence rule.
     #[arg(long)]
@@ -219,15 +212,6 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         task.notes = Some(notes);
     }
 
-    if let Some(ref stage_str) = args.stage {
-        task.stage = parse_stage(stage_str)?;
-    }
-
-    if let Some(wait) = args.wait_for {
-        task.waiting_for = Some(wait);
-        task.stage = Stage::Waiting;
-    }
-
     if let Some(rule) = args.recur_schedule {
         task.recurrence = Some(Recurrence::Schedule { rule });
     } else if let Some(interval) = args.recur_completion {
@@ -260,14 +244,6 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn validate_url(u: &str) -> anyhow::Result<()> {
-    if u.starts_with("http://") || u.starts_with("https://") {
-        Ok(())
-    } else {
-        anyhow::bail!("url must start with http:// or https://")
-    }
-}
-
 fn parse_priority(s: &str) -> anyhow::Result<Priority> {
     match s.to_lowercase().as_str() {
         "low" => Ok(Priority::Low),
@@ -277,12 +253,3 @@ fn parse_priority(s: &str) -> anyhow::Result<Priority> {
     }
 }
 
-fn parse_stage(s: &str) -> anyhow::Result<Stage> {
-    match s.to_lowercase().as_str() {
-        "inbox" => Ok(Stage::Inbox),
-        "project" => Ok(Stage::Project),
-        "waiting" => Ok(Stage::Waiting),
-        "someday" => Ok(Stage::Someday),
-        _ => anyhow::bail!("unknown stage {s:?} — expected inbox, project, waiting, or someday"),
-    }
-}

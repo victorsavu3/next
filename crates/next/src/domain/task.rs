@@ -13,15 +13,6 @@ pub enum Status {
     Cancelled,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Stage {
-    Inbox,
-    Project,
-    Waiting,
-    Someday,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Priority {
@@ -50,7 +41,6 @@ pub struct Task {
     pub id: Uuid,
     pub title: String,
     pub status: Status,
-    pub stage: Stage,
     pub priority: Priority,
 
     /// Optional deadline. When set, the due-date factor dominates the urgency score.
@@ -89,10 +79,6 @@ pub struct Task {
     /// Tags using the unified prefix convention: `@context`, `#resource`, or bare freeform.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
-
-    /// Free-text description of who this task is waiting on (stage = Waiting).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub waiting_for: Option<String>,
 
     /// UUIDs of tasks that must be done or cancelled before this task becomes visible.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -151,7 +137,6 @@ impl Task {
             id: Uuid::new_v4(),
             title: title.into(),
             status: Status::Open,
-            stage: Stage::Inbox,
             priority: Priority::Medium,
             due: None,
             start: None,
@@ -160,7 +145,6 @@ impl Task {
             parent_id: None,
             assignee: None,
             tags: Vec::new(),
-            waiting_for: None,
             blocked_by: Vec::new(),
             score_adjustment: 0.0,
             data: HashMap::new(),
@@ -229,7 +213,6 @@ mod tests {
         let t = Task::new("Buy milk");
         assert_eq!(t.title, "Buy milk");
         assert_eq!(t.status, Status::Open);
-        assert_eq!(t.stage, Stage::Inbox);
         assert_eq!(t.priority, Priority::Medium);
         assert!(!t.long_term);
         assert!(t.tags.is_empty());

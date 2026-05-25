@@ -17,7 +17,7 @@ use std::{
 use next::{
     domain::{
         state::GlobalState,
-        task::{Priority, Stage, Status, Task},
+        task::{Priority, Status, Task},
     },
     store::{Store, VcsBackend},
 };
@@ -237,10 +237,11 @@ fn save_state_syncs_to_both_stores() {
     init_git(dir.path());
     let (mut store, vcs) = open(dir.path());
 
-    let mut state = GlobalState::default();
-    state.active_contexts = vec!["@work".into(), "@home".into()];
-    state.active_users = vec!["alice".into()];
-    state.resources = HashMap::from([("printer".into(), false)]);
+    let state = GlobalState {
+        active_contexts: vec!["@work".into(), "@home".into()],
+        active_users: vec!["alice".into()],
+        resources: HashMap::from([("printer".into(), false)]),
+    };
     store.save_state(&state).unwrap();
 
     let head = vcs.head_hash().unwrap();
@@ -440,7 +441,7 @@ fn pull_removes_task() {
     vcs.commit(&[keep_path, remove_path], "add both tasks").unwrap();
 
     // Simulate pull: the remove task is deleted from the working tree and committed.
-    fs::remove_file(&next_storage::task_path(dir.path(), &remove)).unwrap();
+    fs::remove_file(next_storage::task_path(dir.path(), &remove)).unwrap();
     let remove_path2 = next_storage::task_path(dir.path(), &remove);
     vcs.commit(&[remove_path2], "remove task").unwrap();
 
@@ -463,12 +464,11 @@ fn pull_modifies_task_field() {
     task.slug = Some("my-task".into());
     store.save_task(&task).unwrap();
     let path = next_storage::task_path(dir.path(), &task);
-    vcs.commit(&[path.clone()], "add task").unwrap();
+    vcs.commit(std::slice::from_ref(&path), "add task").unwrap();
 
     // Simulate pull: the TOML file is rewritten with a new title and priority.
     task.title = "Pulled title".into();
     task.priority = Priority::High;
-    task.stage = Stage::Project;
     let updated_toml = toml::to_string_pretty(&task).unwrap();
     fs::write(&path, updated_toml).unwrap();
     vcs.commit(&[path], "update task via pull").unwrap();
@@ -479,7 +479,6 @@ fn pull_modifies_task_field() {
     let loaded = store2.get_task_by_slug("my-task").unwrap().unwrap();
     assert_eq!(loaded.title, "Pulled title");
     assert_eq!(loaded.priority, Priority::High);
-    assert_eq!(loaded.stage, Stage::Project);
     assert_sync(dir.path(), &new_head);
 }
 
@@ -614,8 +613,7 @@ fn pull_updates_state() {
     let (mut store, vcs) = open(dir.path());
 
     // Set initial state.
-    let mut initial_state = GlobalState::default();
-    initial_state.active_contexts = vec!["@home".into()];
+    let initial_state = GlobalState { active_contexts: vec!["@home".into()], ..Default::default() };
     store.save_state(&initial_state).unwrap();
 
     // Commit a task to have a real HEAD.
@@ -625,9 +623,11 @@ fn pull_updates_state() {
     vcs.commit(&[task_path], "anchor commit").unwrap();
 
     // Simulate pull: state.toml is replaced externally with new contexts.
-    let mut new_state = GlobalState::default();
-    new_state.active_contexts = vec!["@work".into(), "@office".into()];
-    new_state.active_users = vec!["alice".into()];
+    let new_state = GlobalState {
+        active_contexts: vec!["@work".into(), "@office".into()],
+        active_users: vec!["alice".into()],
+        ..Default::default()
+    };
     let state_content = toml::to_string_pretty(&new_state).unwrap();
     let state_path = dir.path().join("state.toml");
     fs::write(&state_path, state_content).unwrap();

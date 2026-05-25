@@ -1,10 +1,12 @@
-use next::domain::task::{Priority, Stage, Status, Task};
+use next::domain::task::{Priority, Status, Task};
 
 use crate::{resolve::resolve_task_id, AppContext};
 
+/// Tag used to identify project tasks.
+const PROJECT_TAG: &str = "project";
+
 /// Top-level `next project` subcommand.
-/// Projects are plain tasks with stage=project; these commands are
-/// convenience wrappers over the general task commands.
+/// A project is any task tagged `project`. Subtasks attach via `--parent`.
 #[derive(clap::Args, Debug)]
 pub struct Args {
     #[command(subcommand)]
@@ -13,9 +15,9 @@ pub struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum ProjectSubcommand {
-    /// List tasks with stage=project in a tree view.
+    /// List all open project tasks in a tree view.
     List(ListArgs),
-    /// Create a new project task (shorthand for `next add --stage project`).
+    /// Create a new project task (shorthand for `next add --tag project`).
     Add(AddArgs),
     /// Show a project and all its descendants.
     Show(ShowArgs),
@@ -76,7 +78,7 @@ fn list(ctx: &mut AppContext, json: bool) -> anyhow::Result<()> {
     let all_tasks = ctx.store.list_tasks()?;
     let projects: Vec<&Task> = all_tasks
         .iter()
-        .filter(|t| t.stage == Stage::Project && t.status == Status::Open)
+        .filter(|t| t.tags.iter().any(|tag| tag == PROJECT_TAG) && t.status == Status::Open)
         .collect();
 
     if json {
@@ -95,11 +97,7 @@ fn list(ctx: &mut AppContext, json: bool) -> anyhow::Result<()> {
             .iter()
             .filter(|t| t.parent_id == Some(project.id) && t.status == Status::Open)
             .count();
-        println!(
-            "[{short}] {}  ({open_children} open)",
-            project.title
-        );
-        // Show immediate open children indented.
+        println!("[{short}] {}  ({open_children} open)", project.title);
         for child in all_tasks
             .iter()
             .filter(|t| t.parent_id == Some(project.id) && t.status == Status::Open)
@@ -113,7 +111,7 @@ fn list(ctx: &mut AppContext, json: bool) -> anyhow::Result<()> {
 
 fn add(ctx: &mut AppContext, args: AddArgs) -> anyhow::Result<()> {
     let mut task = Task::new(args.title);
-    task.stage = Stage::Project;
+    task.tags.push(PROJECT_TAG.to_string());
     task.slug = args.slug;
     task.notes = args.notes;
 
@@ -149,7 +147,6 @@ fn show(ctx: &mut AppContext, id_str: &str, json: bool) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("task not found: {id_str}"))?;
 
     if json {
-        // Collect root + all descendants.
         let tree = collect_descendants(root.id, &all_tasks);
         println!("{}", serde_json::to_string_pretty(&tree)?);
         return Ok(());

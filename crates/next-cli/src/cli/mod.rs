@@ -67,9 +67,6 @@ pub enum Command {
     /// Show a due-date forecast.
     Forecast(commands::forecast::Args),
 
-    /// Run a GTD weekly review.
-    Review(commands::review::Args),
-
     /// Sync with the remote VCS backend.
     Sync(commands::sync::Args),
 

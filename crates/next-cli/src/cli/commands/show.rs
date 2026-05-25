@@ -34,7 +34,6 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     println!("ID:       {}", &short_id[..8]);
     println!("Title:    {}", task.title);
     println!("Status:   {:?}", task.status);
-    println!("Stage:    {:?}", task.stage);
     println!("Priority: {:?}", task.priority);
     println!("Score:    {:.2}", score);
 
@@ -66,9 +65,6 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     }
     if let Some(ref assignee) = task.assignee {
         println!("Assignee: {assignee}");
-    }
-    if let Some(ref wf) = task.waiting_for {
-        println!("Waiting:  {wf}");
     }
     if let Some(ref slug) = task.slug {
         println!("Slug:     {slug}");

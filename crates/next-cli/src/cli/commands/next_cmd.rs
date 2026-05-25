@@ -14,13 +14,9 @@ pub struct Args {
     #[arg(long)]
     pub future: bool,
 
-    /// Show all tasks regardless of status or stage.
+    /// Show all tasks regardless of implicit filtering.
     #[arg(long)]
     pub all: bool,
-
-    /// Filter by stage.
-    #[arg(long)]
-    pub stage: Option<String>,
 
     /// Show tasks for all users, ignoring the active user filter.
     #[arg(long)]
@@ -43,7 +39,6 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     filter_args.future = args.future;
     filter_args.all = args.all;
     filter_args.all_users = args.all_users;
-    filter_args.stage = args.stage;
     filter_args.json = args.json;
 
     let filter_set = filter_args.to_filter_set()?;
