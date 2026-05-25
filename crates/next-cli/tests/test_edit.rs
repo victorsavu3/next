@@ -227,6 +227,123 @@ fn edit_invalid_trailing_token_rejected() {
 }
 
 #[test]
+fn edit_sets_description() {
+    let mut env = common::setup();
+    add::run(
+        add::Args { slug: Some("desc-task".to_string()), ..add_args("Described task") },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    edit::run(
+        edit::Args {
+            description: Some("This is the detail.".to_string()),
+            ..base_edit("desc-task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    assert_eq!(task.description.as_deref(), Some("This is the detail."));
+}
+
+#[test]
+fn edit_clears_description() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            slug: Some("clear-desc-task".to_string()),
+            description: Some("Initial description.".to_string()),
+            ..add_args("Clear desc task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    edit::run(
+        edit::Args { clear_description: true, ..base_edit("clear-desc-task") },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    assert!(task.description.is_none());
+}
+
+#[test]
+fn edit_sets_url() {
+    let mut env = common::setup();
+    add::run(
+        add::Args { slug: Some("url-task".to_string()), ..add_args("URL task") },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    edit::run(
+        edit::Args {
+            url: Some("https://example.com/docs".to_string()),
+            ..base_edit("url-task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    assert_eq!(task.url.as_deref(), Some("https://example.com/docs"));
+}
+
+#[test]
+fn edit_clears_url() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            slug: Some("clear-url-task".to_string()),
+            url: Some("https://example.com".to_string()),
+            ..add_args("Clear URL task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    edit::run(
+        edit::Args { clear_url: true, ..base_edit("clear-url-task") },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    assert!(task.url.is_none());
+}
+
+#[test]
+fn edit_rejects_invalid_url() {
+    let mut env = common::setup();
+    add::run(
+        add::Args { slug: Some("bad-url-task".to_string()), ..add_args("Bad URL task") },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let err = edit::run(
+        edit::Args {
+            url: Some("not-a-url".to_string()),
+            ..base_edit("bad-url-task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("http://") || err.to_string().contains("https://"),
+        "unexpected error: {err}"
+    );
+    // URL on the task must remain unset.
+    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    assert!(task.url.is_none());
+}
+
+#[test]
 fn edit_tag_deduplicates() {
     let mut env = common::setup();
     let a = add::Args {

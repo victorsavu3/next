@@ -153,6 +153,50 @@ fn add_with_parent() {
 }
 
 #[test]
+fn add_with_description() {
+    let mut env = common::setup();
+    let a = add::Args {
+        description: Some("Pick up 2% milk from the corner store.".to_string()),
+        ..args("Buy milk")
+    };
+    add::run(a, &mut env.ctx).unwrap();
+
+    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    assert_eq!(
+        task.description.as_deref(),
+        Some("Pick up 2% milk from the corner store.")
+    );
+}
+
+#[test]
+fn add_with_url() {
+    let mut env = common::setup();
+    let a = add::Args {
+        url: Some("https://example.com/ticket/42".to_string()),
+        ..args("Fix ticket")
+    };
+    add::run(a, &mut env.ctx).unwrap();
+
+    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    assert_eq!(task.url.as_deref(), Some("https://example.com/ticket/42"));
+}
+
+#[test]
+fn add_with_invalid_url_is_rejected() {
+    let mut env = common::setup();
+    let a = add::Args {
+        url: Some("ftp://bad-scheme.example.com".to_string()),
+        ..args("Bad URL task")
+    };
+    let err = add::run(a, &mut env.ctx).unwrap_err();
+    assert!(
+        err.to_string().contains("http://") || err.to_string().contains("https://"),
+        "unexpected error: {err}"
+    );
+    assert!(env.ctx.store.list_tasks().unwrap().is_empty());
+}
+
+#[test]
 fn multiple_tasks_stored_independently() {
     let mut env = common::setup();
     add::run(args("Task A"), &mut env.ctx).unwrap();
