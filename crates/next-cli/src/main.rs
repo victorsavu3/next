@@ -10,11 +10,15 @@ fn main() -> anyhow::Result<()> {
 
     // Init runs before the repository exists — handle it before AppContext.
     if let Some(Command::Init(args)) = cli.command {
-        let dir = std::env::current_dir().context("cannot determine current directory")?;
+        let dir = if let Some(ref p) = cli.repo {
+            p.clone()
+        } else {
+            std::env::current_dir().context("cannot determine current directory")?
+        };
         return commands::init::run(args, &dir);
     }
 
-    let mut ctx = AppContext::new()?;
+    let mut ctx = AppContext::new(cli.config.as_deref(), cli.repo.as_deref())?;
 
     // Default to `list` when no subcommand is given.
     let command = cli.command.unwrap_or_else(|| {

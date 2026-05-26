@@ -2,12 +2,24 @@ pub mod commands;
 pub mod filter;
 pub mod render;
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 
 /// next — a task manager with automatic urgency scoring.
 #[derive(Parser, Debug)]
 #[command(name = "next", version, about)]
 pub struct Cli {
+    /// Path to the configuration file (default: $XDG_CONFIG_HOME/task-manager/config.toml).
+    #[arg(long, global = true, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+
+    /// Path to the task repository root.  Overrides the `repository` key in
+    /// the config file and the automatic upward search from the current
+    /// directory.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub repo: Option<PathBuf>,
+
     /// Subcommand to run. Defaults to `list` when omitted.
     #[command(subcommand)]
     pub command: Option<Command>,

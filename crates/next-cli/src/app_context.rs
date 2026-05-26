@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 use next::{BackendKind, Config, Store, VcsBackend};
@@ -15,15 +15,27 @@ pub struct AppContext {
 }
 
 impl AppContext {
-    pub fn new() -> anyhow::Result<Self> {
-        let config = load_config();
+    /// Construct an application context.
+    ///
+    /// * `config_path` — use this config file instead of the XDG default.
+    /// * `repo` — use this repository root instead of the config value or the
+    ///   upward directory search.
+    pub fn new(config_path: Option<&Path>, repo: Option<&Path>) -> anyhow::Result<Self> {
+        let config = load_config(config_path);
 
         let (store, vcs, repo_root): (Box<dyn Store>, Box<dyn VcsBackend>, PathBuf) =
             match config.backend.kind {
                 BackendKind::Local => {
-                    let root = find_repo_root().context(
-                        "not inside a task repository — run `next init` to set one up",
-                    )?;
+                    let root = if let Some(p) = repo {
+                        p.to_path_buf()
+                    } else if let Some(ref p) = config.repository {
+                        p.clone()
+                    } else {
+                        find_repo_root().context(
+                            "not inside a task repository — run `next init` to set one up, \
+                             or set `repository` in the config file",
+                        )?
+                    };
                     let (s, v) = next_storage::open(root.clone())
                         .context("failed to open local task store")?;
                     (Box::new(s), Box::new(v), root)
@@ -70,14 +82,22 @@ fn find_repo_root() -> Option<PathBuf> {
     }
 }
 
-/// Loads configuration from `$XDG_CONFIG_HOME/task-manager/config.toml`.
+/// Loads configuration from the given path, or from
+/// `$XDG_CONFIG_HOME/task-manager/config.toml` when `override_path` is `None`.
 /// Returns `Config::default()` when the file is absent or unreadable.
-fn load_config() -> Config {
-    let path = dirs::config_dir()
-        .map(|d| d.join("task-manager").join("config.toml"));
+fn load_config(override_path: Option<&Path>) -> Config {
+    let path = if let Some(p) = override_path {
+        Some(p.to_path_buf())
+    } else {
+        dirs::config_dir().map(|d| d.join("task-manager").join("config.toml"))
+    };
 
-    let Some(path) = path else { return Config::default() };
-    let Ok(content) = std::fs::read_to_string(&path) else { return Config::default() };
+    let Some(path) = path else {
+        return Config::default();
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Config::default();
+    };
 
     match toml::from_str::<Config>(&content) {
         Ok(cfg) => cfg,

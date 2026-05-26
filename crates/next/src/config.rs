@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 // ── Per-field default functions ───────────────────────────────────────────────
@@ -148,6 +150,7 @@ pub struct ForgejoConfig {
 ///
 /// Example config file (local backend, default):
 /// ```toml
+/// repository = "/home/alice/tasks"   # use next from any directory
 /// forecast_horizon_days = 60
 /// next_count = 5
 ///
@@ -190,6 +193,12 @@ pub struct Config {
     /// Default number of tasks shown by `next next`.
     #[serde(default = "default_next_count")]
     pub next_count: usize,
+
+    /// Default repository root.  When set, `next` uses this path instead of
+    /// walking up from the current directory.  Can be overridden at runtime
+    /// with the `--repo` flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -200,6 +209,7 @@ impl Default for Config {
             forgejo: ForgejoConfig::default(),
             forecast_horizon_days: default_forecast_horizon_days(),
             next_count: default_next_count(),
+            repository: None,
         }
     }
 }
