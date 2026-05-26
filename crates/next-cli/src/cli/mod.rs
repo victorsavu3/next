@@ -8,8 +8,9 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(name = "next", version, about)]
 pub struct Cli {
+    /// Subcommand to run. Defaults to `list` when omitted.
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]

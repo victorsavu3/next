@@ -9,14 +9,25 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Init runs before the repository exists — handle it before AppContext.
-    if let Command::Init(args) = cli.command {
+    if let Some(Command::Init(args)) = cli.command {
         let dir = std::env::current_dir().context("cannot determine current directory")?;
         return commands::init::run(args, &dir);
     }
 
     let mut ctx = AppContext::new()?;
 
-    let cmd_name = match &cli.command {
+    // Default to `list` when no subcommand is given.
+    let command = cli.command.unwrap_or_else(|| {
+        Command::List(commands::list::Args {
+            future: false,
+            all: false,
+            all_users: false,
+            json: false,
+            tokens: vec![],
+        })
+    });
+
+    let cmd_name = match &command {
         Command::Init(_) => unreachable!("handled above"),
         Command::Add(_) => "add",
         Command::List(_) => "list",
@@ -40,7 +51,7 @@ fn main() -> anyhow::Result<()> {
         Command::Tree(_) => "tree",
     };
 
-    let result = match cli.command {
+    let result = match command {
         Command::Init(_) => unreachable!("handled above"),
         Command::Add(args) => commands::add::run(args, &mut ctx),
         Command::List(args) => commands::list::run(args, &mut ctx),
