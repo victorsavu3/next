@@ -4,7 +4,7 @@ pub mod render;
 
 use clap::{Parser, Subcommand};
 
-/// next — a GTD task manager.
+/// next — a task manager with automatic urgency scoring.
 #[derive(Parser, Debug)]
 #[command(name = "next", version, about)]
 pub struct Cli {
@@ -48,7 +48,7 @@ pub enum Command {
     /// Delete a task.
     Delete(commands::delete::Args),
 
-    /// Move a task to a different project or stage.
+    /// Change the parent of a task.
     #[command(name = "move")]
     Move(commands::move_cmd::Args),
 

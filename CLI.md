@@ -565,8 +565,14 @@ inline when set.
 **Usage**
 
 ```
-next resource
+next resource [--json]
 ```
+
+**Options**
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | flag | false | Emit resources as a JSON object keyed by resource tag. |
 
 ---
 
@@ -699,8 +705,15 @@ Synchronise with the remote git repository: pull, rebuild the local cache, then 
 **Usage**
 
 ```
-next sync
+next sync [options]
 ```
+
+**Options**
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--push-only` | flag | false | Only push local commits; skip pulling from the remote. |
+| `--pull-only` | flag | false | Only pull from the remote; skip pushing. |
 
 ---
 
@@ -718,6 +731,7 @@ next import forgejo <owner/repo> [options]
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
+| `--parent <id>` | task ID | none | Attach all imported tasks as subtasks of this task. |
 | `--tag <tag>` | string | none | Add an extra tag to all imported tasks. Repeatable. |
 | `--json` | flag | false | Emit a summary of created and updated tasks as JSON. |
 
@@ -732,6 +746,12 @@ Import VTODO entries from an iCalendar (`.ics`) file or a webcal URL.
 ```
 next import ical <file-or-url>
 ```
+
+**Options**
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | flag | false | Emit a summary of created and updated tasks as JSON. |
 
 ---
 
