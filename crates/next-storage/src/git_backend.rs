@@ -24,10 +24,33 @@ impl GitBackend {
     }
 }
 
-fn ssh_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
+/// Builds a `RemoteCallbacks` that handles SSH (via agent) and HTTP/HTTPS
+/// (via the system git credential helper) based on what the server requests.
+///
+/// The `tried` flag prevents the callback from looping when credentials are
+/// rejected — git2 re-invokes the callback on failure, so we return an error
+/// on the second call instead of retrying forever.
+fn remote_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
+    let mut tried = false;
     let mut cb = git2::RemoteCallbacks::new();
-    cb.credentials(|_url, username, _allowed| {
-        git2::Cred::ssh_key_from_agent(username.unwrap_or("git"))
+    cb.credentials(move |url, username, allowed| {
+        if tried {
+            return Err(git2::Error::from_str("authentication failed"));
+        }
+        tried = true;
+
+        if allowed.contains(git2::CredentialType::SSH_KEY) {
+            return git2::Cred::ssh_key_from_agent(username.unwrap_or("git"));
+        }
+        if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
+            let config = git2::Config::open_default()
+                .map_err(|e| git2::Error::from_str(&e.to_string()))?;
+            return git2::Cred::credential_helper(&config, url, username);
+        }
+        if allowed.contains(git2::CredentialType::DEFAULT) {
+            return git2::Cred::default();
+        }
+        Err(git2::Error::from_str("no supported authentication method"))
     });
     cb
 }
@@ -97,7 +120,7 @@ impl VcsBackend for GitBackend {
             .map_err(|e| AppError::Other(format!("git remote 'origin': {e}")))?;
 
         let mut fetch_opts = git2::FetchOptions::new();
-        fetch_opts.remote_callbacks(ssh_callbacks());
+        fetch_opts.remote_callbacks(remote_callbacks());
         remote
             .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
             .map_err(|e| AppError::Other(format!("git fetch: {e}")))?;
@@ -242,7 +265,7 @@ impl VcsBackend for GitBackend {
             .find_remote("origin")
             .map_err(|e| AppError::Other(format!("git remote 'origin': {e}")))?;
         let mut push_opts = git2::PushOptions::new();
-        push_opts.remote_callbacks(ssh_callbacks());
+        push_opts.remote_callbacks(remote_callbacks());
         remote
             .push(&[refspec.as_str()], Some(&mut push_opts))
             .map_err(|e| AppError::Other(format!("git push: {e}")))?;
