@@ -15,7 +15,7 @@ pub struct Args {}
 /// Steps:
 ///  1. `git init` if `.git` is absent.
 ///  2. Create `tasks/` if absent.
-///  3. Append `.next.db` to `.gitignore` if not already present.
+///  3. Append `.next.db`, `next.log`, `next.log.1` to `.gitignore` if not already present.
 ///  4. Create an initial git commit when the repository has no commits yet.
 pub fn run(_args: Args, dir: &Path) -> anyhow::Result<()> {
     // Step 1 — git repository.
@@ -36,30 +36,10 @@ pub fn run(_args: Args, dir: &Path) -> anyhow::Result<()> {
         println!("Created tasks/");
     }
 
-    // Step 3 — .gitignore entry for the SQLite cache.
+    // Step 3 — .gitignore entries for generated files.
     let gitignore_path = dir.join(".gitignore");
-    let already_ignored = if gitignore_path.exists() {
-        let content = fs::read_to_string(&gitignore_path)
-            .context("failed to read .gitignore")?;
-        content.lines().any(|l| l.trim() == ".next.db")
-    } else {
-        false
-    };
-
-    if already_ignored {
-        println!(".next.db already in .gitignore.");
-    } else {
-        let mut content = if gitignore_path.exists() {
-            fs::read_to_string(&gitignore_path).context("failed to read .gitignore")?
-        } else {
-            String::new()
-        };
-        if !content.is_empty() && !content.ends_with('\n') {
-            content.push('\n');
-        }
-        content.push_str(".next.db\n");
-        fs::write(&gitignore_path, &content).context("failed to write .gitignore")?;
-        println!("Added .next.db to .gitignore.");
+    for entry in &[".next.db", "next.log", "next.log.1"] {
+        ensure_gitignored(&gitignore_path, entry)?;
     }
 
     // Step 4 — initial commit when the repo is empty.
@@ -108,6 +88,35 @@ fn git(dir: &Path, args: &[&str]) -> anyhow::Result<()> {
         "git {} exited with status {status}",
         args.join(" ")
     );
+    Ok(())
+}
+
+fn ensure_gitignored(gitignore_path: &Path, entry: &str) -> anyhow::Result<()> {
+    let already_present = if gitignore_path.exists() {
+        fs::read_to_string(gitignore_path)
+            .context("failed to read .gitignore")?
+            .lines()
+            .any(|l| l.trim() == entry)
+    } else {
+        false
+    };
+
+    if already_present {
+        println!("{entry} already in .gitignore.");
+    } else {
+        let mut content = if gitignore_path.exists() {
+            fs::read_to_string(gitignore_path).context("failed to read .gitignore")?
+        } else {
+            String::new()
+        };
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(entry);
+        content.push('\n');
+        fs::write(gitignore_path, &content).context("failed to write .gitignore")?;
+        println!("Added {entry} to .gitignore.");
+    }
     Ok(())
 }
 
