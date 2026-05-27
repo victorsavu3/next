@@ -615,6 +615,140 @@ mod tests {
         assert!(!loaded.resources["printer"]);
     }
 
+    // -----------------------------------------------------------------------
+    // Migration tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn migrate_no_state_file_is_noop() {
+        let (_dir, store) = temp_store();
+        // No state.toml exists; migration must be a silent no-op.
+        assert!(store.list_tag_descriptions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn migrate_state_without_tag_descriptions_is_noop() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("state.toml"),
+            "active_contexts = [\"@work\"]\n",
+        )
+        .unwrap();
+        let store = TomlStore::open(dir.path().to_path_buf()).unwrap();
+        // Existing state fields must be untouched.
+        let state = store.get_state().unwrap();
+        assert_eq!(state.active_contexts, vec!["@work"]);
+        assert!(store.list_tag_descriptions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn migrate_empty_tag_descriptions_is_noop() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("state.toml"),
+            "[tag_descriptions]\n",
+        )
+        .unwrap();
+        let store = TomlStore::open(dir.path().to_path_buf()).unwrap();
+        assert!(store.list_tag_descriptions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn migrate_moves_descriptions_to_tag_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("state.toml"),
+            "[tag_descriptions]\n\
+             \"@work\" = \"Tasks at the office\"\n\
+             \"#printer\" = \"Laser printer\"\n\
+             \"python\" = \"Python work\"\n",
+        )
+        .unwrap();
+
+        let store = TomlStore::open(dir.path().to_path_buf()).unwrap();
+
+        let descs = store.list_tag_descriptions().unwrap();
+        assert_eq!(descs.get("@work").map(String::as_str), Some("Tasks at the office"));
+        assert_eq!(descs.get("#printer").map(String::as_str), Some("Laser printer"));
+        assert_eq!(descs.get("python").map(String::as_str), Some("Python work"));
+        assert_eq!(descs.len(), 3);
+
+        // Per-tag files created on disk.
+        assert!(dir.path().join("tags").join("@work.toml").exists());
+        assert!(dir.path().join("tags").join("#printer.toml").exists());
+        assert!(dir.path().join("tags").join("python.toml").exists());
+
+        // Legacy field stripped from state.toml.
+        let raw = fs::read_to_string(dir.path().join("state.toml")).unwrap();
+        assert!(
+            !raw.contains("tag_descriptions"),
+            "tag_descriptions must be stripped from state.toml after migration"
+        );
+    }
+
+    #[test]
+    fn migrate_hierarchical_tags_create_subdirs() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("state.toml"),
+            "[tag_descriptions]\n\
+             \"@home/kitchen\" = \"Kitchen tasks\"\n\
+             \"#laptop/personal\" = \"Personal laptop\"\n",
+        )
+        .unwrap();
+
+        let store = TomlStore::open(dir.path().to_path_buf()).unwrap();
+
+        let descs = store.list_tag_descriptions().unwrap();
+        assert_eq!(descs.get("@home/kitchen").map(String::as_str), Some("Kitchen tasks"));
+        assert_eq!(descs.get("#laptop/personal").map(String::as_str), Some("Personal laptop"));
+
+        // Hierarchical paths turn into real subdirectories.
+        assert!(dir.path().join("tags/@home/kitchen.toml").exists());
+        assert!(dir.path().join("tags/#laptop/personal.toml").exists());
+    }
+
+    #[test]
+    fn migrate_preserves_other_state_fields() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("state.toml"),
+            "active_contexts = [\"@work\"]\n\
+             \n\
+             [resources]\n\
+             printer = false\n\
+             \n\
+             [tag_descriptions]\n\
+             \"@work\" = \"Work context\"\n",
+        )
+        .unwrap();
+
+        let store = TomlStore::open(dir.path().to_path_buf()).unwrap();
+
+        let state = store.get_state().unwrap();
+        assert_eq!(state.active_contexts, vec!["@work"]);
+        assert_eq!(state.resources.get("printer"), Some(&false));
+    }
+
+    #[test]
+    fn migrate_is_idempotent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("state.toml"),
+            "[tag_descriptions]\n\"@work\" = \"Work tasks\"\n",
+        )
+        .unwrap();
+
+        // First open migrates.
+        drop(TomlStore::open(dir.path().to_path_buf()).unwrap());
+
+        // Second open: no tag_descriptions in state.toml anymore; migration is a no-op.
+        let store = TomlStore::open(dir.path().to_path_buf()).unwrap();
+        let descs = store.list_tag_descriptions().unwrap();
+        assert_eq!(descs.len(), 1);
+        assert_eq!(descs.get("@work").map(String::as_str), Some("Work tasks"));
+    }
+
     #[test]
     fn title_to_slug_basic() {
         assert_eq!(title_to_slug("Buy milk"), "buy-milk");
