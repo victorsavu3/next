@@ -29,12 +29,8 @@ A task manager with automatic urgency scoring. The binary is called `next`.
 | `next context` | Show active contexts |
 | `next context set` | Set the global active context filter |
 | `next context clear` | Clear all active contexts |
-| `next context describe` | Set a description for a context tag |
-| `next context clear-description` | Remove a context description |
 | `next resource` | List resources and their availability |
 | `next resource set` | Toggle a resource available or unavailable |
-| `next resource describe` | Set a description for a resource tag |
-| `next resource clear-description` | Remove a resource description |
 | `next forecast` | Show upcoming recurrence dates |
 | `next sync` | Pull from git remote, rebuild cache, push |
 | `next user` | Show active user filter |
@@ -525,38 +521,6 @@ next context clear
 
 ---
 
-### `next context describe`
-
-Set a human-readable description for a context tag. Equivalent to
-`next tag describe <@tag> <description>` but validates that the tag starts with `@`.
-
-**Usage**
-
-```
-next context describe <@tag> <description>
-```
-
-**Examples**
-
-```sh
-next context describe @home "Home tasks: kitchen, garden, errands"
-next context describe @work/frontend "Frontend development at the office"
-```
-
----
-
-### `next context clear-description`
-
-Remove the stored description for a context tag.
-
-**Usage**
-
-```
-next context clear-description <@tag>
-```
-
----
-
 ### `next resource`
 
 List all known resources and their current availability status. Descriptions are shown
@@ -591,38 +555,6 @@ next resource set <#resource> <on|off>
 ```sh
 next resource set #printer off   # printer is broken — hide printer tasks
 next resource set #printer on    # printer repaired
-```
-
----
-
-### `next resource describe`
-
-Set a human-readable description for a resource tag. Equivalent to
-`next tag describe <#tag> <description>` but validates that the tag starts with `#`.
-
-**Usage**
-
-```
-next resource describe <#tag> <description>
-```
-
-**Examples**
-
-```sh
-next resource describe #printer "Office laser printer, 2nd floor"
-next resource describe #vacation "Away from keyboard — all resource tasks hidden"
-```
-
----
-
-### `next resource clear-description`
-
-Remove the stored description for a resource tag.
-
-**Usage**
-
-```
-next resource clear-description <#tag>
 ```
 
 ---
@@ -827,9 +759,9 @@ to inspect a single task and its direct children.
 Descriptions are stored as individual TOML files under the `tags/` directory.  The tag
 string maps directly to a path: `@work` → `tags/@work.toml`, `#printer` →
 `tags/#printer.toml`, `@home/kitchen` → `tags/@home/kitchen.toml` (slashes in
-hierarchical tags become real directory separators).  All three commands (`next tag
-describe`, `next context describe`, `next resource describe`) write to the same
-directory.
+hierarchical tags become real directory separators).  `next tag describe` and
+`next tag clear-description` are the canonical way to manage descriptions for all tag
+types (`@context`, `#resource`, and freeform tags alike).
 
 Repositories that still contain the old `[tag_descriptions]` table in `state.toml` are
 migrated automatically on first open: each entry is written to its own `tags/*.toml`

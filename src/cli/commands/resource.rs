@@ -22,11 +22,6 @@ pub struct Args {
 pub enum ResourceSubcommand {
     /// Set availability of a #-prefixed resource tag.
     Set(SetArgs),
-    /// Set a human-readable description for a resource tag.
-    Describe(DescribeArgs),
-    /// Remove the description for a resource tag.
-    #[command(name = "clear-description")]
-    ClearDescription(ClearDescriptionArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -38,26 +33,10 @@ pub struct SetArgs {
     pub availability: Availability,
 }
 
-#[derive(clap::Args, Debug)]
-pub struct DescribeArgs {
-    /// Resource tag to describe (must start with #, e.g. #printer).
-    pub tag: String,
-    /// Description text.
-    pub description: String,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ClearDescriptionArgs {
-    /// Resource tag whose description should be removed.
-    pub tag: String,
-}
-
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     match args.subcommand {
         None => show(ctx, args.json),
         Some(ResourceSubcommand::Set(a)) => set(ctx, a.resource, a.availability),
-        Some(ResourceSubcommand::Describe(a)) => describe(ctx, a),
-        Some(ResourceSubcommand::ClearDescription(a)) => clear_description(ctx, a),
     }
 }
 
@@ -112,35 +91,5 @@ fn set(ctx: &mut AppContext, resource: String, availability: Availability) -> an
 
     let label = if available { "available" } else { "unavailable" };
     ctx.log.info("resource", &format!("{resource} marked as {label}"));
-    Ok(())
-}
-
-fn describe(ctx: &mut AppContext, args: DescribeArgs) -> anyhow::Result<()> {
-    if !args.tag.starts_with('#') {
-        anyhow::bail!("resource tags must start with '#', got: {}", args.tag);
-    }
-    ctx.store.set_tag_description(&args.tag, &args.description)?;
-    let tag_path = crate::storage::tag_description_path(&ctx.repo_root, &args.tag);
-    ctx.vcs.commit(
-        &[tag_path],
-        &format!("next: resource describe {}", args.tag),
-    )?;
-    ctx.log
-        .info("resource", &format!("described {} = {}", args.tag, args.description));
-    Ok(())
-}
-
-fn clear_description(ctx: &mut AppContext, args: ClearDescriptionArgs) -> anyhow::Result<()> {
-    if !args.tag.starts_with('#') {
-        anyhow::bail!("resource tags must start with '#', got: {}", args.tag);
-    }
-    ctx.store.delete_tag_description(&args.tag)?;
-    let tag_path = crate::storage::tag_description_path(&ctx.repo_root, &args.tag);
-    ctx.vcs.commit(
-        &[tag_path],
-        &format!("next: resource clear-description {}", args.tag),
-    )?;
-    ctx.log
-        .info("resource", &format!("cleared description for {}", args.tag));
     Ok(())
 }

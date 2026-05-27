@@ -13,11 +13,6 @@ pub enum ContextSubcommand {
     Set(SetArgs),
     /// Clear all active context tags (return to context-agnostic mode).
     Clear,
-    /// Set a human-readable description for a context tag.
-    Describe(DescribeArgs),
-    /// Remove the description for a context tag.
-    #[command(name = "clear-description")]
-    ClearDescription(ClearDescriptionArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -27,27 +22,11 @@ pub struct SetArgs {
     pub tags: Vec<String>,
 }
 
-#[derive(clap::Args, Debug)]
-pub struct DescribeArgs {
-    /// Context tag to describe (must start with @, e.g. @work).
-    pub tag: String,
-    /// Description text.
-    pub description: String,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ClearDescriptionArgs {
-    /// Context tag whose description should be removed.
-    pub tag: String,
-}
-
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     match args.subcommand {
         None => show(ctx),
         Some(ContextSubcommand::Set(a)) => set(ctx, a.tags),
         Some(ContextSubcommand::Clear) => clear(ctx),
-        Some(ContextSubcommand::Describe(a)) => describe(ctx, a),
-        Some(ContextSubcommand::ClearDescription(a)) => clear_description(ctx, a),
     }
 }
 
@@ -92,35 +71,5 @@ fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
     let state_path = ctx.repo_root.join("state.toml");
     ctx.vcs.commit(&[state_path], "next: context clear")?;
     ctx.log.info("context", "cleared");
-    Ok(())
-}
-
-fn describe(ctx: &mut AppContext, args: DescribeArgs) -> anyhow::Result<()> {
-    if !args.tag.starts_with('@') {
-        anyhow::bail!("context tags must start with '@', got: {}", args.tag);
-    }
-    ctx.store.set_tag_description(&args.tag, &args.description)?;
-    let tag_path = crate::storage::tag_description_path(&ctx.repo_root, &args.tag);
-    ctx.vcs.commit(
-        &[tag_path],
-        &format!("next: context describe {}", args.tag),
-    )?;
-    ctx.log
-        .info("context", &format!("described {} = {}", args.tag, args.description));
-    Ok(())
-}
-
-fn clear_description(ctx: &mut AppContext, args: ClearDescriptionArgs) -> anyhow::Result<()> {
-    if !args.tag.starts_with('@') {
-        anyhow::bail!("context tags must start with '@', got: {}", args.tag);
-    }
-    ctx.store.delete_tag_description(&args.tag)?;
-    let tag_path = crate::storage::tag_description_path(&ctx.repo_root, &args.tag);
-    ctx.vcs.commit(
-        &[tag_path],
-        &format!("next: context clear-description {}", args.tag),
-    )?;
-    ctx.log
-        .info("context", &format!("cleared description for {}", args.tag));
     Ok(())
 }
