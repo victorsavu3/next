@@ -206,6 +206,5 @@ is the production-ready path.
 ## See also
 
 - `REQUIREMENTS.md` — functional requirements
-- `ARCHITECTURE.md` — internal design
+- `ARCHITECTURE.md` — internal design and module layout
 - `CLI.md` — full command reference
-- `CRATES.md` — workspace structure

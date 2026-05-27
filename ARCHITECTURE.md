@@ -33,39 +33,57 @@ vice versa. The CLI layer wires them together via `AppContext`.
 
 ---
 
-## 2. Workspace layout
+## 2. Module layout
+
+The project is a single crate named `next` with both a library (`src/lib.rs`) and a
+binary (`src/main.rs`).
 
 ```
-next/                             # workspace root
-  Cargo.toml                      # [workspace] manifest
-  crates/
-    next/                         # library: domain types + storage traits + config
-    next-storage/                 # library: TOML + git2 implementation
-    next-remote-storage/          # library: stub HTTP backend (not yet implemented)
-    next-cli/                     # binary: clap CLI wrapper
-```
-
-### Dependency graph
-
-```
-next-cli
-  ├── next                (domain types, traits, config)
-  ├── next-storage        (local Store + VcsBackend)
-  └── next-remote-storage (stub remote Store + VcsBackend)
-
-next-storage
-  └── next
-
-next-remote-storage
-  └── next
-
-next
-  └── (no internal workspace deps)
+next/                             # crate root (also git repo)
+  Cargo.toml                      # [package] manifest
+  src/
+    main.rs                       # binary entry point
+    lib.rs                        # library root; public re-exports
+    config.rs                     # Config, BackendConfig, BackendKind
+    error.rs                      # AppError, Result
+    store.rs                      # Store + VcsBackend traits
+    domain/                       # pure domain types (no I/O)
+      mod.rs
+      task.rs       state.rs      tag.rs
+      filter.rs     scoring.rs    date_parse.rs
+    storage/                      # local TOML + SQLite + git backend
+      mod.rs                      # open(), task_path(), tag_description_path()
+      toml_store.rs               # TomlStore: source-of-truth TOML file I/O
+      cached_store.rs             # CachedStore: wraps TomlStore with SQLite read cache
+      git_backend.rs              # GitBackend: implements VcsBackend via git2
+    remote_storage/               # stub HTTP backend
+      mod.rs                      # re-exports RemoteStore, RemoteVcs
+      remote_store.rs             # stub Store (all methods return "not yet implemented")
+      remote_vcs.rs               # no-op VcsBackend
+    app_context.rs                # AppContext struct + ::new()
+    log.rs                        # Logger: append-only next.log with rotation
+    resolve.rs                    # fn resolve_task_id(store, id_str) -> Result<Uuid>
+    cli/
+      mod.rs                      # top-level Cli struct + Command enum (clap derive)
+      filter.rs                   # FilterArgs -> FilterSet
+      render.rs                   # text column / --json rendering
+      commands/
+        add.rs        cancel.rs   context.rs  data.rs
+        delete.rs     done.rs     edit.rs     export.rs
+        forecast.rs   import.rs   init.rs     list.rs
+        mod.rs        move_cmd.rs next_cmd.rs open.rs
+        resource.rs   show.rs     sync.rs     tag.rs
+        tree.rs       user.rs
+  tests/
+    common/mod.rs                 # shared test helpers (TestEnv, setup())
+    test_add.rs   test_data.rs    test_done.rs   test_edit.rs
+    test_init.rs  test_list.rs    test_open.rs   test_tag.rs   test_tree.rs
+    cache_sync.rs locking.rs      migration.rs   sync.rs
 ```
 
 ---
 
-## 3. Crate responsibilities
+## 3. Module responsibilities
 
 ### `next` — core library
 
@@ -144,16 +162,7 @@ pub enum AppError {
 }
 ```
 
-### `next-storage` — local TOML + SQLite cache + git backend
-
-```
-crates/next-storage/src/
-  lib.rs            # pub fn open(root: PathBuf) -> Result<(CachedStore, GitBackend)>
-                    # pub fn task_path(root, task) -> PathBuf
-  cached_store.rs   # CachedStore: wraps TomlStore with an SQLite read cache
-  toml_store.rs     # TomlStore: source-of-truth TOML file I/O
-  git_backend.rs    # GitBackend: implements VcsBackend (via git2)
-```
+### `next::storage` — local TOML + SQLite cache + git backend
 
 **`CachedStore`** is the `Store` implementation returned by `open()`. It wraps
 `TomlStore` and maintains an SQLite database at `<repo>/.next.db`:
@@ -199,25 +208,17 @@ description file and is used by CLI commands to pass the correct path to `vcs.co
 **`GitBackend`** wraps `Mutex<git2::Repository>` to satisfy `Send + Sync`. Commit
 messages follow the pattern `next: <verb> "<task title>"`.
 
-### `next-remote-storage` — stub HTTP backend
+### `next::remote_storage` — stub HTTP backend
+
+`RemoteStore { url, token }` — construction never fails; errors are returned lazily when
+any method is called. `RemoteVcs` — all VCS operations are no-ops.
+
+### `next::cli` — command handlers
 
 ```
-crates/next-remote-storage/src/
-  lib.rs            # re-exports RemoteStore, RemoteVcs
-  remote_store.rs   # RemoteStore: all Store methods return AppError::Other("not yet implemented")
-  remote_vcs.rs     # RemoteVcs: commit/push are no-ops; pull returns Clean; head_hash returns "remote"
-```
-
-Construction never fails; errors are returned lazily. The binary starts up cleanly even
-before any server is reachable.
-
-### `next-cli` — binary
-
-```
-crates/next-cli/src/
+src/
   main.rs           # entry point: Init handled before AppContext; dispatches all others
   app_context.rs    # AppContext struct + ::new() (selects backend, opens store)
-  lib.rs            # re-exports AppContext; makes commands importable from tests
   log.rs            # Logger: append-only next.log with 1 MB rotation
   resolve.rs        # fn resolve_task_id(store, id_str) -> Result<Uuid>
   cli/
@@ -252,7 +253,7 @@ pub struct AppContext {
 
 `AppContext::new()` selects the backend based on `config.backend.kind`:
 
-- **Local**: walk up from CWD for `.git`; call `next_storage::open(root)` to get
+- **Local**: walk up from CWD for `.git`; call `next::storage::open(root)` to get
   `(CachedStore, GitBackend)`; fail if no git repo is found.
 - **Remote**: use CWD as `repo_root`; construct `RemoteStore` + `RemoteVcs` from
   the configured URL and token.
@@ -504,13 +505,31 @@ propagates the `anyhow::Error` to produce a non-zero exit code.
 
 | Layer | Location | Approach |
 |-------|----------|----------|
-| `domain::scoring` | `crates/next/src/domain/scoring.rs` | Unit tests with fixed dates; each factor tested independently |
-| `domain::filter` | `crates/next/src/domain/filter.rs` | Unit tests: build `FilterSet` + `Vec<Task>`, assert filtered output |
-| `domain::date_parse` | `crates/next/src/domain/date_parse.rs` | Unit tests: fixed "today", assert parsed date for common expressions |
-| `TomlStore` | `crates/next-storage/src/toml_store.rs` | Round-trip tests: write task to `tempdir`, read back, assert equal fields; migration unit tests: write legacy `state.toml`, call `TomlStore::open()`, assert per-tag files created and `state.toml` cleaned |
-| `GitBackend` | `crates/next-storage/src/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
-| `CachedStore` | `crates/next-storage/src/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |
-| Cache sync | `crates/next-storage/tests/cache_sync.rs` | Integration tests: write-through consistency (SQLite ↔ TOML), git pull propagation (HEAD change triggers rebuild), cache-reuse (same HEAD = no rebuild) |
-| Migration | `crates/next-storage/tests/migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next_storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens |
-| File locking | `crates/next-storage/tests/locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption |
-| CLI commands | `crates/next-cli/tests/` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |
+| `domain::scoring` | `src/domain/scoring.rs` | Unit tests with fixed dates; each factor tested independently |
+| `domain::filter` | `src/domain/filter.rs` | Unit tests: build `FilterSet` + `Vec<Task>`, assert filtered output |
+| `domain::date_parse` | `src/domain/date_parse.rs` | Unit tests: fixed "today", assert parsed date for common expressions |
+| `TomlStore` | `src/storage/toml_store.rs` | Round-trip tests: write task to `tempdir`, read back, assert equal fields; migration unit tests: write legacy `state.toml`, call `TomlStore::open()`, assert per-tag files created and `state.toml` cleaned |
+| `GitBackend` | `src/storage/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
+| `CachedStore` | `src/storage/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |
+| Cache sync | `tests/cache_sync.rs` | Integration tests: write-through consistency (SQLite ↔ TOML), git pull propagation (HEAD change triggers rebuild), cache-reuse (same HEAD = no rebuild) |
+| Migration | `tests/migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next::storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens |
+| File locking | `tests/locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption |
+| CLI commands | `tests/test_*.rs` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |
+
+---
+
+## 15. Dependencies
+
+| Crate | Purpose |
+|-------|---------|
+| `clap` | CLI argument parsing |
+| `git2` | git commit / pull / push |
+| `toml` | TOML file serialisation |
+| `rusqlite` | SQLite read cache |
+| `fs4` | cross-platform advisory file locking (`flock(2)`) |
+| `serde`, `serde_json` | serialisation (domain types, `--json` output) |
+| `chrono` | dates in domain types and scoring |
+| `interim` | `date_parse` module (natural-language date expressions) |
+| `uuid` | `Task::id` |
+| `dirs` | XDG base directory resolution |
+| `anyhow`, `thiserror` | error propagation |

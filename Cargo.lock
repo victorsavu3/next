@@ -739,51 +739,18 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 name = "next"
 version = "0.1.0"
 dependencies = [
- "chrono",
- "interim",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
-name = "next-cli"
-version = "0.1.0"
-dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "dirs",
- "next",
- "next-remote-storage",
- "next-storage",
- "serde_json",
- "tempfile",
- "toml",
- "uuid",
-]
-
-[[package]]
-name = "next-remote-storage"
-version = "0.1.0"
-dependencies = [
- "next",
- "uuid",
-]
-
-[[package]]
-name = "next-storage"
-version = "0.1.0"
-dependencies = [
- "chrono",
  "fs4",
  "git2",
- "next",
+ "interim",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "toml",
  "uuid",
 ]

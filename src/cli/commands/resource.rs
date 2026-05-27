@@ -1,0 +1,146 @@
+use crate::AppContext;
+
+/// Availability toggle for `next resource set`.
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum Availability {
+    On,
+    Off,
+}
+
+/// Top-level `next resource` subcommand.
+#[derive(clap::Args, Debug)]
+pub struct Args {
+    /// Output as JSON.
+    #[arg(long)]
+    pub json: bool,
+
+    #[command(subcommand)]
+    pub subcommand: Option<ResourceSubcommand>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum ResourceSubcommand {
+    /// Set availability of a #-prefixed resource tag.
+    Set(SetArgs),
+    /// Set a human-readable description for a resource tag.
+    Describe(DescribeArgs),
+    /// Remove the description for a resource tag.
+    #[command(name = "clear-description")]
+    ClearDescription(ClearDescriptionArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SetArgs {
+    /// Resource tag (e.g. #printer or #office/printer).
+    pub resource: String,
+
+    /// Whether the resource is currently available.
+    pub availability: Availability,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct DescribeArgs {
+    /// Resource tag to describe (must start with #, e.g. #printer).
+    pub tag: String,
+    /// Description text.
+    pub description: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ClearDescriptionArgs {
+    /// Resource tag whose description should be removed.
+    pub tag: String,
+}
+
+pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
+    match args.subcommand {
+        None => show(ctx, args.json),
+        Some(ResourceSubcommand::Set(a)) => set(ctx, a.resource, a.availability),
+        Some(ResourceSubcommand::Describe(a)) => describe(ctx, a),
+        Some(ResourceSubcommand::ClearDescription(a)) => clear_description(ctx, a),
+    }
+}
+
+fn show(ctx: &mut AppContext, json: bool) -> anyhow::Result<()> {
+    let state = ctx.store.get_state()?;
+    if json {
+        let mut entries: Vec<String> = state
+            .resources
+            .iter()
+            .map(|(k, v)| format!("  \"#{k}\": {v}"))
+            .collect();
+        entries.sort();
+        println!("{{\n{}\n}}", entries.join(",\n"));
+    } else if state.resources.is_empty() {
+        println!("No resources tracked (all implicitly available).");
+    } else {
+        let descriptions = ctx.store.list_tag_descriptions()?;
+        let mut rows: Vec<(&String, &bool)> = state.resources.iter().collect();
+        rows.sort_by_key(|(k, _)| *k);
+        for (name, available) in rows {
+            let tag = format!("#{name}");
+            let status = if *available { "available  " } else { "unavailable" };
+            match descriptions.get(&tag) {
+                Some(desc) => println!("  {tag:<22} {status}  {desc}"),
+                None => println!("  {tag:<22} {status}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn set(ctx: &mut AppContext, resource: String, availability: Availability) -> anyhow::Result<()> {
+    let resource = if resource.starts_with('#') {
+        resource
+    } else {
+        anyhow::bail!("resource tags must start with '#', got: {resource}");
+    };
+
+    let available = matches!(availability, Availability::On);
+    let bare = resource.trim_start_matches('#');
+
+    let mut state = ctx.store.get_state()?;
+    state.resources.insert(bare.to_owned(), available);
+    ctx.store.save_state(&state)?;
+
+    let state_path = ctx.repo_root.join("state.toml");
+    let status_word = if available { "on" } else { "off" };
+    ctx.vcs.commit(
+        &[state_path],
+        &format!("next: resource {resource} {status_word}"),
+    )?;
+
+    let label = if available { "available" } else { "unavailable" };
+    ctx.log.info("resource", &format!("{resource} marked as {label}"));
+    Ok(())
+}
+
+fn describe(ctx: &mut AppContext, args: DescribeArgs) -> anyhow::Result<()> {
+    if !args.tag.starts_with('#') {
+        anyhow::bail!("resource tags must start with '#', got: {}", args.tag);
+    }
+    ctx.store.set_tag_description(&args.tag, &args.description)?;
+    let tag_path = crate::storage::tag_description_path(&ctx.repo_root, &args.tag);
+    ctx.vcs.commit(
+        &[tag_path],
+        &format!("next: resource describe {}", args.tag),
+    )?;
+    ctx.log
+        .info("resource", &format!("described {} = {}", args.tag, args.description));
+    Ok(())
+}
+
+fn clear_description(ctx: &mut AppContext, args: ClearDescriptionArgs) -> anyhow::Result<()> {
+    if !args.tag.starts_with('#') {
+        anyhow::bail!("resource tags must start with '#', got: {}", args.tag);
+    }
+    ctx.store.delete_tag_description(&args.tag)?;
+    let tag_path = crate::storage::tag_description_path(&ctx.repo_root, &args.tag);
+    ctx.vcs.commit(
+        &[tag_path],
+        &format!("next: resource clear-description {}", args.tag),
+    )?;
+    ctx.log
+        .info("resource", &format!("cleared description for {}", args.tag));
+    Ok(())
+}
