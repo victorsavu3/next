@@ -22,6 +22,11 @@ pub struct Args {
     #[arg(long)]
     pub json: bool,
 
+    /// Maximum number of tasks to show. Overrides `list_limit` in config.
+    /// Without this flag (and with no config default), all matching tasks are shown.
+    #[arg(short = 'n', long)]
+    pub limit: Option<usize>,
+
     /// Filter tokens: +tag, -tag, project:path, context:@name, user:name.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub tokens: Vec<String>,
@@ -41,7 +46,12 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let all_tasks = ctx.store.list_tasks()?;
 
     let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
-    let scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.config.scoring);
+    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.config.scoring);
+
+    let limit = args.limit.or(ctx.config.list_limit);
+    if let Some(n) = limit {
+        scored.truncate(n);
+    }
 
     if filter_args.json {
         println!("{}", serde_json::to_string_pretty(&scored)?);

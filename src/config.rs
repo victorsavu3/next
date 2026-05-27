@@ -194,6 +194,12 @@ pub struct Config {
     #[serde(default = "default_next_count")]
     pub next_count: usize,
 
+    /// Optional cap on `next list` output.  When set, `next list` truncates
+    /// results to this many tasks (same as passing `--limit N`).  `None`
+    /// (the default) means no cap — all matching tasks are shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_limit: Option<usize>,
+
     /// Default repository root.  When set, `next` uses this path instead of
     /// walking up from the current directory.  Can be overridden at runtime
     /// with the `--repo` flag.
@@ -209,6 +215,7 @@ impl Default for Config {
             forgejo: ForgejoConfig::default(),
             forecast_horizon_days: default_forecast_horizon_days(),
             next_count: default_next_count(),
+            list_limit: None,
             repository: None,
         }
     }

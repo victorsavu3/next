@@ -142,9 +142,12 @@ next list [filters...]
 | `--future` | flag | false | Include tasks with a future `start` date and planned recurrence instances. |
 | `--all` | flag | false | Disable all implicit filtering: contexts, resources, blocked tasks, and future `start` dates. |
 | `--all-users` | flag | false | Bypass the user filter; show tasks for all assignees. |
+| `-n` / `--limit` | integer | — | Show at most N tasks. Overrides `list_limit` in config. |
 | `--json` | flag | false | Emit task list as JSON. |
 
 Filter tokens (see [Filter Syntax](#filter-syntax)) may be placed anywhere in the argument list.
+
+A default limit can be set in config as `list_limit = N`. Without a limit (and with no config default), all matching tasks are shown.
 
 **Examples**
 

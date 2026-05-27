@@ -150,3 +150,68 @@ fn list_excludes_done_tasks_by_default() {
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].task.title, "Open task");
 }
+
+// ---------------------------------------------------------------------------
+// Limit flag
+// ---------------------------------------------------------------------------
+
+fn list_args_with_limit(limit: Option<usize>) -> next::cli::commands::list::Args {
+    next::cli::commands::list::Args {
+        future: false,
+        all: false,
+        all_users: false,
+        json: false,
+        limit,
+        tokens: vec![],
+    }
+}
+
+#[test]
+fn list_limit_truncates_results() {
+    let mut env = common::setup();
+    for i in 1..=5 {
+        add::run(add_args(&format!("task {i}")), &mut env.ctx).unwrap();
+    }
+    // Without limit all five tasks are returned.
+    let all = apply_filter(&mut env, vec![]);
+    assert_eq!(all.len(), 5);
+
+    // With limit = 3 only three are returned.
+    next::cli::commands::list::run(list_args_with_limit(Some(3)), &mut env.ctx).unwrap();
+    let store = &env.ctx.store;
+    let tasks = store.list_tasks().unwrap();
+    // Verify the store still has all five (limit only affects output, not storage).
+    assert_eq!(tasks.len(), 5);
+}
+
+#[test]
+fn list_limit_zero_shows_nothing() {
+    let mut env = common::setup();
+    add::run(add_args("task one"), &mut env.ctx).unwrap();
+    next::cli::commands::list::run(list_args_with_limit(Some(0)), &mut env.ctx).unwrap();
+}
+
+#[test]
+fn list_config_limit_applies_when_no_flag() {
+    let mut env = common::setup();
+    for i in 1..=5 {
+        add::run(add_args(&format!("task {i}")), &mut env.ctx).unwrap();
+    }
+    env.ctx.config.list_limit = Some(2);
+    // run() should truncate to 2 without passing --limit
+    next::cli::commands::list::run(list_args_with_limit(None), &mut env.ctx).unwrap();
+    // The store still has five tasks.
+    assert_eq!(env.ctx.store.list_tasks().unwrap().len(), 5);
+}
+
+#[test]
+fn list_flag_overrides_config_limit() {
+    let mut env = common::setup();
+    for i in 1..=5 {
+        add::run(add_args(&format!("task {i}")), &mut env.ctx).unwrap();
+    }
+    env.ctx.config.list_limit = Some(1);
+    // --limit 4 overrides config limit of 1
+    next::cli::commands::list::run(list_args_with_limit(Some(4)), &mut env.ctx).unwrap();
+    assert_eq!(env.ctx.store.list_tasks().unwrap().len(), 5);
+}

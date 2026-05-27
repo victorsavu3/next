@@ -27,6 +27,7 @@ fn main() -> anyhow::Result<()> {
             all: false,
             all_users: false,
             json: false,
+            limit: None,
             tokens: vec![],
         })
     });
