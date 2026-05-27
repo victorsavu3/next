@@ -1,8 +1,9 @@
 use std::{
-    fs,
-    path::PathBuf,
+    fs::{self, File, OpenOptions},
+    path::{Path, PathBuf},
 };
 
+use fs4::FileExt;
 use next::{
     domain::{state::GlobalState, task::Task},
     error::{AppError, Result},
@@ -28,6 +29,61 @@ impl TomlStore {
 
     fn state_path(&self) -> PathBuf {
         self.root.join("state.toml")
+    }
+
+    fn repo_lock_path(&self) -> PathBuf {
+        self.root.join(".next.lock")
+    }
+
+    fn state_lock_path(&self) -> PathBuf {
+        self.root.join(".state.lock")
+    }
+
+    /// Acquires an exclusive repository-level lock.
+    ///
+    /// The lock is released when the returned `File` is dropped.  Both
+    /// `TomlStore` (task writes) and `GitBackend` (commit/pull/push) use the
+    /// same `.next.lock` file, so they are mutually exclusive across threads
+    /// and processes.
+    pub(crate) fn acquire_repo_lock(&self) -> Result<File> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.repo_lock_path())
+            .map_err(|e| AppError::Other(format!("open .next.lock: {e}")))?;
+        file.lock_exclusive()
+            .map_err(|e| AppError::Other(format!("acquire repo lock: {e}")))?;
+        Ok(file)
+    }
+
+    /// Acquires a shared (read) lock on the state lock file.
+    fn acquire_state_read_lock(&self) -> Result<File> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.state_lock_path())
+            .map_err(|e| AppError::Other(format!("open .state.lock: {e}")))?;
+        file.lock_shared()
+            .map_err(|e| AppError::Other(format!("acquire state read lock: {e}")))?;
+        Ok(file)
+    }
+
+    /// Acquires an exclusive (write) lock on the state lock file.
+    fn acquire_state_write_lock(&self) -> Result<File> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.state_lock_path())
+            .map_err(|e| AppError::Other(format!("open .state.lock: {e}")))?;
+        file.lock_exclusive()
+            .map_err(|e| AppError::Other(format!("acquire state write lock: {e}")))?;
+        Ok(file)
     }
 
     /// Canonical filename for a task (no directory prefix).
@@ -69,7 +125,6 @@ impl TomlStore {
         }
 
         for path in priority.into_iter().chain(rest) {
-            // Skip unreadable or malformed files; only propagate IO errors.
             let content = match fs::read_to_string(&path) {
                 Ok(c) => c,
                 Err(_) => continue,
@@ -101,11 +156,27 @@ impl TomlStore {
     }
 }
 
+/// Writes `content` to `path` atomically by first writing to `<path>.tmp`
+/// then calling `rename`, which is atomic on POSIX systems.
+///
+/// Readers always see either the old complete file or the new complete file —
+/// never a partially-written one.
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    let mut tmp_name = path.as_os_str().to_owned();
+    tmp_name.push(".tmp");
+    let tmp_path = PathBuf::from(tmp_name);
+    fs::write(&tmp_path, content)
+        .map_err(|e| AppError::Other(format!("write {}: {e}", tmp_path.display())))?;
+    fs::rename(&tmp_path, path)
+        .map_err(|e| AppError::Other(format!("rename to {}: {e}", path.display())))?;
+    Ok(())
+}
+
 /// Converts a task title to a URL-safe slug component:
 /// lowercase, runs of non-alphanumeric chars collapsed to a single `-`.
 fn title_to_slug(title: &str) -> String {
     let mut slug = String::new();
-    let mut prev_dash = true; // suppress leading dash
+    let mut prev_dash = true;
     for c in title.chars() {
         if c.is_alphanumeric() {
             slug.push(c.to_ascii_lowercase());
@@ -115,7 +186,6 @@ fn title_to_slug(title: &str) -> String {
             prev_dash = true;
         }
     }
-    // strip trailing dash
     slug.trim_end_matches('-').to_owned()
 }
 
@@ -133,7 +203,6 @@ impl Store for TomlStore {
     }
 
     fn get_task_by_slug(&self, slug: &str) -> Result<Option<Task>> {
-        // Fast path: slug-named files live at a predictable location.
         let candidate = self.tasks_dir().join(format!("{slug}.toml"));
         if candidate.exists() {
             let content = fs::read_to_string(&candidate)?;
@@ -143,7 +212,6 @@ impl Store for TomlStore {
                 }
             }
         }
-        // Fallback: linear scan (handles stale or renamed files).
         Ok(self
             .read_all_tasks()?
             .into_iter()
@@ -163,7 +231,8 @@ impl Store for TomlStore {
     }
 
     fn save_task(&mut self, task: &Task) -> Result<()> {
-        // Reject slug conflicts with other tasks.
+        let _lock = self.acquire_repo_lock()?;
+
         if let Some(ref slug) = task.slug {
             if let Some(existing) = self.get_task_by_slug(slug)? {
                 if existing.id != task.id {
@@ -175,7 +244,6 @@ impl Store for TomlStore {
         let new_filename = Self::task_filename(task);
         let new_path = self.tasks_dir().join(&new_filename);
 
-        // Remove stale file when the name changes (slug added/changed, title changed).
         if let Some(old_path) = self.find_task_file(task.id)? {
             if old_path != new_path {
                 fs::remove_file(&old_path)?;
@@ -184,11 +252,12 @@ impl Store for TomlStore {
 
         let content = toml::to_string_pretty(task)
             .map_err(|e| AppError::Other(format!("TOML serialization error: {e}")))?;
-        fs::write(new_path, content)?;
+        atomic_write(&new_path, &content)?;
         Ok(())
     }
 
     fn delete_task(&mut self, id: Uuid) -> Result<()> {
+        let _lock = self.acquire_repo_lock()?;
         match self.find_task_file(id)? {
             Some(path) => Ok(fs::remove_file(path)?),
             None => Err(AppError::TaskNotFound(id.to_string())),
@@ -210,6 +279,7 @@ impl Store for TomlStore {
     }
 
     fn get_state(&self) -> Result<GlobalState> {
+        let _lock = self.acquire_state_read_lock()?;
         let path = self.state_path();
         if !path.exists() {
             return Ok(GlobalState::default());
@@ -220,9 +290,10 @@ impl Store for TomlStore {
     }
 
     fn save_state(&mut self, state: &GlobalState) -> Result<()> {
+        let _lock = self.acquire_state_write_lock()?;
         let content = toml::to_string_pretty(state)
             .map_err(|e| AppError::Other(format!("TOML serialization error: {e}")))?;
-        fs::write(self.state_path(), content)?;
+        atomic_write(&self.state_path(), &content)?;
         Ok(())
     }
 }
@@ -326,7 +397,6 @@ mod tests {
     fn find_tasks_by_prefix_no_match() {
         let (_dir, mut store) = temp_store();
         store.save_task(&Task::new("Some task")).unwrap();
-        // Use all zeroes — astronomically unlikely to match a real UUID.
         let found = store.find_tasks_by_prefix("00000000").unwrap();
         assert!(found.is_empty());
     }
@@ -396,7 +466,6 @@ mod tests {
     fn state_round_trip() {
         let (_dir, mut store) = temp_store();
 
-        // Default state when file is absent.
         let default = store.get_state().unwrap();
         assert!(default.active_contexts.is_empty());
 

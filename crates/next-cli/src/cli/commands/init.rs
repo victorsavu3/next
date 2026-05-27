@@ -15,7 +15,7 @@ pub struct Args {}
 /// Steps:
 ///  1. `git init` if `.git` is absent.
 ///  2. Create `tasks/` if absent.
-///  3. Append `.next.db`, `next.log`, `next.log.1` to `.gitignore` if not already present.
+///  3. Append `.next.db`, `.next.lock`, `.state.lock`, `next.log`, `next.log.1` to `.gitignore`.
 ///  4. Create an initial git commit when the repository has no commits yet.
 pub fn run(_args: Args, dir: &Path) -> anyhow::Result<()> {
     // Step 1 — git repository.
@@ -38,7 +38,7 @@ pub fn run(_args: Args, dir: &Path) -> anyhow::Result<()> {
 
     // Step 3 — .gitignore entries for generated files.
     let gitignore_path = dir.join(".gitignore");
-    for entry in &[".next.db", "next.log", "next.log.1"] {
+    for entry in &[".next.db", ".next.lock", ".state.lock", "next.log", "next.log.1"] {
         ensure_gitignored(&gitignore_path, entry)?;
     }
 

@@ -1,8 +1,10 @@
 use std::{
+    fs::{File, OpenOptions},
     path::{Path, PathBuf},
     sync::Mutex,
 };
 
+use fs4::FileExt;
 use git2::{build::CheckoutBuilder, Repository};
 use next::{
     error::{AppError, Result},
@@ -12,6 +14,8 @@ use next::{
 // Repository is Send but not Sync; wrapping in Mutex makes GitBackend Sync.
 pub struct GitBackend {
     repo: Mutex<Repository>,
+    /// Path to `.next.lock` — the same file used by `TomlStore::acquire_repo_lock`.
+    lock_path: PathBuf,
 }
 
 impl GitBackend {
@@ -20,7 +24,23 @@ impl GitBackend {
             .map_err(|e| AppError::Other(format!("failed to open git repository: {e}")))?;
         Ok(Self {
             repo: Mutex::new(repo),
+            lock_path: root.join(".next.lock"),
         })
+    }
+
+    /// Acquires the repository-level exclusive lock shared with `TomlStore`.
+    /// Released when the returned `File` is dropped.
+    fn acquire_repo_lock(&self) -> Result<File> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&self.lock_path)
+            .map_err(|e| AppError::Other(format!("open .next.lock: {e}")))?;
+        file.lock_exclusive()
+            .map_err(|e| AppError::Other(format!("acquire repo lock: {e}")))?;
+        Ok(file)
     }
 }
 
@@ -57,6 +77,7 @@ fn remote_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
 
 impl VcsBackend for GitBackend {
     fn commit(&self, paths: &[PathBuf], message: &str) -> Result<()> {
+        let _lock = self.acquire_repo_lock()?;
         let repo = self
             .repo
             .lock()
@@ -110,6 +131,7 @@ impl VcsBackend for GitBackend {
     }
 
     fn pull(&self) -> Result<PullResult> {
+        let _lock = self.acquire_repo_lock()?;
         let repo = self
             .repo
             .lock()
@@ -246,6 +268,7 @@ impl VcsBackend for GitBackend {
     }
 
     fn push(&self) -> Result<()> {
+        let _lock = self.acquire_repo_lock()?;
         let repo = self
             .repo
             .lock()
