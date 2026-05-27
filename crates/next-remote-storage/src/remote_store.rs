@@ -4,6 +4,8 @@
 //! implemented" message. When the server protocol is finalised the stubs will
 //! be replaced with HTTP calls.
 
+use std::collections::HashMap;
+
 use uuid::Uuid;
 
 use next::{
@@ -77,6 +79,22 @@ impl Store for RemoteStore {
     }
 
     fn save_state(&mut self, _state: &GlobalState) -> Result<()> {
+        Err(self.not_implemented())
+    }
+
+    fn get_tag_description(&self, _tag: &str) -> Result<Option<String>> {
+        Err(self.not_implemented())
+    }
+
+    fn set_tag_description(&mut self, _tag: &str, _description: &str) -> Result<()> {
+        Err(self.not_implemented())
+    }
+
+    fn delete_tag_description(&mut self, _tag: &str) -> Result<()> {
+        Err(self.not_implemented())
+    }
+
+    fn list_tag_descriptions(&self) -> Result<HashMap<String, String>> {
         Err(self.not_implemented())
     }
 }

@@ -77,11 +77,8 @@ fn tag_describe_stores_description() {
     let mut env = common::setup();
     tag::run(describe("@work", "Tasks done at the office"), &mut env.ctx).unwrap();
 
-    let state = env.ctx.store.get_state().unwrap();
-    assert_eq!(
-        state.tag_descriptions.get("@work").map(String::as_str),
-        Some("Tasks done at the office")
-    );
+    let desc = env.ctx.store.get_tag_description("@work").unwrap();
+    assert_eq!(desc.as_deref(), Some("Tasks done at the office"));
 }
 
 #[test]
@@ -90,11 +87,8 @@ fn tag_describe_updates_existing_description() {
     tag::run(describe("@home", "first"), &mut env.ctx).unwrap();
     tag::run(describe("@home", "second"), &mut env.ctx).unwrap();
 
-    let state = env.ctx.store.get_state().unwrap();
-    assert_eq!(
-        state.tag_descriptions.get("@home").map(String::as_str),
-        Some("second")
-    );
+    let desc = env.ctx.store.get_tag_description("@home").unwrap();
+    assert_eq!(desc.as_deref(), Some("second"));
 }
 
 #[test]
@@ -114,8 +108,8 @@ fn tag_clear_removes_description() {
     tag::run(describe("python", "Python tasks"), &mut env.ctx).unwrap();
     tag::run(clear_description("python"), &mut env.ctx).unwrap();
 
-    let state = env.ctx.store.get_state().unwrap();
-    assert!(!state.tag_descriptions.contains_key("python"));
+    let desc = env.ctx.store.get_tag_description("python").unwrap();
+    assert!(desc.is_none());
 }
 
 #[test]
@@ -135,9 +129,33 @@ fn tag_description_survives_store_reload() {
     tag::run(describe("#vacation", "Away from keyboard"), &mut env.ctx).unwrap();
 
     let (fresh_store, _) = next_storage::open(env.ctx.repo_root.clone()).unwrap();
-    let state = fresh_store.get_state().unwrap();
-    assert_eq!(
-        state.tag_descriptions.get("#vacation").map(String::as_str),
-        Some("Away from keyboard")
-    );
+    let desc = fresh_store.get_tag_description("#vacation").unwrap();
+    assert_eq!(desc.as_deref(), Some("Away from keyboard"));
+}
+
+// ---------------------------------------------------------------------------
+// Hierarchical tags
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tag_describe_hierarchical_tag() {
+    let mut env = common::setup();
+    tag::run(describe("@home/kitchen", "Tasks in the kitchen"), &mut env.ctx).unwrap();
+
+    let desc = env.ctx.store.get_tag_description("@home/kitchen").unwrap();
+    assert_eq!(desc.as_deref(), Some("Tasks in the kitchen"));
+}
+
+#[test]
+fn list_tag_descriptions_returns_all() {
+    let mut env = common::setup();
+    tag::run(describe("@work", "Work tasks"), &mut env.ctx).unwrap();
+    tag::run(describe("#printer", "Office printer"), &mut env.ctx).unwrap();
+    tag::run(describe("python", "Python projects"), &mut env.ctx).unwrap();
+
+    let all = env.ctx.store.list_tag_descriptions().unwrap();
+    assert_eq!(all.get("@work").map(String::as_str), Some("Work tasks"));
+    assert_eq!(all.get("#printer").map(String::as_str), Some("Office printer"));
+    assert_eq!(all.get("python").map(String::as_str), Some("Python projects"));
+    assert_eq!(all.len(), 3);
 }

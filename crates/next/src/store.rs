@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use uuid::Uuid;
 
@@ -63,6 +63,24 @@ pub trait Store: Send + Sync {
     fn get_state(&self) -> Result<GlobalState>;
 
     fn save_state(&mut self, state: &GlobalState) -> Result<()>;
+
+    // --- Tag descriptions ---
+    //
+    // Each tag description is stored as an individual file (`tags/<tag>.toml`)
+    // so that different tags can be committed and synced independently.
+    // Slashes in tag names (e.g. `@home/kitchen`) map to actual subdirectories.
+
+    /// Returns the description for `tag`, or `None` if not set.
+    fn get_tag_description(&self, tag: &str) -> Result<Option<String>>;
+
+    /// Sets or replaces the description for `tag`.
+    fn set_tag_description(&mut self, tag: &str, description: &str) -> Result<()>;
+
+    /// Deletes the description for `tag`. Errors if no description exists.
+    fn delete_tag_description(&mut self, tag: &str) -> Result<()>;
+
+    /// Returns all tag descriptions as a map of tag → description.
+    fn list_tag_descriptions(&self) -> Result<HashMap<String, String>>;
 }
 
 /// Version-control backend.

@@ -30,3 +30,12 @@ pub fn open(root: PathBuf) -> Result<(CachedStore, GitBackend)> {
 pub fn task_path(root: &Path, task: &Task) -> PathBuf {
     root.join("tasks").join(TomlStore::task_filename(task))
 }
+
+/// Returns the path where the description for `tag` is stored under `root`.
+///
+/// The tag string maps directly to a path: `@home/kitchen` →
+/// `<root>/tags/@home/kitchen.toml`.  Slashes in the tag name become real
+/// directory separators, so hierarchical tags form a natural directory tree.
+pub fn tag_description_path(root: &Path, tag: &str) -> PathBuf {
+    root.join("tags").join(format!("{tag}.toml"))
+}

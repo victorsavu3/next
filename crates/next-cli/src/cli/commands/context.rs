@@ -58,7 +58,7 @@ fn show(ctx: &mut AppContext) -> anyhow::Result<()> {
     } else {
         println!("Active contexts:");
         for c in &state.active_contexts {
-            match state.tag_descriptions.get(c) {
+            match ctx.store.get_tag_description(c)? {
                 Some(desc) => println!("  {c:<28}  {desc}"),
                 None => println!("  {c}"),
             }
@@ -99,14 +99,10 @@ fn describe(ctx: &mut AppContext, args: DescribeArgs) -> anyhow::Result<()> {
     if !args.tag.starts_with('@') {
         anyhow::bail!("context tags must start with '@', got: {}", args.tag);
     }
-    let mut state = ctx.store.get_state()?;
-    state
-        .tag_descriptions
-        .insert(args.tag.clone(), args.description.clone());
-    ctx.store.save_state(&state)?;
-    let state_path = ctx.repo_root.join("state.toml");
+    ctx.store.set_tag_description(&args.tag, &args.description)?;
+    let tag_path = next_storage::tag_description_path(&ctx.repo_root, &args.tag);
     ctx.vcs.commit(
-        &[state_path],
+        &[tag_path],
         &format!("next: context describe {}", args.tag),
     )?;
     ctx.log
@@ -118,14 +114,10 @@ fn clear_description(ctx: &mut AppContext, args: ClearDescriptionArgs) -> anyhow
     if !args.tag.starts_with('@') {
         anyhow::bail!("context tags must start with '@', got: {}", args.tag);
     }
-    let mut state = ctx.store.get_state()?;
-    if state.tag_descriptions.remove(&args.tag).is_none() {
-        anyhow::bail!("no description set for context {:?}", args.tag);
-    }
-    ctx.store.save_state(&state)?;
-    let state_path = ctx.repo_root.join("state.toml");
+    ctx.store.delete_tag_description(&args.tag)?;
+    let tag_path = next_storage::tag_description_path(&ctx.repo_root, &args.tag);
     ctx.vcs.commit(
-        &[state_path],
+        &[tag_path],
         &format!("next: context clear-description {}", args.tag),
     )?;
     ctx.log

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
 };
@@ -9,7 +10,14 @@ use next::{
     error::{AppError, Result},
     store::Store,
 };
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+/// On-disk format for a single tag description file (`tags/<tag>.toml`).
+#[derive(Debug, Serialize, Deserialize)]
+struct TagEntry {
+    pub description: String,
+}
 
 pub struct TomlStore {
     root: PathBuf,
@@ -17,10 +25,48 @@ pub struct TomlStore {
 
 impl TomlStore {
     /// Opens (or initialises) a store rooted at `root`.
-    /// Creates `tasks/` if it does not exist.
+    /// Creates `tasks/` and `tags/` if they do not exist.
+    /// Migrates `tag_descriptions` from `state.toml` into per-tag files on first open.
     pub fn open(root: PathBuf) -> Result<Self> {
         fs::create_dir_all(root.join("tasks"))?;
-        Ok(Self { root })
+        fs::create_dir_all(root.join("tags"))?;
+        let mut this = Self { root };
+        this.migrate_tag_descriptions()?;
+        Ok(this)
+    }
+
+    /// If `state.toml` contains a legacy `tag_descriptions` table, move each
+    /// entry into its own `tags/<tag>.toml` file and re-save state without it.
+    fn migrate_tag_descriptions(&mut self) -> Result<()> {
+        let state_path = self.state_path();
+        if !state_path.exists() {
+            return Ok(());
+        }
+        let content = fs::read_to_string(&state_path)?;
+        let raw: toml::Value = toml::from_str(&content)
+            .map_err(|e| AppError::Other(format!("parse state.toml during migration: {e}")))?;
+
+        let Some(toml::Value::Table(descs)) = raw.get("tag_descriptions") else {
+            return Ok(());
+        };
+        if descs.is_empty() {
+            return Ok(());
+        }
+
+        let pairs: Vec<(String, String)> = descs
+            .iter()
+            .filter_map(|(tag, val)| val.as_str().map(|s| (tag.clone(), s.to_owned())))
+            .collect();
+
+        for (tag, desc) in pairs {
+            self.set_tag_description(&tag, &desc)?;
+        }
+
+        // Re-save state; GlobalState no longer has tag_descriptions so the
+        // field is silently dropped on the next write.
+        let state = self.get_state()?;
+        self.save_state(&state)?;
+        Ok(())
     }
 
     fn tasks_dir(&self) -> PathBuf {
@@ -37,6 +83,16 @@ impl TomlStore {
 
     fn state_lock_path(&self) -> PathBuf {
         self.root.join(".state.lock")
+    }
+
+    fn tags_dir(&self) -> PathBuf {
+        self.root.join("tags")
+    }
+
+    /// Absolute path for the description file of `tag`.
+    /// `@home/kitchen` → `<root>/tags/@home/kitchen.toml`
+    fn tag_file_path(&self, tag: &str) -> PathBuf {
+        self.tags_dir().join(format!("{tag}.toml"))
     }
 
     /// Acquires an exclusive repository-level lock.
@@ -172,6 +228,29 @@ fn atomic_write(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
+/// Recursively walks `dir`, collecting `TagEntry` files into `result`.
+/// Each file's path relative to `root` (without `.toml`) becomes the tag key.
+fn walk_tags_dir(dir: &Path, root: &Path, result: &mut HashMap<String, String>) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            walk_tags_dir(&path, root, result)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(te) = toml::from_str::<TagEntry>(&content) {
+                    if let Ok(rel) = path.strip_prefix(root) {
+                        // rel = "@home/kitchen.toml" → tag = "@home/kitchen"
+                        if let Some(tag) = rel.with_extension("").to_str() {
+                            result.insert(tag.to_owned(), te.description);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Converts a task title to a URL-safe slug component:
 /// lowercase, runs of non-alphanumeric chars collapsed to a single `-`.
 fn title_to_slug(title: &str) -> String {
@@ -295,6 +374,61 @@ impl Store for TomlStore {
             .map_err(|e| AppError::Other(format!("TOML serialization error: {e}")))?;
         atomic_write(&self.state_path(), &content)?;
         Ok(())
+    }
+
+    fn get_tag_description(&self, tag: &str) -> Result<Option<String>> {
+        let path = self.tag_file_path(tag);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = fs::read_to_string(&path)?;
+        let entry = toml::from_str::<TagEntry>(&content)
+            .map_err(|e| AppError::Other(format!("parse {}: {e}", path.display())))?;
+        Ok(Some(entry.description))
+    }
+
+    fn set_tag_description(&mut self, tag: &str, description: &str) -> Result<()> {
+        let _lock = self.acquire_repo_lock()?;
+        let path = self.tag_file_path(tag);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content = toml::to_string_pretty(&TagEntry { description: description.to_owned() })
+            .map_err(|e| AppError::Other(format!("TOML serialization error: {e}")))?;
+        atomic_write(&path, &content)?;
+        Ok(())
+    }
+
+    fn delete_tag_description(&mut self, tag: &str) -> Result<()> {
+        let _lock = self.acquire_repo_lock()?;
+        let path = self.tag_file_path(tag);
+        if !path.exists() {
+            return Err(AppError::Other(format!("no description set for tag {tag:?}")));
+        }
+        fs::remove_file(&path)?;
+        // Remove empty parent directories up to (but not including) tags/.
+        let tags_dir = self.tags_dir();
+        let mut parent = path.parent();
+        while let Some(dir) = parent {
+            if dir == tags_dir {
+                break;
+            }
+            if fs::read_dir(dir).map(|mut d| d.next().is_none()).unwrap_or(false) {
+                let _ = fs::remove_dir(dir);
+            }
+            parent = dir.parent();
+        }
+        Ok(())
+    }
+
+    fn list_tag_descriptions(&self) -> Result<HashMap<String, String>> {
+        let tags_dir = self.tags_dir();
+        if !tags_dir.exists() {
+            return Ok(HashMap::new());
+        }
+        let mut result = HashMap::new();
+        walk_tags_dir(&tags_dir, &tags_dir, &mut result)?;
+        Ok(result)
     }
 }
 

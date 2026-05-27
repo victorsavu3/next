@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Mutex};
+use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
 use next::{
     domain::{state::GlobalState, task::Task},
@@ -191,6 +191,22 @@ impl Store for CachedStore {
         let json = serde_json::to_string(state)
             .map_err(|e| AppError::Other(format!("serialize state: {e}")))?;
         self.with_conn(|conn| set_meta(conn, "state", &json))
+    }
+
+    fn get_tag_description(&self, tag: &str) -> Result<Option<String>> {
+        self.inner.get_tag_description(tag)
+    }
+
+    fn set_tag_description(&mut self, tag: &str, description: &str) -> Result<()> {
+        self.inner.set_tag_description(tag, description)
+    }
+
+    fn delete_tag_description(&mut self, tag: &str) -> Result<()> {
+        self.inner.delete_tag_description(tag)
+    }
+
+    fn list_tag_descriptions(&self) -> Result<HashMap<String, String>> {
+        self.inner.list_tag_descriptions()
     }
 }
 

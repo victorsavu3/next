@@ -74,12 +74,13 @@ fn show(ctx: &mut AppContext, json: bool) -> anyhow::Result<()> {
     } else if state.resources.is_empty() {
         println!("No resources tracked (all implicitly available).");
     } else {
+        let descriptions = ctx.store.list_tag_descriptions()?;
         let mut rows: Vec<(&String, &bool)> = state.resources.iter().collect();
         rows.sort_by_key(|(k, _)| *k);
         for (name, available) in rows {
             let tag = format!("#{name}");
             let status = if *available { "available  " } else { "unavailable" };
-            match state.tag_descriptions.get(&tag) {
+            match descriptions.get(&tag) {
                 Some(desc) => println!("  {tag:<22} {status}  {desc}"),
                 None => println!("  {tag:<22} {status}"),
             }
@@ -118,14 +119,10 @@ fn describe(ctx: &mut AppContext, args: DescribeArgs) -> anyhow::Result<()> {
     if !args.tag.starts_with('#') {
         anyhow::bail!("resource tags must start with '#', got: {}", args.tag);
     }
-    let mut state = ctx.store.get_state()?;
-    state
-        .tag_descriptions
-        .insert(args.tag.clone(), args.description.clone());
-    ctx.store.save_state(&state)?;
-    let state_path = ctx.repo_root.join("state.toml");
+    ctx.store.set_tag_description(&args.tag, &args.description)?;
+    let tag_path = next_storage::tag_description_path(&ctx.repo_root, &args.tag);
     ctx.vcs.commit(
-        &[state_path],
+        &[tag_path],
         &format!("next: resource describe {}", args.tag),
     )?;
     ctx.log
@@ -137,14 +134,10 @@ fn clear_description(ctx: &mut AppContext, args: ClearDescriptionArgs) -> anyhow
     if !args.tag.starts_with('#') {
         anyhow::bail!("resource tags must start with '#', got: {}", args.tag);
     }
-    let mut state = ctx.store.get_state()?;
-    if state.tag_descriptions.remove(&args.tag).is_none() {
-        anyhow::bail!("no description set for resource {:?}", args.tag);
-    }
-    ctx.store.save_state(&state)?;
-    let state_path = ctx.repo_root.join("state.toml");
+    ctx.store.delete_tag_description(&args.tag)?;
+    let tag_path = next_storage::tag_description_path(&ctx.repo_root, &args.tag);
     ctx.vcs.commit(
-        &[state_path],
+        &[tag_path],
         &format!("next: resource clear-description {}", args.tag),
     )?;
     ctx.log

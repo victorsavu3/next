@@ -43,17 +43,16 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 }
 
 fn list(ctx: &mut AppContext) -> anyhow::Result<()> {
-    let state = ctx.store.get_state()?;
+    let descriptions = ctx.store.list_tag_descriptions()?;
     let tasks = ctx.store.list_tasks()?;
 
-    // Collect every tag seen on any task plus every tag that has a description.
     let mut all_tags: BTreeSet<String> = BTreeSet::new();
     for task in &tasks {
         for t in &task.tags {
             all_tags.insert(t.clone());
         }
     }
-    for t in state.tag_descriptions.keys() {
+    for t in descriptions.keys() {
         all_tags.insert(t.clone());
     }
 
@@ -74,9 +73,9 @@ fn list(ctx: &mut AppContext) -> anyhow::Result<()> {
         }
     }
 
-    print_group("Contexts (@)", &contexts, &state.tag_descriptions);
-    print_group("Resources (#)", &resources, &state.tag_descriptions);
-    print_group("Freeform", &freeform, &state.tag_descriptions);
+    print_group("Contexts (@)", &contexts, &descriptions);
+    print_group("Resources (#)", &resources, &descriptions);
+    print_group("Freeform", &freeform, &descriptions);
 
     Ok(())
 }
@@ -101,28 +100,20 @@ fn print_group(
 
 fn describe(ctx: &mut AppContext, args: DescribeArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut state = ctx.store.get_state()?;
-    state
-        .tag_descriptions
-        .insert(args.tag.clone(), args.description.clone());
-    ctx.store.save_state(&state)?;
-    let state_path = ctx.repo_root.join("state.toml");
+    ctx.store.set_tag_description(&args.tag, &args.description)?;
+    let tag_path = next_storage::tag_description_path(&ctx.repo_root, &args.tag);
     ctx.vcs
-        .commit(&[state_path], &format!("next: tag describe {}", args.tag))?;
+        .commit(&[tag_path], &format!("next: tag describe {}", args.tag))?;
     ctx.log
         .info("tag", &format!("described {} = {}", args.tag, args.description));
     Ok(())
 }
 
 fn clear_description(ctx: &mut AppContext, args: ClearDescriptionArgs) -> anyhow::Result<()> {
-    let mut state = ctx.store.get_state()?;
-    if state.tag_descriptions.remove(&args.tag).is_none() {
-        anyhow::bail!("no description set for tag {:?}", args.tag);
-    }
-    ctx.store.save_state(&state)?;
-    let state_path = ctx.repo_root.join("state.toml");
+    ctx.store.delete_tag_description(&args.tag)?;
+    let tag_path = next_storage::tag_description_path(&ctx.repo_root, &args.tag);
     ctx.vcs.commit(
-        &[state_path],
+        &[tag_path],
         &format!("next: tag clear-description {}", args.tag),
     )?;
     ctx.log
