@@ -451,7 +451,7 @@ next tag
 ### `next tag describe`
 
 Set a human-readable description for a tag, context, or resource. The description is
-stored in `state.toml` under `tag_descriptions` and is shown in `next tag`,
+stored in a per-tag TOML file under `tags/` and is shown in `next tag`,
 `next context`, and `next resource` output.
 
 **Usage**
@@ -824,10 +824,16 @@ to inspect a single task and its direct children.
 
 ### Tag descriptions
 
-Descriptions are stored in `state.toml` under `[tag_descriptions]` as a flat map from
-full tag string to description text. All three commands (`next tag describe`,
-`next context describe`, `next resource describe`) write to the same map. The key is
-always the full tag including prefix (`@work`, `#printer`, `python`).
+Descriptions are stored as individual TOML files under the `tags/` directory.  The tag
+string maps directly to a path: `@work` → `tags/@work.toml`, `#printer` →
+`tags/#printer.toml`, `@home/kitchen` → `tags/@home/kitchen.toml` (slashes in
+hierarchical tags become real directory separators).  All three commands (`next tag
+describe`, `next context describe`, `next resource describe`) write to the same
+directory.
+
+Repositories that still contain the old `[tag_descriptions]` table in `state.toml` are
+migrated automatically on first open: each entry is written to its own `tags/*.toml`
+file and the table is removed from `state.toml`.
 
 ### `data` field
 

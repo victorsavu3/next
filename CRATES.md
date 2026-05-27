@@ -67,6 +67,10 @@ pub trait Store: Send + Sync {
     fn get_task_by_webcal_uid(&self, uid: &str) -> Result<Option<Task>>;
     fn get_state(&self) -> Result<GlobalState>;
     fn save_state(&mut self, state: &GlobalState) -> Result<()>;
+    fn get_tag_description(&self, tag: &str) -> Result<Option<String>>;
+    fn set_tag_description(&mut self, tag: &str, desc: &str) -> Result<()>;
+    fn delete_tag_description(&mut self, tag: &str) -> Result<()>;
+    fn list_tag_descriptions(&self) -> Result<HashMap<String, String>>;
 }
 
 pub trait VcsBackend: Send + Sync {
@@ -83,6 +87,7 @@ pub trait VcsBackend: Send + Sync {
 pub struct Config {
     pub backend: BackendConfig,
     pub scoring: ScoringWeights,
+    pub repository: Option<PathBuf>,  // default repo path; overridden by --repo flag
 }
 pub enum BackendKind { Local, Remote }
 pub struct BackendConfig { pub kind: BackendKind, pub remote: Option<RemoteBackendConfig> }
@@ -111,6 +116,7 @@ Implements `Store` and `VcsBackend` against real files and git.
 crates/next-storage/src/
   lib.rs            # pub fn open(root: PathBuf) -> Result<(CachedStore, GitBackend)>
                     # pub fn task_path(root: &Path, task: &Task) -> PathBuf
+                    # pub fn tag_description_path(root: &Path, tag: &str) -> PathBuf
   cached_store.rs   # CachedStore: wraps TomlStore with an SQLite read cache
   toml_store.rs     # TomlStore: source-of-truth TOML file I/O
   git_backend.rs    # GitBackend: implements VcsBackend via git2
@@ -123,14 +129,23 @@ crates/next-storage/src/
 - **Writes** write to TOML first (authoritative), then update SQLite in-place
 - **Cache invalidation**: on `open()`, HEAD hash mismatch triggers a full rebuild from TOML
 
-**`TomlStore`** holds the repo root path. It reads and writes one `.toml` file per task
-in the `tasks/` subdirectory and `state.toml` at the root.
+**`TomlStore`** holds the repo root path. It reads and writes:
+- One `.toml` file per task under `tasks/`
+- `state.toml` at the root (active contexts, resource availability)
+- One `.toml` file per tag description under `tags/` — the tag string maps directly to a
+  path (`@work` → `tags/@work.toml`, `@home/kitchen` → `tags/@home/kitchen.toml`)
+
+On first open of a repository that has a legacy `[tag_descriptions]` table in
+`state.toml`, `TomlStore::open()` runs a one-time migration: each entry is extracted to
+its own file under `tags/` and the table is removed from `state.toml`.
 
 **`GitBackend`** wraps `Mutex<git2::Repository>` for `Send + Sync`. Commit messages
-follow the pattern `next: <verb> "<task title>"`.
+follow the pattern `next: <verb> "<task title>"`. `GitBackend` and `TomlStore` share a
+single advisory lock file (`.next.lock`) so that git operations and task writes are
+always serialised.
 
-**`task_path`** is exported so `next-cli` commands can pass the correct paths to
-`vcs.commit()` after writing a task file.
+**`task_path`** and **`tag_description_path`** are exported so `next-cli` commands can
+pass the correct paths to `vcs.commit()` after writing a task or tag file.
 
 **External crates used only in `next-storage`**:
 
@@ -139,6 +154,7 @@ follow the pattern `next: <verb> "<task title>"`.
 | `git2` | git commit / pull / push |
 | `toml` | TOML file serialisation |
 | `rusqlite` | SQLite read cache |
+| `fs4` | cross-platform advisory file locking (`flock(2)`) |
 
 ---
 

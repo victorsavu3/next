@@ -74,7 +74,7 @@ next
 | Module | Contents |
 |--------|----------|
 | `task` | `Task`, `Status`, `Priority`, `Recurrence` |
-| `state` | `GlobalState` (active contexts, active users, resource map) |
+| `state` | `GlobalState` (active contexts, active users, resource availability map) |
 | `tag` | `TagKind` (Context / Resource / Freeform); tag parsing helpers |
 | `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
 | `scoring` | `ScoredTask`, `ScoringWeights`, `fn score_and_sort(tasks, all_tasks, today, weights)` |
@@ -98,6 +98,10 @@ pub trait Store: Send + Sync {
     fn get_task_by_webcal_uid(&self, uid: &str) -> Result<Option<Task>>;
     fn get_state(&self) -> Result<GlobalState>;
     fn save_state(&mut self, state: &GlobalState) -> Result<()>;
+    fn get_tag_description(&self, tag: &str) -> Result<Option<String>>;
+    fn set_tag_description(&mut self, tag: &str, desc: &str) -> Result<()>;
+    fn delete_tag_description(&mut self, tag: &str) -> Result<()>;
+    fn list_tag_descriptions(&self) -> Result<HashMap<String, String>>;
 }
 
 pub trait VcsBackend: Send + Sync {
@@ -114,6 +118,7 @@ pub trait VcsBackend: Send + Sync {
 pub struct Config {
     pub backend: BackendConfig,
     pub scoring: ScoringWeights,
+    pub repository: Option<PathBuf>,  // default repository path (overridden by --repo)
 }
 
 pub struct BackendConfig {
@@ -178,8 +183,18 @@ CREATE INDEX idx_tasks_forgejo ON tasks(forgejo_issue);
 CREATE INDEX idx_tasks_webcal  ON tasks(webcal_uid);
 ```
 
-**`TomlStore`** reads and writes one `.toml` file per task in `tasks/`. The state is
-stored in `state.toml` at the repository root.
+**`TomlStore`** reads and writes one `.toml` file per task in `tasks/`.  The global state
+is stored in `state.toml` at the repository root.  Tag descriptions are stored as
+individual TOML files under `tags/`: the tag string maps directly to a path (`@work` →
+`tags/@work.toml`, `@home/kitchen` → `tags/@home/kitchen.toml`).
+
+A one-time migration runs on `TomlStore::open()`: if `state.toml` contains a legacy
+`[tag_descriptions]` table, each entry is extracted to its own file under `tags/` and
+the table is removed from `state.toml`.  The migration is idempotent (subsequent opens
+are no-ops).
+
+`next_storage::tag_description_path(root, tag)` returns the canonical path for a tag's
+description file and is used by CLI commands to pass the correct path to `vcs.commit()`.
 
 **`GitBackend`** wraps `Mutex<git2::Repository>` to satisfy `Send + Sync`. Commit
 messages follow the pattern `next: <verb> "<task title>"`.
@@ -492,8 +507,10 @@ propagates the `anyhow::Error` to produce a non-zero exit code.
 | `domain::scoring` | `crates/next/src/domain/scoring.rs` | Unit tests with fixed dates; each factor tested independently |
 | `domain::filter` | `crates/next/src/domain/filter.rs` | Unit tests: build `FilterSet` + `Vec<Task>`, assert filtered output |
 | `domain::date_parse` | `crates/next/src/domain/date_parse.rs` | Unit tests: fixed "today", assert parsed date for common expressions |
-| `TomlStore` | `crates/next-storage/src/toml_store.rs` | Round-trip tests: write task to `tempdir`, read back, assert equal fields |
+| `TomlStore` | `crates/next-storage/src/toml_store.rs` | Round-trip tests: write task to `tempdir`, read back, assert equal fields; migration unit tests: write legacy `state.toml`, call `TomlStore::open()`, assert per-tag files created and `state.toml` cleaned |
 | `GitBackend` | `crates/next-storage/src/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
 | `CachedStore` | `crates/next-storage/src/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |
 | Cache sync | `crates/next-storage/tests/cache_sync.rs` | Integration tests: write-through consistency (SQLite ↔ TOML), git pull propagation (HEAD change triggers rebuild), cache-reuse (same HEAD = no rebuild) |
+| Migration | `crates/next-storage/tests/migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next_storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens |
+| File locking | `crates/next-storage/tests/locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption |
 | CLI commands | `crates/next-cli/tests/` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |
