@@ -14,7 +14,7 @@ Each task MUST carry the following fields:
 |-------|------|-------|
 | `id` | UUID v4 string | Assigned on creation, never changed |
 | `title` | non-empty string | |
-| `status` | `open` \| `done` \| `cancelled` | |
+| `status` | `open` \| `started` \| `done` \| `cancelled` | |
 | `created_at` | RFC 3339 datetime | Set on creation |
 | `updated_at` | RFC 3339 datetime | Updated on every write |
 
@@ -234,6 +234,10 @@ Any task can have child tasks via `parent_id`. A parent task is excluded from th
 *default scored list* until all of its direct children have `status = done` or
 `status = cancelled`; it does not appear in `next list` / `next next` output until then.
 
+For both §6.1 and §6.2, `status = started` counts as active (same as `open`) — a started
+child still blocks its parent, and a started task still blocks tasks that list it in
+`blocked_by`.
+
 The user MAY mark a parent task done at any time via `next done <id>` regardless of
 child task status — the completion gate only affects automatic scoring visibility, not
 explicit user actions.
@@ -339,13 +343,22 @@ filter.
 
 ```
 next show <id-or-slug>             # full task details including subtasks and blockers
+next start <id-or-slug>            # mark as started (in-progress); logs a time entry
+next stop <id-or-slug>             # stop a started task (returns to open); logs a time entry
 next done <id-or-slug>             # mark done; triggers recurrence if applicable
 next cancel <id-or-slug>           # mark cancelled
 next edit <id-or-slug> [options]   # modify fields (same options as add, plus --clear-* flags)
-next delete <id-or-slug>           # permanently remove (prompts for confirmation)
+next delete <id-or-slug>           # permanently remove (prompts for confirmation; --yes to skip)
 next move <id-or-slug> --parent <id-or-slug>  # change the parent task
 next open <id-or-slug>             # open the task's URL in the default browser
 ```
+
+`next start` and `next stop` append entries to `data["time_log"]` (an array of
+`{event: "start"|"stop", at: <RFC 3339 timestamp>}` objects). These entries accumulate
+across multiple start/stop cycles and can be used for time-tracking analysis.
+
+`started` tasks pass all implicit filters — they appear in `next list` / `next next`
+alongside `open` tasks and count as active for blocking and parent-child visibility checks.
 
 All `<id-or-slug>` arguments MUST accept a full UUID, an unambiguous UUID prefix
 (minimum 4 hex characters), or a task's slug.

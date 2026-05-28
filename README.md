@@ -173,6 +173,8 @@ All list commands accept filter tokens in any order:
 | `next next [N]` | Show top N highest-scored tasks (default 10) |
 | `next show <id>` | Full details of a single task |
 | `next tree` | Show all tasks in a parent-child tree |
+| `next start <id>` | Mark as started (in-progress); logs a time entry |
+| `next stop <id>` | Stop a started task (returns to open); logs a time entry |
 | `next done <id>` | Mark done; triggers recurrence if applicable |
 | `next cancel <id>` | Mark cancelled |
 | `next edit <id>` | Modify fields on an existing task |

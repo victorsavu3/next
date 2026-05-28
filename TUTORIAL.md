@@ -26,6 +26,8 @@ repository = "/home/you/tasks"
 next add "Buy groceries"                    # add a task
 next list                                   # list open tasks by urgency
 next next                                   # show the N most urgent tasks
+next start <id>                             # mark as in-progress
+next stop <id>                              # stop (back to open)
 next done <id>                              # mark done
 next cancel <id>                            # mark cancelled
 ```
@@ -145,6 +147,26 @@ next list --all                        # disable all implicit filters
 
 ---
 
+## Started state and time tracking
+
+Mark a task as in-progress when you actively work on it:
+
+```sh
+next start <id>     # status → started; logs {event: "start", at: <timestamp>}
+next stop <id>      # status → open;    logs {event: "stop",  at: <timestamp>}
+```
+
+Started tasks remain visible in `next list` and `next next` alongside open tasks. The
+`data["time_log"]` array accumulates all start/stop events across multiple cycles:
+
+```sh
+next data get <id> time_log   # inspect the recorded entries
+```
+
+This data can be used for time-tracking analysis once tooling is built on top.
+
+---
+
 ## Recurrence
 
 ```sh
@@ -218,6 +240,8 @@ next add <title> [--priority low|medium|high] [--due DATE] [--tag TAG]...
 next list [FILTERS]
 next next [-n N]
 next show <id>
+next start <id>
+next stop <id>
 next done <id>
 next cancel <id>
 next edit <id> [--title T] [--priority P] [--due D] [--tag TAG]...

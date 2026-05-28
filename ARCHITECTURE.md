@@ -72,8 +72,8 @@ next/                             # crate root (also git repo)
         delete.rs     done.rs     edit.rs     export.rs
         forecast.rs   import.rs   init.rs     list.rs
         mod.rs        move_cmd.rs next_cmd.rs open.rs
-        resource.rs   show.rs     sync.rs     tag.rs
-        tree.rs       user.rs
+        resource.rs   show.rs     start.rs    stop.rs
+        sync.rs       tag.rs      tree.rs     user.rs
   tests/
     common/mod.rs                 # shared test helpers (TestEnv, setup())
     test_add.rs   test_data.rs    test_done.rs   test_edit.rs
@@ -91,7 +91,7 @@ next/                             # crate root (also git repo)
 
 | Module | Contents |
 |--------|----------|
-| `task` | `Task`, `Status`, `Priority`, `Recurrence` |
+| `task` | `Task`, `Status` (`Open`/`Started`/`Done`/`Cancelled`), `Priority`, `Recurrence` |
 | `state` | `GlobalState` (active contexts, active users, resource availability map) |
 | `tag` | `TagKind` (Context / Resource / Freeform); tag parsing helpers |
 | `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
@@ -100,7 +100,11 @@ next/                             # crate root (also git repo)
 
 Key `Task` fields: `id`, `title`, `status`, `priority`, `due`, `start`, `long_term`,
 `slug`, `parent_id`, `assignee`, `tags`, `blocked_by`, `score_adjustment`, `description`,
-`url`, `notes`, `data` (arbitrary JSON map), `recurrence`, `created_at`, `updated_at`.
+`url`, `notes`, `data` (arbitrary JSON map; `data["time_log"]` accumulates start/stop events),
+`recurrence`, `created_at`, `updated_at`.
+
+Key `Task` methods: `is_open()` (Open only), `is_active()` (Open or Started), `mark_started()`,
+`mark_stopped()`, `mark_done()`, `mark_cancelled()`.
 
 **Storage traits** (`next::store`):
 
@@ -257,8 +261,8 @@ src/
       delete.rs     done.rs     edit.rs     export.rs
       forecast.rs   import.rs   list.rs     mod.rs
       move_cmd.rs   next_cmd.rs open.rs     resource.rs
-      show.rs       sync.rs     tag.rs      tree.rs
-      user.rs
+      show.rs       start.rs    stop.rs     sync.rs
+      tag.rs        tree.rs     user.rs
 ```
 
 ---
@@ -296,7 +300,7 @@ pub struct AppContext {
    If command is Tutorial → print embedded TUTORIAL.md; exit
 3. AppContext::new(): locate repository root, select backend, open CachedStore
 4. Execute command logic (reads from store; writes to store + vcs)
-5. Task mutations (add/edit/done/cancel/delete/move/import/tag describe): vcs.commit(changed_paths, message)
+5. Task mutations (add/edit/start/stop/done/cancel/delete/move/import/tag describe): vcs.commit(changed_paths, message)
    State mutations (context/resource/user): write to XDG state file only; no commit
 6. Render output (text or JSON to stdout)
 7. If autosync enabled and command succeeded and is a mutation: run sync (pull + push)
@@ -383,7 +387,7 @@ pub struct FilterSet {
 `fn apply(tasks: Vec<Task>, filter: &FilterSet, state: &GlobalState, today: NaiveDate) -> Vec<Task>`:
 
 1. **Implicit gate** (skipped when `disable_implicit`):
-   - Exclude tasks with `status != open`
+   - Exclude tasks where `!is_active()` — i.e. `done` and `cancelled` are hidden; `open` and `started` pass
    - Exclude tasks whose `start` date is in the future
    - Exclude tasks that are explicitly blocked (open entry in `blocked_by`)
    - Exclude parent tasks that have any open direct child
