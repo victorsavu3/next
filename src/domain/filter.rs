@@ -153,7 +153,7 @@ fn task_matches_contexts(task: &Task, active_contexts: &[String]) -> bool {
         .collect();
 
     if task_contexts.is_empty() {
-        return false;
+        return true;
     }
 
     active_contexts.iter().any(|active| {
@@ -344,17 +344,31 @@ mod tests {
     }
 
     #[test]
-    fn active_context_hides_non_matching_tasks() {
+    fn active_context_hides_wrong_context_tasks() {
         let state = GlobalState { active_contexts: vec!["@work".into()], ..Default::default() };
 
         let mut work_task = Task::new("Work task");
         work_task.tags = vec!["@work".into()];
 
-        let home_task = Task::new("No context task");
+        let mut home_task = Task::new("Home task");
+        home_task.tags = vec!["@home".into()];
 
         let result = apply(vec![work_task, home_task], &FilterSet::default(), &state, today());
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].title, "Work task");
+    }
+
+    #[test]
+    fn active_context_keeps_context_neutral_tasks() {
+        let state = GlobalState { active_contexts: vec!["@work".into()], ..Default::default() };
+
+        let mut work_task = Task::new("Work task");
+        work_task.tags = vec!["@work".into()];
+
+        let neutral_task = Task::new("No context task");
+
+        let result = apply(vec![work_task, neutral_task], &FilterSet::default(), &state, today());
+        assert_eq!(result.len(), 2);
     }
 
     #[test]

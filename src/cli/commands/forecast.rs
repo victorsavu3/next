@@ -115,5 +115,8 @@ fn print_section(
 }
 
 fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max { s } else { &s[..max] }
+    match s.char_indices().nth(max) {
+        Some((byte_pos, _)) => &s[..byte_pos],
+        None => s,
+    }
 }
