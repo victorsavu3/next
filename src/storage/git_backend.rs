@@ -1,6 +1,7 @@
 use std::{
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
+    process::Command,
     sync::Mutex,
 };
 
@@ -16,6 +17,12 @@ pub struct GitBackend {
     repo: Mutex<Repository>,
     /// Path to `.next.lock` — the same file used by `TomlStore::acquire_repo_lock`.
     lock_path: PathBuf,
+    /// Working directory (repository root) used when spawning subprocess git calls.
+    work_dir: PathBuf,
+    /// When `true`, `pull` and `push` run `git` as a subprocess instead of
+    /// using libgit2.  Useful when the system git handles authentication
+    /// (SSH agents, credential managers) better than the embedded bindings.
+    use_subprocess: bool,
 }
 
 impl GitBackend {
@@ -25,7 +32,17 @@ impl GitBackend {
         Ok(Self {
             repo: Mutex::new(repo),
             lock_path: root.join(".next.lock"),
+            work_dir: root.to_path_buf(),
+            use_subprocess: false,
         })
+    }
+
+    /// Returns a new `GitBackend` that uses subprocess git for `pull`/`push`.
+    ///
+    /// All other operations (`commit`, `head_hash`) continue to use libgit2.
+    pub fn with_subprocess(mut self, enabled: bool) -> Self {
+        self.use_subprocess = enabled;
+        self
     }
 
     /// Acquires the repository-level exclusive lock shared with `TomlStore`.
@@ -73,6 +90,55 @@ fn remote_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
         Err(git2::Error::from_str("no supported authentication method"))
     });
     cb
+}
+
+impl GitBackend {
+    /// Runs `git pull` as a subprocess in the repository directory.
+    fn subprocess_pull(&self) -> Result<PullResult> {
+        let _lock = self.acquire_repo_lock()?;
+        let output = Command::new("git")
+            .args(["pull", "--no-edit"])
+            .current_dir(&self.work_dir)
+            .output()
+            .map_err(|e| AppError::Other(format!("spawn git pull: {e}")))?;
+
+        if output.status.success() {
+            return Ok(PullResult::Clean);
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("CONFLICT") || stderr.contains("Automatic merge failed") {
+            // git pull already left conflict markers in the working tree.
+            // We can't easily enumerate conflict paths from subprocess output,
+            // so return an empty list — the user sees the conflict markers on disk.
+            return Ok(PullResult::Conflicts(vec![]));
+        }
+
+        Err(AppError::Other(format!(
+            "git pull failed: {}",
+            stderr.trim()
+        )))
+    }
+
+    /// Runs `git push` as a subprocess in the repository directory.
+    fn subprocess_push(&self) -> Result<()> {
+        let _lock = self.acquire_repo_lock()?;
+        let output = Command::new("git")
+            .args(["push"])
+            .current_dir(&self.work_dir)
+            .output()
+            .map_err(|e| AppError::Other(format!("spawn git push: {e}")))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(AppError::Other(format!(
+            "git push failed: {}",
+            stderr.trim()
+        )))
+    }
 }
 
 impl VcsBackend for GitBackend {
@@ -131,6 +197,9 @@ impl VcsBackend for GitBackend {
     }
 
     fn pull(&self) -> Result<PullResult> {
+        if self.use_subprocess {
+            return self.subprocess_pull();
+        }
         let _lock = self.acquire_repo_lock()?;
         let repo = self
             .repo
@@ -268,6 +337,9 @@ impl VcsBackend for GitBackend {
     }
 
     fn push(&self) -> Result<()> {
+        if self.use_subprocess {
+            return self.subprocess_push();
+        }
         let _lock = self.acquire_repo_lock()?;
         let repo = self
             .repo

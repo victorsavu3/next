@@ -38,6 +38,7 @@ impl AppContext {
                     };
                     let (s, v) = crate::storage::open(root.clone())
                         .context("failed to open local task store")?;
+                    let v = v.with_subprocess(config.sync.git_subprocess);
                     (Box::new(s), Box::new(v), root)
                 }
                 BackendKind::Remote => {

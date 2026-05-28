@@ -461,6 +461,22 @@ token = "my-bearer-token"   # optional bearer token
 The remote backend is currently a stub — all operations return "not yet implemented"
 errors. The VCS operations are no-ops (the server handles its own persistence).
 
+### 9.3 Sync configuration
+
+The `[sync]` section controls how `next sync` (and autosync) performs push/pull:
+
+```toml
+[sync]
+git_subprocess = true   # default: false
+```
+
+When `git_subprocess = true`, `next sync` runs `git pull` and `git push` as
+shell subprocesses instead of using the built-in libgit2 bindings. This is
+useful when the system `git` handles authentication (SSH agents, credential
+managers, 1Password, etc.) better than the embedded library. All other git
+operations (commit, HEAD resolution) continue to use libgit2 regardless of
+this setting.
+
 ---
 
 ## 10. Integrations

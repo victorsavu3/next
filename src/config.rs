@@ -89,6 +89,21 @@ impl Default for ScoringConfig {
     }
 }
 
+// ── SyncConfig ────────────────────────────────────────────────────────────────
+
+/// Controls how `next sync` (and autosync) performs push/pull operations.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SyncConfig {
+    /// When `true`, `next sync` runs `git pull` / `git push` as shell
+    /// subprocesses instead of using the libgit2 bindings.
+    ///
+    /// Use this when the built-in bindings fail to authenticate (e.g. because
+    /// your SSH key is managed by a keychain, 1Password, or a non-standard
+    /// agent socket) while plain `git` commands work fine.
+    #[serde(default)]
+    pub git_subprocess: bool,
+}
+
 // ── BackendConfig ─────────────────────────────────────────────────────────────
 
 /// Which storage backend to use.
@@ -211,6 +226,10 @@ pub struct Config {
     /// Can be overridden at runtime with the `--autosync` flag.
     #[serde(default)]
     pub autosync: bool,
+
+    /// Controls push/pull behaviour during `next sync` and autosync.
+    #[serde(default)]
+    pub sync: SyncConfig,
 }
 
 impl Default for Config {
@@ -224,6 +243,7 @@ impl Default for Config {
             list_limit: None,
             repository: None,
             autosync: false,
+            sync: SyncConfig::default(),
         }
     }
 }
@@ -247,5 +267,28 @@ mod tests {
     fn autosync_absent_from_toml_defaults_to_false() {
         let cfg: Config = toml::from_str("").unwrap();
         assert!(!cfg.autosync);
+    }
+
+    #[test]
+    fn sync_git_subprocess_defaults_to_false() {
+        assert!(!Config::default().sync.git_subprocess);
+    }
+
+    #[test]
+    fn sync_git_subprocess_deserializes_from_toml() {
+        let cfg: Config = toml::from_str("[sync]\ngit_subprocess = true").unwrap();
+        assert!(cfg.sync.git_subprocess);
+    }
+
+    #[test]
+    fn sync_git_subprocess_absent_defaults_to_false() {
+        let cfg: Config = toml::from_str("autosync = true").unwrap();
+        assert!(!cfg.sync.git_subprocess);
+    }
+
+    #[test]
+    fn sync_section_absent_defaults_correctly() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(!cfg.sync.git_subprocess);
     }
 }
