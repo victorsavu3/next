@@ -313,7 +313,7 @@ mod tests {
             cfg.set_str("user.name", "Test").unwrap();
             cfg.set_str("user.email", "test@test.com").unwrap();
         }
-        let inner = TomlStore::open(dir.path().to_path_buf()).unwrap();
+        let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
         let vcs = GitBackend::open(dir.path()).unwrap();
         let head_hash = vcs.head_hash().unwrap();
         let db_path = dir.path().join(".next.db");
@@ -465,7 +465,7 @@ mod tests {
 
         // Session 1: add a task and commit it.
         {
-            let inner = TomlStore::open(dir.path().to_path_buf()).unwrap();
+            let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
             let head = vcs.head_hash().unwrap();
             let db_path = dir.path().join(".next.db");
             let mut store = CachedStore::open(inner, db_path, &head).unwrap();
@@ -480,7 +480,7 @@ mod tests {
 
         // Session 2: open with the new HEAD — cache must be rebuilt.
         {
-            let inner = TomlStore::open(dir.path().to_path_buf()).unwrap();
+            let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
             let head = vcs.head_hash().unwrap();
             let db_path = dir.path().join(".next.db");
             let store = CachedStore::open(inner, db_path, &head).unwrap();
@@ -526,7 +526,7 @@ mod tests {
         fs::write(tasks_dir.join("external.toml"), toml).unwrap();
 
         // Open with a head_hash that doesn't match stored (empty DB → will rebuild).
-        let inner = TomlStore::open(dir.path().to_path_buf()).unwrap();
+        let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
         let db_path = dir.path().join(".next.db");
         let store = CachedStore::open(inner, db_path, "fake-head").unwrap();
 

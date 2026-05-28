@@ -31,7 +31,7 @@ fn init_git(dir: &Path) {
 }
 
 fn fresh_store(root: &Path) -> TomlStore {
-    TomlStore::open(root.to_path_buf()).unwrap()
+    TomlStore::open(root.to_path_buf(), root.join("state.toml")).unwrap()
 }
 
 fn fresh_vcs(root: &Path) -> GitBackend {
@@ -50,7 +50,7 @@ fn fresh_vcs(root: &Path) -> GitBackend {
 #[test]
 fn concurrent_task_saves_all_persisted() {
     let dir = TempDir::new().unwrap();
-    TomlStore::open(dir.path().to_path_buf()).unwrap(); // create tasks/
+    TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap(); // create tasks/
 
     let root = Arc::new(dir.path().to_path_buf());
 
@@ -81,7 +81,7 @@ fn concurrent_task_saves_all_persisted() {
 #[test]
 fn concurrent_unique_slugs_no_conflict() {
     let dir = TempDir::new().unwrap();
-    TomlStore::open(dir.path().to_path_buf()).unwrap();
+    TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
 
     let root = Arc::new(dir.path().to_path_buf());
 
@@ -113,7 +113,7 @@ fn concurrent_unique_slugs_no_conflict() {
 #[test]
 fn concurrent_slug_conflict_detected() {
     let dir = TempDir::new().unwrap();
-    TomlStore::open(dir.path().to_path_buf()).unwrap();
+    TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
 
     let root = Arc::new(dir.path().to_path_buf());
 
@@ -159,7 +159,7 @@ fn concurrent_slug_conflict_detected() {
 #[test]
 fn concurrent_state_saves_no_corruption() {
     let dir = TempDir::new().unwrap();
-    TomlStore::open(dir.path().to_path_buf()).unwrap();
+    TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
 
     let root = Arc::new(dir.path().to_path_buf());
 
@@ -197,7 +197,7 @@ fn concurrent_state_saves_no_corruption() {
 #[test]
 fn concurrent_task_and_state_saves_no_corruption() {
     let dir = TempDir::new().unwrap();
-    TomlStore::open(dir.path().to_path_buf()).unwrap();
+    TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
 
     let root = Arc::new(dir.path().to_path_buf());
 
@@ -244,7 +244,7 @@ fn concurrent_task_and_state_saves_no_corruption() {
 fn concurrent_save_and_commit_no_errors() {
     let dir = TempDir::new().unwrap();
     init_git(dir.path());
-    TomlStore::open(dir.path().to_path_buf()).unwrap();
+    TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
 
     let root = Arc::new(dir.path().to_path_buf());
 

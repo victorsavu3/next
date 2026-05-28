@@ -50,13 +50,7 @@ fn set(ctx: &mut AppContext, users: Vec<String>) -> anyhow::Result<()> {
     let mut state = ctx.store.get_state()?;
     state.active_users = users.clone();
     ctx.store.save_state(&state)?;
-    let state_path = ctx.repo_root.join("state.toml");
-    ctx.vcs.commit(
-        &[state_path],
-        &format!("next: user set {}", users.join(" ")),
-    )?;
-    ctx.log
-        .info("user", &format!("set {}", users.join(" ")));
+    ctx.log.info("user", &format!("set {}", users.join(" ")));
     Ok(())
 }
 
@@ -64,8 +58,6 @@ fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
     let mut state = ctx.store.get_state()?;
     state.active_users.clear();
     ctx.store.save_state(&state)?;
-    let state_path = ctx.repo_root.join("state.toml");
-    ctx.vcs.commit(&[state_path], "next: user clear")?;
     ctx.log.info("user", "cleared");
     Ok(())
 }

@@ -37,7 +37,7 @@ fn init_git(dir: &Path) {
 
 /// Open a fresh `(CachedStore, GitBackend)` pair rooted at `dir`.
 fn open(dir: &Path) -> (CachedStore, GitBackend) {
-    let inner = TomlStore::open(dir.to_path_buf()).unwrap();
+    let inner = TomlStore::open(dir.to_path_buf(), dir.join("state.toml")).unwrap();
     let vcs = GitBackend::open(dir).unwrap();
     let head = vcs.head_hash().unwrap();
     let db_path = dir.join(".next.db");
@@ -48,7 +48,7 @@ fn open(dir: &Path) -> (CachedStore, GitBackend) {
 /// Open a `CachedStore` using the given explicit `head_hash`.
 /// Used in pull-propagation tests to drive whether a rebuild happens.
 fn open_with_head(dir: &Path, head_hash: &str) -> CachedStore {
-    let inner = TomlStore::open(dir.to_path_buf()).unwrap();
+    let inner = TomlStore::open(dir.to_path_buf(), dir.join("state.toml")).unwrap();
     let db_path = dir.join(".next.db");
     CachedStore::open(inner, db_path, head_hash).unwrap()
 }
@@ -96,7 +96,7 @@ fn task_id_set(store: &impl Store) -> HashSet<String> {
 /// required (different hash → rebuild then compare; same hash → cache is
 /// used as-is and compared against a fresh TomlStore read).
 fn assert_sync(dir: &Path, head_hash: &str) {
-    let toml_store = TomlStore::open(dir.to_path_buf()).unwrap();
+    let toml_store = TomlStore::open(dir.to_path_buf(), dir.join("state.toml")).unwrap();
     let mut toml_tasks = toml_store.list_tasks().unwrap();
     let toml_state = toml_store.get_state().unwrap();
 
@@ -151,7 +151,7 @@ fn save_task_writes_to_both_stores() {
     assert_sync(dir.path(), &head);
 
     // Verify via independent TomlStore read.
-    let toml = TomlStore::open(dir.path().to_path_buf()).unwrap();
+    let toml = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
     assert!(toml.get_task(task.id).is_ok());
 
     // Verify SQLite path directly.
@@ -203,7 +203,7 @@ fn update_task_syncs_to_both_stores() {
     assert_eq!(from_cache.title, "New title");
     assert_eq!(from_cache.priority, Priority::High);
 
-    let toml = TomlStore::open(dir.path().to_path_buf()).unwrap();
+    let toml = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
     let from_toml = toml.get_task_by_slug("my-task").unwrap().unwrap();
     assert_eq!(from_toml.title, "New title");
     assert_eq!(from_toml.priority, Priority::High);
@@ -223,8 +223,7 @@ fn done_status_syncs_to_both_stores() {
     let head = vcs.head_hash().unwrap();
     assert_sync(dir.path(), &head);
 
-    let from_toml = TomlStore::open(dir.path().to_path_buf())
-        .unwrap()
+    let from_toml = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap()
         .get_task(task.id)
         .unwrap();
     assert_eq!(from_toml.status, Status::Done);
@@ -248,8 +247,7 @@ fn save_state_syncs_to_both_stores() {
     let head = vcs.head_hash().unwrap();
     assert_sync(dir.path(), &head);
 
-    let from_toml = TomlStore::open(dir.path().to_path_buf())
-        .unwrap()
+    let from_toml = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap()
         .get_state()
         .unwrap();
     assert_eq!(from_toml.active_contexts, state.active_contexts);
@@ -338,7 +336,7 @@ fn find_by_prefix_consistent_after_write_through() {
     assert_eq!(found[0].id, task.id);
 
     // TomlStore path.
-    let toml = TomlStore::open(dir.path().to_path_buf()).unwrap();
+    let toml = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
     let found_toml = toml.find_tasks_by_prefix(prefix).unwrap();
     assert_eq!(found_toml.len(), 1);
     assert_eq!(found_toml[0].id, task.id);

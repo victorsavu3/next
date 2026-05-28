@@ -82,13 +82,6 @@ fn set(ctx: &mut AppContext, resource: String, availability: Availability) -> an
     state.resources.insert(bare.to_owned(), available);
     ctx.store.save_state(&state)?;
 
-    let state_path = ctx.repo_root.join("state.toml");
-    let status_word = if available { "on" } else { "off" };
-    ctx.vcs.commit(
-        &[state_path],
-        &format!("next: resource {resource} {status_word}"),
-    )?;
-
     let label = if available { "available" } else { "unavailable" };
     ctx.log.info("resource", &format!("{resource} marked as {label}"));
     Ok(())

@@ -55,11 +55,6 @@ fn set(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
     let mut state = ctx.store.get_state()?;
     state.active_contexts = tags.clone();
     ctx.store.save_state(&state)?;
-    let state_path = ctx.repo_root.join("state.toml");
-    ctx.vcs.commit(
-        &[state_path],
-        &format!("next: context set {}", tags.join(" ")),
-    )?;
     ctx.log.info("context", &format!("set {}", tags.join(" ")));
     Ok(())
 }
@@ -68,8 +63,6 @@ fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
     let mut state = ctx.store.get_state()?;
     state.active_contexts.clear();
     ctx.store.save_state(&state)?;
-    let state_path = ctx.repo_root.join("state.toml");
-    ctx.vcs.commit(&[state_path], "next: context clear")?;
     ctx.log.info("context", "cleared");
     Ok(())
 }

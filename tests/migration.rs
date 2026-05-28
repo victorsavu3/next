@@ -89,7 +89,15 @@ fn migration_removes_tag_descriptions_from_state_toml() {
 
     let _ = open(&dir);
 
-    let state_content = fs::read_to_string(dir.path().join("state.toml")).unwrap();
+    // state.toml is moved out of the repo into the XDG state directory.
+    assert!(
+        !dir.path().join("state.toml").exists(),
+        "state.toml should have been moved out of the repo"
+    );
+
+    // Verify via the store's external state path.
+    let state_path = next::storage::state_path_for_repo(dir.path());
+    let state_content = fs::read_to_string(&state_path).unwrap();
     assert!(
         !state_content.contains("tag_descriptions"),
         "state.toml should no longer contain tag_descriptions after migration"
