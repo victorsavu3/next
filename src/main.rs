@@ -3,6 +3,7 @@ use clap::Parser;
 use next::{
     AppContext,
     cli::{Cli, Command, commands},
+    cli::commands::sync as sync_cmd,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -18,6 +19,7 @@ fn main() -> anyhow::Result<()> {
         return commands::init::run(args, &dir);
     }
 
+    let cli_autosync = cli.autosync;
     let mut ctx = AppContext::new(cli.config.as_deref(), cli.repo.as_deref())?;
 
     // Default to `list` when no subcommand is given.
@@ -56,6 +58,11 @@ fn main() -> anyhow::Result<()> {
         Command::Tree(_) => "tree",
     };
 
+    let is_mutation = matches!(
+        cmd_name,
+        "add" | "done" | "cancel" | "edit" | "delete" | "move" | "import" | "tag"
+    );
+
     let result = match command {
         Command::Init(_) => unreachable!("handled above"),
         Command::Add(args) => commands::add::run(args, &mut ctx),
@@ -82,6 +89,14 @@ fn main() -> anyhow::Result<()> {
 
     if let Err(ref e) = result {
         ctx.log.error(cmd_name, &format!("{e:#}"));
+    }
+
+    if result.is_ok() && is_mutation && (cli_autosync || ctx.config.autosync) {
+        let sync_args = sync_cmd::Args { push_only: false, pull_only: false };
+        if let Err(e) = sync_cmd::run(sync_args, &mut ctx) {
+            eprintln!("autosync failed: {e:#}");
+            ctx.log.error("sync", &format!("autosync: {e:#}"));
+        }
     }
 
     result

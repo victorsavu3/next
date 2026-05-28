@@ -205,6 +205,12 @@ pub struct Config {
     /// with the `--repo` flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository: Option<PathBuf>,
+
+    /// When true, automatically sync with the remote after each mutation
+    /// command (add, edit, done, cancel, delete, move, import, tag describe/clear).
+    /// Can be overridden at runtime with the `--autosync` flag.
+    #[serde(default)]
+    pub autosync: bool,
 }
 
 impl Default for Config {
@@ -217,6 +223,29 @@ impl Default for Config {
             next_count: default_next_count(),
             list_limit: None,
             repository: None,
+            autosync: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autosync_defaults_to_false() {
+        assert!(!Config::default().autosync);
+    }
+
+    #[test]
+    fn autosync_deserializes_from_toml() {
+        let cfg: Config = toml::from_str("autosync = true").unwrap();
+        assert!(cfg.autosync);
+    }
+
+    #[test]
+    fn autosync_absent_from_toml_defaults_to_false() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(!cfg.autosync);
     }
 }

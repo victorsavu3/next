@@ -20,6 +20,11 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub repo: Option<PathBuf>,
 
+    /// Sync with the remote after each mutation command.
+    /// Overrides `autosync = false` in the config file.
+    #[arg(long, global = true)]
+    pub autosync: bool,
+
     /// Subcommand to run. Defaults to `list` when omitted.
     #[command(subcommand)]
     pub command: Option<Command>,
