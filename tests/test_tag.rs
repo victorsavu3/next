@@ -2,6 +2,8 @@ mod common;
 
 use next::store::Store as _;
 use next::cli::commands::{add, tag};
+use next::domain::tag::TagMeta;
+use next::domain::task::Priority;
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -159,3 +161,404 @@ fn list_tag_descriptions_returns_all() {
     assert_eq!(all.get("python").map(String::as_str), Some("Python projects"));
     assert_eq!(all.len(), 3);
 }
+
+// ---------------------------------------------------------------------------
+// next tag show
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tag_show_empty_meta_does_not_error() {
+    let mut env = common::setup();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::Show(tag::ShowArgs {
+                tag: "@work".into(),
+                json: false,
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+}
+
+#[test]
+fn tag_show_json_output() {
+    let mut env = common::setup();
+    tag::run(describe("@work", "Office"), &mut env.ctx).unwrap();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::Show(tag::ShowArgs {
+                tag: "@work".into(),
+                json: true,
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// next tag set-url / clear-url
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tag_set_url_stores_url() {
+    let mut env = common::setup();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::SetUrl(tag::SetUrlArgs {
+                tag: "@work".into(),
+                url: "https://example.com/work".into(),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let meta = env.ctx.store.get_tag_meta("@work").unwrap().unwrap();
+    assert_eq!(meta.url.as_deref(), Some("https://example.com/work"));
+}
+
+#[test]
+fn tag_set_url_preserves_description() {
+    let mut env = common::setup();
+    tag::run(describe("@work", "Office work"), &mut env.ctx).unwrap();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::SetUrl(tag::SetUrlArgs {
+                tag: "@work".into(),
+                url: "https://example.com".into(),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let meta = env.ctx.store.get_tag_meta("@work").unwrap().unwrap();
+    assert_eq!(meta.description.as_deref(), Some("Office work"));
+    assert_eq!(meta.url.as_deref(), Some("https://example.com"));
+}
+
+#[test]
+fn tag_clear_url_removes_url() {
+    let mut env = common::setup();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::SetUrl(tag::SetUrlArgs {
+                tag: "python".into(),
+                url: "https://python.org".into(),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::ClearUrl(tag::ClearUrlArgs {
+                tag: "python".into(),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let meta = env.ctx.store.get_tag_meta("python").unwrap();
+    assert!(meta.map(|m| m.url.is_none()).unwrap_or(true));
+}
+
+// ---------------------------------------------------------------------------
+// next tag set-priority / clear-priority
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tag_set_priority_stores_priority() {
+    let mut env = common::setup();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::SetPriority(tag::SetPriorityArgs {
+                tag: "@work".into(),
+                priority: "high".into(),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let meta = env.ctx.store.get_tag_meta("@work").unwrap().unwrap();
+    assert_eq!(meta.priority, Some(Priority::High));
+}
+
+#[test]
+fn tag_set_priority_invalid_errors() {
+    let mut env = common::setup();
+    let result = tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::SetPriority(tag::SetPriorityArgs {
+                tag: "@work".into(),
+                priority: "critical".into(),
+            })),
+        },
+        &mut env.ctx,
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn tag_clear_priority_removes_priority() {
+    let mut env = common::setup();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::SetPriority(tag::SetPriorityArgs {
+                tag: "python".into(),
+                priority: "low".into(),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::ClearPriority(tag::ClearPriorityArgs {
+                tag: "python".into(),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let meta = env.ctx.store.get_tag_meta("python").unwrap();
+    assert!(meta.map(|m| m.priority.is_none()).unwrap_or(true));
+}
+
+// ---------------------------------------------------------------------------
+// next tag data set/get/unset/list
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tag_data_set_stores_value() {
+    let mut env = common::setup();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::Data(tag::DataArgs {
+                subcommand: tag::DataSubcommand::Set(tag::DataSetArgs {
+                    tag: "@work".into(),
+                    key: "team".into(),
+                    value: "engineering".into(),
+                }),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let meta = env.ctx.store.get_tag_meta("@work").unwrap().unwrap();
+    assert_eq!(
+        meta.data.get("team"),
+        Some(&serde_json::Value::String("engineering".into()))
+    );
+}
+
+#[test]
+fn tag_data_set_json_value() {
+    let mut env = common::setup();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::Data(tag::DataArgs {
+                subcommand: tag::DataSubcommand::Set(tag::DataSetArgs {
+                    tag: "python".into(),
+                    key: "count".into(),
+                    value: "42".into(),
+                }),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let meta = env.ctx.store.get_tag_meta("python").unwrap().unwrap();
+    assert_eq!(
+        meta.data.get("count"),
+        Some(&serde_json::Value::Number(42.into()))
+    );
+}
+
+#[test]
+fn tag_data_get_returns_value() {
+    let mut env = common::setup();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::Data(tag::DataArgs {
+                subcommand: tag::DataSubcommand::Set(tag::DataSetArgs {
+                    tag: "@home".into(),
+                    key: "color".into(),
+                    value: "blue".into(),
+                }),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::Data(tag::DataArgs {
+                subcommand: tag::DataSubcommand::Get(tag::DataGetArgs {
+                    tag: "@home".into(),
+                    key: "color".into(),
+                }),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+}
+
+#[test]
+fn tag_data_get_missing_key_errors() {
+    let mut env = common::setup();
+    let result = tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::Data(tag::DataArgs {
+                subcommand: tag::DataSubcommand::Get(tag::DataGetArgs {
+                    tag: "@work".into(),
+                    key: "missing".into(),
+                }),
+            })),
+        },
+        &mut env.ctx,
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn tag_data_unset_removes_key() {
+    let mut env = common::setup();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::Data(tag::DataArgs {
+                subcommand: tag::DataSubcommand::Set(tag::DataSetArgs {
+                    tag: "rust".into(),
+                    key: "edition".into(),
+                    value: "2021".into(),
+                }),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::Data(tag::DataArgs {
+                subcommand: tag::DataSubcommand::Unset(tag::DataUnsetArgs {
+                    tag: "rust".into(),
+                    key: "edition".into(),
+                }),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let meta = env.ctx.store.get_tag_meta("rust").unwrap();
+    assert!(meta.map(|m| m.data.is_empty()).unwrap_or(true));
+}
+
+#[test]
+fn tag_data_list_does_not_error() {
+    let mut env = common::setup();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::Data(tag::DataArgs {
+                subcommand: tag::DataSubcommand::Set(tag::DataSetArgs {
+                    tag: "@work".into(),
+                    key: "owner".into(),
+                    value: "alice".into(),
+                }),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::Data(tag::DataArgs {
+                subcommand: tag::DataSubcommand::List(tag::DataListArgs {
+                    tag: "@work".into(),
+                    json: false,
+                }),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+}
+
+#[test]
+fn tag_meta_all_fields_survives_reload() {
+    let mut env = common::setup();
+    // Set description, url, priority, and data.
+    tag::run(describe("@work", "Office"), &mut env.ctx).unwrap();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::SetUrl(tag::SetUrlArgs {
+                tag: "@work".into(),
+                url: "https://example.com".into(),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::SetPriority(tag::SetPriorityArgs {
+                tag: "@work".into(),
+                priority: "high".into(),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::Data(tag::DataArgs {
+                subcommand: tag::DataSubcommand::Set(tag::DataSetArgs {
+                    tag: "@work".into(),
+                    key: "team".into(),
+                    value: "eng".into(),
+                }),
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let (fresh_store, _) = next::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let meta = fresh_store.get_tag_meta("@work").unwrap().unwrap();
+    assert_eq!(meta.description.as_deref(), Some("Office"));
+    assert_eq!(meta.url.as_deref(), Some("https://example.com"));
+    assert_eq!(meta.priority, Some(Priority::High));
+    assert_eq!(
+        meta.data.get("team"),
+        Some(&serde_json::Value::String("eng".into()))
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Backward compatibility: files written with description-only format
+// ---------------------------------------------------------------------------
+
+#[test]
+fn legacy_description_file_reads_as_tag_meta() {
+    use std::fs;
+    let env = common::setup();
+    // Write a legacy single-field TOML file directly.
+    let tags_dir = env.ctx.repo_root.join("tags");
+    fs::create_dir_all(&tags_dir).unwrap();
+    fs::write(tags_dir.join("@work.toml"), "description = \"Office tasks\"\n").unwrap();
+
+    let meta = env.ctx.store.get_tag_meta("@work").unwrap().unwrap();
+    assert_eq!(meta.description.as_deref(), Some("Office tasks"));
+    assert!(meta.url.is_none());
+    assert!(meta.data.is_empty());
+    assert!(meta.priority.is_none());
+}
+

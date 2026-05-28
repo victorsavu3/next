@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf};
 use uuid::Uuid;
 
 use crate::{
-    domain::{state::GlobalState, task::Task},
+    domain::{state::GlobalState, tag::TagMeta, task::Task},
     error::Result,
 };
 
@@ -64,23 +64,59 @@ pub trait Store: Send + Sync {
 
     fn save_state(&mut self, state: &GlobalState) -> Result<()>;
 
-    // --- Tag descriptions ---
+    // --- Tag metadata ---
     //
-    // Each tag description is stored as an individual file (`tags/<tag>.toml`)
+    // Each tag's metadata is stored as an individual file (`tags/<tag>.toml`)
     // so that different tags can be committed and synced independently.
     // Slashes in tag names (e.g. `@home/kitchen`) map to actual subdirectories.
 
+    /// Returns the full metadata for `tag`, or `None` if no file exists.
+    fn get_tag_meta(&self, tag: &str) -> Result<Option<TagMeta>>;
+
+    /// Writes (or replaces) the full metadata for `tag`.
+    fn set_tag_meta(&mut self, tag: &str, meta: TagMeta) -> Result<()>;
+
+    /// Deletes the metadata file for `tag`. Errors if no file exists.
+    fn delete_tag_meta(&mut self, tag: &str) -> Result<()>;
+
+    /// Returns all tag metadata as a map of tag → [`TagMeta`].
+    fn list_tag_metas(&self) -> Result<HashMap<String, TagMeta>>;
+
+    // --- Convenience wrappers for description-only operations ---
+
     /// Returns the description for `tag`, or `None` if not set.
-    fn get_tag_description(&self, tag: &str) -> Result<Option<String>>;
+    fn get_tag_description(&self, tag: &str) -> Result<Option<String>> {
+        Ok(self.get_tag_meta(tag)?.and_then(|m| m.description))
+    }
 
-    /// Sets or replaces the description for `tag`.
-    fn set_tag_description(&mut self, tag: &str, description: &str) -> Result<()>;
+    /// Sets or replaces the description for `tag`, preserving other metadata.
+    fn set_tag_description(&mut self, tag: &str, description: &str) -> Result<()> {
+        let mut meta = self.get_tag_meta(tag)?.unwrap_or_default();
+        meta.description = Some(description.to_owned());
+        self.set_tag_meta(tag, meta)
+    }
 
-    /// Deletes the description for `tag`. Errors if no description exists.
-    fn delete_tag_description(&mut self, tag: &str) -> Result<()>;
+    /// Removes the description field for `tag`. Errors if no metadata file exists.
+    fn delete_tag_description(&mut self, tag: &str) -> Result<()> {
+        let mut meta = self
+            .get_tag_meta(tag)?
+            .ok_or_else(|| crate::error::AppError::Other(format!("no description set for tag {tag:?}")))?;
+        meta.description = None;
+        if meta == TagMeta::default() {
+            self.delete_tag_meta(tag)
+        } else {
+            self.set_tag_meta(tag, meta)
+        }
+    }
 
     /// Returns all tag descriptions as a map of tag → description.
-    fn list_tag_descriptions(&self) -> Result<HashMap<String, String>>;
+    fn list_tag_descriptions(&self) -> Result<HashMap<String, String>> {
+        Ok(self
+            .list_tag_metas()?
+            .into_iter()
+            .filter_map(|(tag, meta)| meta.description.map(|d| (tag, d)))
+            .collect())
+    }
 }
 
 /// Version-control backend.

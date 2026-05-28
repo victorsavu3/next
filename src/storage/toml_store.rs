@@ -6,16 +6,16 @@ use std::{
 
 use fs4::FileExt;
 use crate::{
-    domain::{state::GlobalState, task::Task},
+    domain::{state::GlobalState, tag::TagMeta, task::Task},
     error::{AppError, Result},
     store::Store,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// On-disk format for a single tag description file (`tags/<tag>.toml`).
+/// Legacy on-disk format — only used during migration to read old single-field files.
 #[derive(Debug, Serialize, Deserialize)]
-struct TagEntry {
+struct LegacyTagEntry {
     pub description: String,
 }
 
@@ -254,21 +254,24 @@ fn atomic_write(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-/// Recursively walks `dir`, collecting `TagEntry` files into `result`.
+/// Recursively walks `dir`, collecting tag metadata files into `result`.
 /// Each file's path relative to `root` (without `.toml`) becomes the tag key.
-fn walk_tags_dir(dir: &Path, root: &Path, result: &mut HashMap<String, String>) -> Result<()> {
+fn walk_tags_dir(dir: &Path, root: &Path, result: &mut HashMap<String, TagMeta>) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
         if path.is_dir() {
             walk_tags_dir(&path, root, result)?;
         } else if path.extension().and_then(|e| e.to_str()) == Some("toml") {
             if let Ok(content) = fs::read_to_string(path.as_path()) {
-                if let Ok(te) = toml::from_str::<TagEntry>(&content) {
-                    if let Ok(rel) = path.strip_prefix(root) {
-                        // rel = "@home/kitchen.toml" → tag = "@home/kitchen"
-                        if let Some(tag) = rel.with_extension("").to_str() {
-                            result.insert(tag.to_owned(), te.description);
-                        }
+                // Try full TagMeta first; fall back to legacy single-field format.
+                let meta = toml::from_str::<TagMeta>(&content).unwrap_or_else(|_| {
+                    toml::from_str::<LegacyTagEntry>(&content)
+                        .map(|le| TagMeta { description: Some(le.description), ..Default::default() })
+                        .unwrap_or_default()
+                });
+                if let Ok(rel) = path.strip_prefix(root) {
+                    if let Some(tag) = rel.with_extension("").to_str() {
+                        result.insert(tag.to_owned(), meta);
                     }
                 }
             }
@@ -402,34 +405,37 @@ impl Store for TomlStore {
         Ok(())
     }
 
-    fn get_tag_description(&self, tag: &str) -> Result<Option<String>> {
+    fn get_tag_meta(&self, tag: &str) -> Result<Option<TagMeta>> {
         let path = self.tag_file_path(tag);
         if !path.exists() {
             return Ok(None);
         }
         let content = fs::read_to_string(path.as_path())?;
-        let entry = toml::from_str::<TagEntry>(&content)
-            .map_err(|e| AppError::Other(format!("parse {}: {e}", path.display())))?;
-        Ok(Some(entry.description))
+        let meta = toml::from_str::<TagMeta>(&content).unwrap_or_else(|_| {
+            toml::from_str::<LegacyTagEntry>(&content)
+                .map(|le| TagMeta { description: Some(le.description), ..Default::default() })
+                .unwrap_or_default()
+        });
+        Ok(Some(meta))
     }
 
-    fn set_tag_description(&mut self, tag: &str, description: &str) -> Result<()> {
+    fn set_tag_meta(&mut self, tag: &str, meta: TagMeta) -> Result<()> {
         let _lock = self.acquire_repo_lock()?;
         let path = self.tag_file_path(tag);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let content = toml::to_string_pretty(&TagEntry { description: description.to_owned() })
+        let content = toml::to_string_pretty(&meta)
             .map_err(|e| AppError::Other(format!("TOML serialization error: {e}")))?;
         atomic_write(&path, &content)?;
         Ok(())
     }
 
-    fn delete_tag_description(&mut self, tag: &str) -> Result<()> {
+    fn delete_tag_meta(&mut self, tag: &str) -> Result<()> {
         let _lock = self.acquire_repo_lock()?;
         let path = self.tag_file_path(tag);
         if !path.exists() {
-            return Err(AppError::Other(format!("no description set for tag {tag:?}")));
+            return Err(AppError::Other(format!("no metadata set for tag {tag:?}")));
         }
         fs::remove_file(&path)?;
         // Remove empty parent directories up to (but not including) tags/.
@@ -447,7 +453,7 @@ impl Store for TomlStore {
         Ok(())
     }
 
-    fn list_tag_descriptions(&self) -> Result<HashMap<String, String>> {
+    fn list_tag_metas(&self) -> Result<HashMap<String, TagMeta>> {
         let tags_dir = self.tags_dir();
         if !tags_dir.exists() {
             return Ok(HashMap::new());

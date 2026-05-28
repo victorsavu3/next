@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
 use crate::{
-    domain::{state::GlobalState, task::Task},
+    domain::{state::GlobalState, tag::TagMeta, task::Task},
     error::{AppError, Result},
     store::Store,
 };
@@ -193,20 +193,20 @@ impl Store for CachedStore {
         self.with_conn(|conn| set_meta(conn, "state", &json))
     }
 
-    fn get_tag_description(&self, tag: &str) -> Result<Option<String>> {
-        self.inner.get_tag_description(tag)
+    fn get_tag_meta(&self, tag: &str) -> Result<Option<TagMeta>> {
+        self.inner.get_tag_meta(tag)
     }
 
-    fn set_tag_description(&mut self, tag: &str, description: &str) -> Result<()> {
-        self.inner.set_tag_description(tag, description)
+    fn set_tag_meta(&mut self, tag: &str, meta: TagMeta) -> Result<()> {
+        self.inner.set_tag_meta(tag, meta)
     }
 
-    fn delete_tag_description(&mut self, tag: &str) -> Result<()> {
-        self.inner.delete_tag_description(tag)
+    fn delete_tag_meta(&mut self, tag: &str) -> Result<()> {
+        self.inner.delete_tag_meta(tag)
     }
 
-    fn list_tag_descriptions(&self) -> Result<HashMap<String, String>> {
-        self.inner.list_tag_descriptions()
+    fn list_tag_metas(&self) -> Result<HashMap<String, TagMeta>> {
+        self.inner.list_tag_metas()
     }
 }
 

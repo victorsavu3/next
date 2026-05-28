@@ -33,13 +33,18 @@ pub fn task_path(root: &Path, task: &Task) -> PathBuf {
     root.join("tasks").join(TomlStore::task_filename(task))
 }
 
-/// Returns the path where the description for `tag` is stored under `root`.
+/// Returns the path where the metadata file for `tag` is stored under `root`.
 ///
 /// The tag string maps directly to a path: `@home/kitchen` →
 /// `<root>/tags/@home/kitchen.toml`.  Slashes in the tag name become real
 /// directory separators, so hierarchical tags form a natural directory tree.
-pub fn tag_description_path(root: &Path, tag: &str) -> PathBuf {
+pub fn tag_meta_path(root: &Path, tag: &str) -> PathBuf {
     root.join("tags").join(format!("{tag}.toml"))
+}
+
+/// Alias kept for callers that reference the description-only path.
+pub fn tag_description_path(root: &Path, tag: &str) -> PathBuf {
+    tag_meta_path(root, tag)
 }
 
 /// Returns the path where the state file for `root` is stored.

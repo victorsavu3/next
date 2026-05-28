@@ -1,3 +1,30 @@
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+
+use crate::domain::task::Priority;
+
+/// Metadata stored for a tag in `tags/<tag>.toml`.
+///
+/// All fields are optional so the file format is forward-compatible: an
+/// existing file with only `description = "…"` parses as a `TagMeta` with
+/// the other fields absent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TagMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Reference URL for this tag (e.g. a wiki page or issue tracker query).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Arbitrary key/value data attached to this tag.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub data: HashMap<String, JsonValue>,
+    /// Default priority applied to tasks that carry this tag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<Priority>,
+}
+
 /// Classifies a tag string by its prefix convention.
 ///
 /// All three kinds support hierarchical nesting via `/` separators.

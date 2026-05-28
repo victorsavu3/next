@@ -5,11 +5,10 @@
 //! be replaced with HTTP calls.
 
 use std::collections::HashMap;
-
 use uuid::Uuid;
 
 use crate::{
-    domain::{state::GlobalState, task::Task},
+    domain::{state::GlobalState, tag::TagMeta, task::Task},
     error::{AppError, Result},
     store::Store,
 };
@@ -82,19 +81,19 @@ impl Store for RemoteStore {
         Err(self.not_implemented())
     }
 
-    fn get_tag_description(&self, _tag: &str) -> Result<Option<String>> {
+    fn get_tag_meta(&self, _tag: &str) -> Result<Option<TagMeta>> {
         Err(self.not_implemented())
     }
 
-    fn set_tag_description(&mut self, _tag: &str, _description: &str) -> Result<()> {
+    fn set_tag_meta(&mut self, _tag: &str, _meta: TagMeta) -> Result<()> {
         Err(self.not_implemented())
     }
 
-    fn delete_tag_description(&mut self, _tag: &str) -> Result<()> {
+    fn delete_tag_meta(&mut self, _tag: &str) -> Result<()> {
         Err(self.not_implemented())
     }
 
-    fn list_tag_descriptions(&self) -> Result<HashMap<String, String>> {
+    fn list_tag_metas(&self) -> Result<HashMap<String, TagMeta>> {
         Err(self.not_implemented())
     }
 }
