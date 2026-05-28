@@ -4,6 +4,7 @@ use chrono::Local;
 use next::domain::{filter, scoring::ScoredTask, scoring};
 use next::cli::commands::add;
 use next::cli::filter::FilterArgs;
+use next::store::Store as _;
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -149,6 +150,116 @@ fn list_excludes_done_tasks_by_default() {
     let tasks = apply_filter(&mut env, vec![]);
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].task.title, "Open task");
+}
+
+// ---------------------------------------------------------------------------
+// Future start date filtering
+// ---------------------------------------------------------------------------
+
+fn apply_filter_with_future(env: &mut common::TestEnv, include_future: bool) -> Vec<ScoredTask> {
+    let today = Local::now().date_naive();
+    let mut filter_args = FilterArgs::parse(vec![]);
+    filter_args.future = include_future;
+    let filter_set = filter_args.to_filter_set().unwrap();
+    let state = env.ctx.store.get_state().unwrap();
+    let all = env.ctx.store.list_tasks().unwrap();
+    let filtered = filter::apply(all.clone(), &filter_set, &state, today);
+    scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring)
+}
+
+#[test]
+fn future_start_task_hidden_by_default() {
+    let mut env = common::setup();
+    add::run(add_args("Normal task"), &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            start: Some("2099-01-01".to_string()),
+            ..add_args("Future task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let tasks = apply_filter_with_future(&mut env, false);
+    let titles: Vec<&str> = tasks.iter().map(|t| t.task.title.as_str()).collect();
+    assert!(titles.contains(&"Normal task"), "normal task must be visible");
+    assert!(!titles.contains(&"Future task"), "future-start task must be hidden by default");
+}
+
+#[test]
+fn future_start_task_shown_with_future_flag() {
+    let mut env = common::setup();
+    add::run(add_args("Normal task"), &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            start: Some("2099-01-01".to_string()),
+            ..add_args("Future task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let tasks = apply_filter_with_future(&mut env, true);
+    let titles: Vec<&str> = tasks.iter().map(|t| t.task.title.as_str()).collect();
+    assert!(titles.contains(&"Normal task"));
+    assert!(titles.contains(&"Future task"), "future-start task must appear with --future");
+}
+
+#[test]
+fn task_with_start_today_is_visible() {
+    let mut env = common::setup();
+    let today = Local::now().date_naive().to_string();
+    add::run(
+        add::Args {
+            start: Some(today),
+            ..add_args("Starts today")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let tasks = apply_filter_with_future(&mut env, false);
+    assert_eq!(tasks.len(), 1, "task starting today must be visible without --future");
+}
+
+#[test]
+fn task_with_past_start_is_visible() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            start: Some("2000-01-01".to_string()),
+            ..add_args("Started long ago")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let tasks = apply_filter_with_future(&mut env, false);
+    assert_eq!(tasks.len(), 1, "task with past start date must be visible");
+}
+
+#[test]
+fn all_flag_also_shows_future_start_tasks() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            start: Some("2099-06-01".to_string()),
+            ..add_args("Distant future")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    // --all disables all implicit filtering including start-date gate.
+    let today = Local::now().date_naive();
+    let mut filter_args = FilterArgs::parse(vec![]);
+    filter_args.all = true;
+    let filter_set = filter_args.to_filter_set().unwrap();
+    let state = env.ctx.store.get_state().unwrap();
+    let all = env.ctx.store.list_tasks().unwrap();
+    let filtered = filter::apply(all.clone(), &filter_set, &state, today);
+    let tasks = scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring);
+    assert_eq!(tasks.len(), 1, "--all must reveal future-start tasks");
 }
 
 // ---------------------------------------------------------------------------
