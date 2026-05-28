@@ -9,6 +9,8 @@ use uuid::Uuid;
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Open,
+    /// Explicitly started / in-progress.
+    Started,
     Done,
     Cancelled,
 }
@@ -179,6 +181,36 @@ impl Task {
     /// Returns `true` when the task is open (not done or cancelled).
     pub fn is_open(&self) -> bool {
         self.status == Status::Open
+    }
+
+    /// Returns `true` when the task is actionable: open or started.
+    pub fn is_active(&self) -> bool {
+        matches!(self.status, Status::Open | Status::Started)
+    }
+
+    /// Marks the task as started (in-progress), logs the event in `data["time_log"]`,
+    /// and sets `updated_at` to now.
+    pub fn mark_started(&mut self) {
+        self.status = Status::Started;
+        self.updated_at = Utc::now();
+        self.append_time_event("start");
+    }
+
+    /// Marks the task as stopped (back to open), logs the event in `data["time_log"]`,
+    /// and sets `updated_at` to now.
+    pub fn mark_stopped(&mut self) {
+        self.status = Status::Open;
+        self.updated_at = Utc::now();
+        self.append_time_event("stop");
+    }
+
+    fn append_time_event(&mut self, event: &str) {
+        use serde_json::json;
+        let entry = json!({"event": event, "at": self.updated_at.to_rfc3339()});
+        let log = self.data.entry("time_log".to_owned()).or_insert_with(|| serde_json::Value::Array(vec![]));
+        if let serde_json::Value::Array(arr) = log {
+            arr.push(entry);
+        }
     }
 
     /// Marks the task as done and sets `updated_at` to now.

@@ -45,6 +45,8 @@ fn main() -> anyhow::Result<()> {
         Command::Show(_) => "show",
         Command::Open(_) => "open",
         Command::Data(_) => "data",
+        Command::Start(_) => "start",
+        Command::Stop(_) => "stop",
         Command::Done(_) => "done",
         Command::Cancel(_) => "cancel",
         Command::Edit(_) => "edit",
@@ -64,7 +66,7 @@ fn main() -> anyhow::Result<()> {
 
     let is_mutation = matches!(
         cmd_name,
-        "add" | "done" | "cancel" | "edit" | "delete" | "move" | "import" | "tag"
+        "add" | "start" | "stop" | "done" | "cancel" | "edit" | "delete" | "move" | "import" | "tag"
     );
 
     let result = match command {
@@ -75,6 +77,8 @@ fn main() -> anyhow::Result<()> {
         Command::Show(args) => commands::show::run(args, &mut ctx),
         Command::Open(args) => commands::open::run(args, &mut ctx),
         Command::Data(args) => commands::data::run(args, &mut ctx),
+        Command::Start(args) => commands::start::run(args, &mut ctx),
+        Command::Stop(args) => commands::stop::run(args, &mut ctx),
         Command::Done(args) => commands::done::run(args, &mut ctx),
         Command::Cancel(args) => commands::cancel::run(args, &mut ctx),
         Command::Edit(args) => commands::edit::run(args, &mut ctx),

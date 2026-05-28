@@ -16,6 +16,8 @@ pub mod move_cmd;
 pub mod next_cmd;
 pub mod resource;
 pub mod show;
+pub mod start;
+pub mod stop;
 pub mod sync;
 pub mod tag;
 pub mod tree;

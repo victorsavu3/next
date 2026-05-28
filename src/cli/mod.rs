@@ -54,6 +54,12 @@ pub enum Command {
     /// Read or write individual keys in a task's data map.
     Data(commands::data::Args),
 
+    /// Mark a task as started (in-progress).
+    Start(commands::start::Args),
+
+    /// Stop a started task (returns to open).
+    Stop(commands::stop::Args),
+
     /// Mark a task as done.
     Done(commands::done::Args),
 

@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::domain::{
     state::GlobalState,
     tag,
-    task::{Status, Task},
+    task::Task,
 };
 
 /// Controls which tasks are returned by `apply`.
@@ -87,7 +87,7 @@ pub fn apply(
         .filter(|task| {
             // ── Implicit gate ────────────────────────────────────────────────
             if !filter.disable_implicit {
-                if task.status != Status::Open {
+                if !task.is_active() {
                     return false;
                 }
                 if !filter.include_future && task.is_hidden(today) {
@@ -171,13 +171,13 @@ fn task_matches_contexts(task: &Task, active_contexts: &[String]) -> bool {
 fn build_implicit_indexes(tasks: &[Task]) -> (HashSet<Uuid>, HashSet<Uuid>) {
     let open_ids: HashSet<Uuid> = tasks
         .iter()
-        .filter(|t| t.status == Status::Open)
+        .filter(|t| t.is_active())
         .map(|t| t.id)
         .collect();
 
     let parents_with_open_children: HashSet<Uuid> = tasks
         .iter()
-        .filter(|t| t.status == Status::Open)
+        .filter(|t| t.is_active())
         .filter_map(|t| t.parent_id)
         .collect();
 

@@ -26,7 +26,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         } else {
             all_tasks
                 .iter()
-                .filter(|t| t.status == Status::Open)
+                .filter(|t| t.is_active())
                 .collect()
         };
         println!("{}", serde_json::to_string_pretty(&tasks)?);
@@ -38,7 +38,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     } else {
         all_tasks
             .iter()
-            .filter(|t| t.status == Status::Open)
+            .filter(|t| t.is_active())
             .map(|t| t.id)
             .collect()
     };
@@ -80,6 +80,7 @@ fn print_node(task: &Task, children: &HashMap<Uuid, Vec<&Task>>, depth: usize) {
     let short = &task.id.to_string().replace('-', "")[..8];
     let status = match task.status {
         Status::Open => "○",
+        Status::Started => "▶",
         Status::Done => "✓",
         Status::Cancelled => "✗",
     };
