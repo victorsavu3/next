@@ -9,7 +9,7 @@ use next::{
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Init runs before the repository exists — handle it before AppContext.
+    // Init and Tutorial run before the repository exists — handle them before AppContext.
     if let Some(Command::Init(args)) = cli.command {
         let dir = if let Some(ref p) = cli.repo {
             p.clone()
@@ -17,6 +17,9 @@ fn main() -> anyhow::Result<()> {
             std::env::current_dir().context("cannot determine current directory")?
         };
         return commands::init::run(args, &dir);
+    }
+    if let Some(Command::Tutorial(args)) = cli.command {
+        return commands::tutorial::run(args);
     }
 
     let cli_autosync = cli.autosync;
@@ -56,6 +59,7 @@ fn main() -> anyhow::Result<()> {
         Command::Export(_) => "export",
         Command::Tag(_) => "tag",
         Command::Tree(_) => "tree",
+        Command::Tutorial(_) => unreachable!("handled above"),
     };
 
     let is_mutation = matches!(
@@ -85,6 +89,7 @@ fn main() -> anyhow::Result<()> {
         Command::Export(args) => commands::export::run(args, &mut ctx),
         Command::Tag(args) => commands::tag::run(args, &mut ctx),
         Command::Tree(args) => commands::tree::run(args, &mut ctx),
+        Command::Tutorial(_) => unreachable!("handled above"),
     };
 
     if let Err(ref e) = result {

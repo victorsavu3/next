@@ -96,4 +96,7 @@ pub enum Command {
 
     /// Show all tasks in a tree view.
     Tree(commands::tree::Args),
+
+    /// Show the interactive tutorial.
+    Tutorial(commands::tutorial::Args),
 }

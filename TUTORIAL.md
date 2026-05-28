@@ -1,425 +1,234 @@
-# Tutorial
+# next — Tutorial
 
-This tutorial walks through everyday use of `next`, a task manager that stores tasks as
-TOML files in a git repository and surfaces what to work on via automatic urgency scoring.
+`next` is a task manager that stores tasks as TOML files in a git repository and scores them by urgency so you always know what to work on first.
 
 ---
 
-## Getting started
+## Setup
 
-### Create a repository
-
-`next` stores tasks inside a git repository. Use `next init` to set everything up in one step:
-
-```
+```sh
 mkdir ~/tasks && cd ~/tasks
 next init
 ```
 
-This runs `git init`, creates the `tasks/` directory, and adds `.next.db` to `.gitignore`
-automatically. All task data lives in `tasks/` as TOML files and is versioned
-automatically — every `add`, `done`, or `edit` operation creates a git commit.
+Point `next` at your repository from any directory:
 
-The repository layout looks like this after the first task is added:
-
-```
-~/tasks/
-  .git/
-  .gitignore          # contains ".next.db"
-  tasks/
-    buy-milk-3a7f1b2c.toml
-  state.toml          # active contexts, resources, user filter
-  .next.db            # SQLite read-cache — excluded from git
-```
-
-### Add your first task
-
-```
-next add "Buy milk"
-```
-
-`next` prints a short confirmation:
-
-```
-INFO  [add] added [3a7f1b2c] Buy milk
-```
-
-The eight-character code is the beginning of the task UUID and can be used to reference the task later.
-
----
-
-## Core concepts
-
-### Urgency score
-
-`next list` sorts tasks by a computed urgency score. The score rises with priority,
-proximity to the due date, task age, and parent priority. Tasks with the highest score
-are shown first; `next next` shows only the top 10 as a quick "what do I do now?"
-
-### Tasks, subtasks, and projects
-
-Any task can have child tasks via `--parent`. A task is a **project** when it carries the
-`project` tag — there are no special project commands, just the tag. A parent task is
-hidden from `next list` while any of its subtasks are still open.
-
----
-
-## Listing tasks
-
-```
-next list
-```
-
-Shows all open, unblocked tasks whose start date is not in the future, sorted by urgency.
-
-Useful flags:
-
-| Flag | Effect |
-|------|--------|
-| `--all` | Include done and cancelled tasks; disable all implicit filtering |
-| `--future` | Include tasks whose start date is in the future |
-
-### Filter tokens
-
-Pass filter tokens after any other arguments:
-
-```
-next list +@work          # only tasks tagged @work
-next list -@home          # exclude tasks tagged @home
-next list +urgent -@home  # combine filters
+```toml
+# $XDG_CONFIG_HOME/task-manager/config.toml
+repository = "/home/you/tasks"
 ```
 
 ---
 
-## Adding tasks with options
+## Core workflow
 
-```
-next add "Write weekly report" \
-  --due "this Friday" \
-  --priority high \
-  --tag @work \
-  --notes "Include Q2 numbers"
-```
-
-```
-next add "Water plants" \
-  --slug water-plants \
-  --recur-completion 7
+```sh
+next add "Buy groceries"                    # add a task
+next list                                   # list open tasks by urgency
+next next                                   # show the N most urgent tasks
+next done <id>                              # mark done
+next cancel <id>                            # mark cancelled
 ```
 
-Common options:
+`<id>` is the first 8 characters of the task UUID (shown in `next list`), or a slug you set with `--slug`.
 
-| Option | Description |
-|--------|-------------|
-| `--due <date>` | ISO date (`2026-06-30`) or natural language (`in two weeks`, `tomorrow`) |
-| `--start <date>` | Hide the task until this date |
-| `--priority low\|medium\|high` | Default: `medium` |
-| `--slug <name>` | Stable short name for referencing (`water-plants`) |
-| `--tag <tag>` | Repeatable; use `@context`, `#resource`, or bare words |
-| `--parent <id>` | UUID prefix or slug of the parent task |
-| `--blocked-by <id>` | UUID prefix or slug of a blocking task |
-| `--description <text>` | Multi-line context beyond the title |
-| `--url <url>` | http/https URL for the task (ticket, doc, link) |
-| `--assignee <user>` | Person responsible for the task |
-| `--notes <text>` | Multi-line free text |
-| `--recur-schedule "every Monday"` | Schedule-based recurrence |
-| `--recur-completion 7` | Completion-based recurrence (days after done) |
-| `--json` | Print the saved task as JSON |
-
----
-
-## Marking tasks done
-
-Reference a task by UUID prefix or slug:
-
-```
-next done water-plants
-next done 3a7f1b2c
+```sh
+next add "Fix login bug" --slug fix-login --priority high --due 2026-06-01
+next done fix-login
 ```
 
 ---
 
 ## Editing tasks
 
-Use named flags to change specific fields:
-
-```
-next edit water-plants --due "next Sunday"
-next edit water-plants --priority high
-next edit 3a7f1b2c --title "Buy oat milk"
-next edit 3a7f1b2c --clear-due
-```
-
-Add or remove tags with trailing `+tag` / `-tag` tokens or with `--tag` / `--remove-tag`:
-
-```
-next edit water-plants +@home -urgent
-next edit water-plants --tag @garden --remove-tag urgent
+```sh
+next edit <id> --title "New title"
+next edit <id> --priority high
+next edit <id> --due 2026-12-31
+next edit <id> --description "Details here"
+next edit <id> --tag @work --tag python     # replaces all tags
 ```
 
-Set or clear the description and URL:
+Arbitrary key/value data on a task:
 
-```
-next edit my-ticket --url "https://example.com/ticket-42"
-next edit my-ticket --description "See comment from Alice in the ticket"
-next edit my-ticket --clear-url
+```sh
+next data set <id> ticket JIRA-42
+next data get <id> ticket
+next data unset <id> ticket
 ```
 
 ---
 
 ## Tags
 
-Tags come in three flavours:
+Three kinds of tag, all supporting `/`-separated hierarchies:
 
-| Prefix | Kind | Example |
-|--------|------|---------|
-| `@` | Context | `@work`, `@home/office` |
-| `#` | Resource | `#printer`, `#office/projector` |
-| *(none)* | Freeform | `urgent`, `project`, `python` |
+| Kind | Example | Meaning |
+|------|---------|---------|
+| Context | `@home`, `@work/frontend` | Where you are working |
+| Resource | `#laptop`, `#office/printer` | What you need available |
+| Freeform | `python`, `lang/rust` | Plain label |
 
-Tags can be hierarchical using `/`. `@work/berlin` is a descendant of `@work`. Filtering
-by `@work` will include tasks tagged `@work/berlin`.
-
----
-
-## Tag descriptions
-
-Any tag can carry a human-readable description stored in `state.toml`. Descriptions
-appear in `next tag`, `next context`, and `next resource` output. They document what
-each tag means — for both humans and AI agents reading the repository.
-
-```
-next tag describe @work "Tasks at the standing desk — laptop required"
-next tag describe #printer "Office laser printer, 2nd floor"
-next tag describe python "Python-related development work"
-
-next tag                           # list all tags with descriptions, grouped by kind
-next tag clear-description python  # remove a description
+```sh
+next add "Write report" --tag @work --tag #laptop --tag python
 ```
 
-Contexts and resources have dedicated subcommands that validate the prefix:
+Annotate tags:
 
-```
-next context describe @home "Home tasks: kitchen, garden, errands"
-next resource describe #vacation "Away from keyboard — all tasks hidden"
+```sh
+next tag describe @work "Tasks done at the office"
+next tag set-url #laptop "https://wiki/laptop"
+next tag set-priority python high   # tasks tagged python default to high priority
+next tag show @work                 # view all metadata for a tag
+next tag                            # list all tags
 ```
 
 ---
 
-## Contexts
+## Active context
 
-Contexts filter your view to tasks relevant to where you are right now.
+Focus on one environment — only tasks tagged with that context (plus untagged tasks) are shown:
 
+```sh
+next context set @work      # show @work tasks + untagged tasks
+next context clear          # show everything
+next context                # show current context
 ```
-next context set @home         # only show tasks tagged @home (or descendants)
-next context                   # show active contexts (with descriptions)
-next context clear             # show everything again
-```
 
-Active contexts are stored in `state.toml` and persist across sessions.
+Context-neutral tasks (no `@` tags) are always visible regardless of the active context.
 
 ---
 
-## Resources
+## Resource availability
 
-Resources represent equipment or conditions. Mark a resource unavailable to hide tasks that require it:
+Hide tasks that require unavailable hardware:
 
-```
-next resource set #printer off   # printer is broken — hide printer tasks
-next resource set #printer on    # printer is fixed
-next resource                    # list all resource states (with descriptions)
+```sh
+next resource set #laptop off   # travelling without laptop
+next list                       # #laptop tasks hidden
+next resource set #laptop on    # back — tasks reappear
 ```
 
 ---
 
 ## Projects and subtasks
 
-Create a project task and add subtasks to it:
-
-```
-next add "Launch blog" --slug launch-blog --tag project
-next add "Write first post" --parent launch-blog
-next add "Set up hosting" --parent launch-blog
-
-next tree                      # see all tasks in a parent-child tree
-next show launch-blog          # show the project task and its direct children
+```sh
+next add "Launch website" --slug launch
+next add "Write copy" --parent launch
+next add "Design logo" --parent launch
+next tree                               # see the hierarchy
 ```
 
-A parent task is hidden from `next list` while any of its subtasks are still open.
-Long-running projects should use `--long-term` to avoid accumulating age-based urgency.
+A parent task is hidden from the default list until all children are done or cancelled.
 
----
+Move or reparent a task:
 
-## Viewing the task tree
-
-`next tree` shows all tasks in their parent-child structure. Tasks tagged `project` that
-have children are marked with `[project]`.
-
-```
-next tree           # open tasks only
-next tree --all     # include done and cancelled tasks
+```sh
+next move <id> --parent <parent-id>
+next move <id> --parent none           # remove from parent
 ```
 
 ---
 
-## Blocking tasks
+## Filtering
 
-When task B cannot start until task A is done:
+All list commands accept filter tokens:
 
-```
-next add "Deploy to staging" --blocked-by "write-tests"
-```
-
-Blocked tasks are hidden from `next list` until all their blockers are completed.
-
----
-
-## Opening URLs
-
-When a task has a URL (e.g. a ticket or doc), open it directly:
-
-```
-next open my-ticket
-next open a1b2c3d4
+```sh
+next list +python -bug                 # has 'python', doesn't have 'bug'
+next list context:@work                # force context for this query
+next list user:alice                   # show alice's tasks only
+next list project:lang/rust            # tasks in lang/rust project
+next list --all                        # disable all implicit filters
 ```
 
 ---
 
-## Task data
+## Recurrence
 
-Store arbitrary key-value metadata on a task:
-
-```
-next data set a1b2 source "github"
-next data set a1b2 score 42
-next data set a1b2 urgent true
-next data get a1b2 source
-next data unset a1b2 source
+```sh
+next add "Water plants" --recur-completion 3    # every 3 days after completion
+next add "Weekly review" --recur-schedule "every Monday"
 ```
 
-This is useful for AI-provided metadata or tool integrations.
-
----
-
-## Showing full task details
-
-```
-next show water-plants
-next show 3a7f1b2c
-```
-
----
-
-## Recurring tasks
-
-Schedule-based: repeats on a calendar pattern regardless of when you complete it.
-
-```
-next add "Pay rent"     --recur-schedule "1st of every month"
-next add "Team standup" --recur-schedule "every weekday"
-```
-
-Completion-based: repeats a fixed number of days after you mark it done.
-
-```
-next add "Water plants"       --recur-completion 3
-next add "Clean coffee maker" --recur-completion 14
-```
-
-When you mark a recurring task done, a new instance is automatically created.
+When you complete a recurrence task, a new instance is created automatically.
 
 ---
 
 ## Forecast
 
-See which tasks are due in the coming months:
-
-```
-next forecast
-next forecast --days 180
+```sh
+next forecast              # tasks due in the next 90 days
+next forecast --days 30    # shorter window
 ```
 
 ---
 
-## User filters (team use)
+## Sync
 
-When multiple people share a repository, `next user` scopes the list to one or more assignees:
-
-```
-next user set alice
-next list             # shows alice's tasks + unassigned tasks
-next user clear       # back to everyone
-```
-
-You can also filter by user inline:
-
-```
-next list user:alice
+```sh
+next sync                  # git pull + git push
+next sync --pull-only
+next sync --push-only
+next --autosync add "Task"  # sync automatically after this command
 ```
 
----
+To always sync after every mutation:
 
-## Syncing with a remote
-
-If you have a git remote:
-
-```
-next sync
+```toml
+# config.toml
+autosync = true
 ```
 
-This runs `git pull` (fast-forward), rebuilds the SQLite cache if HEAD changed, then
-`git push`. Conflicts are reported as file paths for manual resolution.
+If your SSH key is managed by a keychain or 1Password and the built-in git
+bindings fail, use subprocess mode:
 
----
-
-## Importing tasks
-
-### Forgejo issues
-
-```
-next import forgejo owner/repo
-```
-
-Creates a task for each open issue. Re-running updates existing tasks; it does not create duplicates.
-
-### iCalendar
-
-```
-next import ical ~/calendar.ics
-```
-
-Imports `VTODO` entries. Re-running is safe — tasks are matched by iCalendar UID.
-
----
-
-## Exporting tasks
-
-```
-next export ical > tasks.ics
+```toml
+[sync]
+git_subprocess = true
 ```
 
 ---
 
-## Deleting tasks
+## Urgency scoring
 
-```
-next delete 3a7f1b2c
-```
+The score shown in `next list` drives ordering. It combines:
 
-Asks for confirmation before permanently removing the task file.
+- **Due-date factor** — dominates when a deadline is set; highest when overdue
+- **Priority factor** — low / medium / high
+- **Age factor** — tasks grow slightly more urgent over time (capped)
+- **Manual adjustment** — `next edit <id> --adjust +2.0`
+
+Tune weights in the config:
+
+```toml
+[scoring]
+priority_high = 3.0
+due_overdue_base = 15.0
+age_per_day = 0.02
+```
 
 ---
 
-## Tips
+## Quick reference
 
-**Slugs are your friend.** Give tasks you reference often a slug (`--slug water-plants`).
-Slugs are stable across renames and are far easier to type than UUID prefixes.
-
-**Score adjustment.** Use `--adjust 10` to manually boost a task that should float to
-the top, or `--adjust -5` to push it down.
-
-**Long-term tasks.** Use `--long-term` on tasks that are permanently in progress (like
-"exercise daily"). This disables age-based scoring so they do not accumulate urgency.
-
-**Description vs notes.** Use `--description` for a brief context summary that appears
-in the task list output; use `--notes` for longer free-form reference material.
+```
+next add <title> [--priority low|medium|high] [--due DATE] [--tag TAG]...
+next list [FILTERS]
+next next [-n N]
+next show <id>
+next done <id>
+next cancel <id>
+next edit <id> [--title T] [--priority P] [--due D] [--tag TAG]...
+next delete <id> --yes
+next move <id> --parent <pid>
+next tree [--all]
+next forecast [--days N]
+next sync [--pull-only | --push-only]
+next tag [describe | set-url | set-priority | data | show | clear-description | clear-url | clear-priority]
+next context [set <@tag>... | clear]
+next resource [set <#tag> on|off]
+next user [set <name>... | clear | list]
+next import forgejo <owner/repo> [--tag TAG]
+```

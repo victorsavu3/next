@@ -1,6 +1,7 @@
 pub mod add;
 pub mod data;
 pub mod init;
+pub mod tutorial;
 pub mod open;
 pub mod cancel;
 pub mod context;
