@@ -71,23 +71,22 @@ before writing the TOML file.
 
 ### 1.3 Global state
 
-Global state MUST be stored in `state.toml` at the repository root.
+Machine-local state (active contexts, active users, resource availability) MUST be stored
+at `$XDG_STATE_HOME/task-manager/<fnv1a-hash-of-repo-path>/state.toml`.  This path is
+never inside the repository and MUST NOT be committed to git.
 
 ```toml
-active_contexts = ["@home"]                       # active @ tags (empty = no filter)
-active_users    = ["alice"]                       # active user filter (empty = no filter)
+active_contexts = ["@home"]   # active @ tags (empty = no filter)
+active_users    = ["alice"]   # active user filter (empty = no filter)
 [resources]
-printer = true
+printer  = true
 vacation = false
-[tag_descriptions]
-"@home" = "Home tasks: kitchen, garden, errands"
-"#printer" = "Office laser printer, 2nd floor"
-python = "Python-related development work"
 ```
 
 Tag descriptions are human-readable notes attached to any tag (context, resource, or
-freeform). They are stored in `state.toml` and used for both human documentation and
-AI agent context. The key is always the full tag string including its prefix.
+freeform). They are stored as individual TOML files under `tags/` in the repository
+(e.g. `tags/@work.toml`, `tags/@home/kitchen.toml`) and ARE committed to git so that all
+machines share the same descriptions. The `next tag describe` command writes these files.
 
 ---
 
@@ -101,9 +100,15 @@ AI agent context. The key is always the full tag string including its prefix.
     water-plants-a1b2c3d4.toml   # filename: <slug>.toml if slug set, else <title-slug>-<first-8-uuid>.toml
     work-infra.toml              # project task with slug "work-infra"
     deploy-db-e5f6a7b8.toml
-  state.toml
+  tags/
+    @work.toml                   # tag description for @work
+    @home/
+      kitchen.toml               # tag description for @home/kitchen
   .gitignore                     # MUST contain ".next.db"
   .next.db                       # SQLite read cache; MUST NOT be committed to git
+
+$XDG_STATE_HOME/task-manager/<repo-hash>/
+  state.toml                     # machine-local state; MUST NOT be committed to git
 ```
 
 All task files MUST reside in the flat `tasks/` directory. There is no `projects/`
@@ -353,27 +358,23 @@ All `<id-or-slug>` arguments MUST accept a full UUID, an unambiguous UUID prefix
 next context                             # show active contexts (with descriptions)
 next context set <@tag>...               # replace active context set
 next context clear                       # clear all active contexts
-next context describe <@tag> <text>      # set a description for a context
-next context clear-description <@tag>    # remove a context description
 
 next resource                            # list resources and availability (with descriptions)
 next resource set <#tag> on|off          # toggle a resource
-next resource describe <#tag> <text>     # set a description for a resource
-next resource clear-description <#tag>   # remove a resource description
 ```
 
 ### 8.5 Tag descriptions
 
 ```
 next tag                                 # list all tags grouped by kind, with descriptions
-next tag describe <tag> <text>           # set a description for any tag
+next tag describe <tag> <text>           # set a description for any tag (including @ctx and #res)
 next tag clear-description <tag>         # remove a tag description
 ```
 
-Tags, contexts, and resources share a single `tag_descriptions` map in `state.toml`.
-All three command families (`next tag`, `next context`, `next resource`) read and write
-the same map. `next context describe` and `next resource describe` validate the prefix
-(`@` and `#` respectively) before writing.
+Tag descriptions are stored as individual files under `tags/` and committed to git.
+`next tag describe` is the unified command for all tag kinds — pass `@work`, `#printer`,
+or a bare freeform tag. Descriptions appear in `next context`, `next resource`, and
+`next tag` output.
 
 ### 8.6 Tree view
 
