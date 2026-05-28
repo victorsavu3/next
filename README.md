@@ -40,6 +40,10 @@ source of truth.
 automatically whenever the git HEAD changes (e.g. after a pull), so it is always
 consistent with the TOML files. Add it to `.gitignore`; `next init` does this for you.
 
+Machine-local state (active contexts, active users, resource availability) is stored
+outside the repository in `$XDG_STATE_HOME/task-manager/<repo-hash>/state.toml` so it
+is never committed or synced.
+
 ```
 my-tasks/
   .git/
@@ -47,9 +51,15 @@ my-tasks/
   tasks/
     call-dentist-a1b2c3d4.toml
     water-plants.toml          # task with slug "water-plants"
-  state.toml                   # active contexts, active users, resource availability, tag descriptions
+  tags/
+    @work.toml                 # tag description for @work
+    @home/
+      kitchen.toml             # tag description for @home/kitchen
   next.log                     # append-only command log (rotated at 1 MB)
   .next.db                     # SQLite read cache — not committed
+
+~/.local/state/task-manager/<repo-hash>/
+  state.toml                   # machine-local: active contexts, users, resource availability
 ```
 
 ---
@@ -93,9 +103,10 @@ next resource set #printer on   # show them again
 ### Tag descriptions
 
 Any tag (context, resource, or freeform) can carry a human-readable description. These
-descriptions are stored in `state.toml` and are visible in `next tag`, `next context`,
-and `next resource` output. They serve both as documentation for users and as structured
-metadata for AI agents reading the repository.
+descriptions are stored as individual TOML files under `tags/` in the repository and are
+committed to git, making them visible to all machines. They appear in `next tag`,
+`next context`, and `next resource` output and serve as structured metadata for AI agents
+reading the repository.
 
 ```sh
 next tag describe @work "Tasks at the standing desk — laptop required"
@@ -158,7 +169,7 @@ All list commands accept filter tokens in any order:
 |---------|-------------|
 | `next init` | Initialise a task repository in the current directory |
 | `next add` | Add a task |
-| `next list` | List tasks sorted by urgency score |
+| `next list [-n N]` | List tasks sorted by urgency score; `-n`/`--limit` caps output |
 | `next next [N]` | Show top N highest-scored tasks (default 10) |
 | `next show <id>` | Full details of a single task |
 | `next tree` | Show all tasks in a parent-child tree |
@@ -182,14 +193,22 @@ All list commands accept filter tokens in any order:
 Task IDs accept a full UUID, a slug, or any unambiguous 4+ character hex prefix.
 All commands support `--json` for pipe-friendly output.
 
+The `--autosync` global flag (or `autosync = true` in the config file) automatically
+runs `next sync` after every mutation command.
+
 ---
 
 ## Backend configuration
 
-By default `next` stores tasks locally. A remote HTTP backend can be configured:
+By default `next` stores tasks locally. The config file lives at
+`$XDG_CONFIG_HOME/task-manager/config.toml`:
 
 ```toml
-# $XDG_CONFIG_HOME/task-manager/config.toml
+repository = "/home/alice/tasks"  # use next from any directory
+
+autosync   = true                 # sync automatically after each mutation
+list_limit = 20                   # cap `next list` output (same as -n 20)
+
 [backend]
 kind = "remote"
 

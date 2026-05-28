@@ -135,12 +135,17 @@ pub trait VcsBackend: Send + Sync {
 ```rust
 pub struct Config {
     pub backend: BackendConfig,
-    pub scoring: ScoringWeights,
-    pub repository: Option<PathBuf>,  // default repository path (overridden by --repo)
+    pub scoring: ScoringConfig,
+    pub forgejo: ForgejoConfig,
+    pub forecast_horizon_days: u32,    // default 90
+    pub next_count: usize,             // default 10
+    pub list_limit: Option<usize>,     // cap `next list` output; None = unlimited
+    pub repository: Option<PathBuf>,   // default repo root (overridden by --repo)
+    pub autosync: bool,                // sync after each mutation (overridden by --autosync)
 }
 
 pub struct BackendConfig {
-    pub kind: BackendKind,          // Local (default) | Remote
+    pub kind: BackendKind,             // Local (default) | Remote
     pub remote: Option<RemoteBackendConfig>,
 }
 
@@ -192,18 +197,23 @@ CREATE INDEX idx_tasks_forgejo ON tasks(forgejo_issue);
 CREATE INDEX idx_tasks_webcal  ON tasks(webcal_uid);
 ```
 
-**`TomlStore`** reads and writes one `.toml` file per task in `tasks/`.  The global state
-is stored in `state.toml` at the repository root.  Tag descriptions are stored as
-individual TOML files under `tags/`: the tag string maps directly to a path (`@work` →
-`tags/@work.toml`, `@home/kitchen` → `tags/@home/kitchen.toml`).
+**`TomlStore`** reads and writes one `.toml` file per task in `tasks/`.  Tag descriptions
+are stored as individual TOML files under `tags/`: the tag string maps directly to a path
+(`@work` → `tags/@work.toml`, `@home/kitchen` → `tags/@home/kitchen.toml`).
 
-A one-time migration runs on `TomlStore::open()`: if `state.toml` contains a legacy
-`[tag_descriptions]` table, each entry is extracted to its own file under `tags/` and
-the table is removed from `state.toml`.  The migration is idempotent (subsequent opens
-are no-ops).
+Machine-local state (active contexts, active users, resource availability) is stored at
+`$XDG_STATE_HOME/task-manager/<fnv1a-hash-of-canonical-repo-path>/state.toml`.  This
+path is computed by `next::storage::state_path_for_repo(root)` and is never committed to
+git.  A separate advisory lock file co-located with `state.toml` (`state.toml.lock`)
+guards concurrent writes.
 
-`next_storage::tag_description_path(root, tag)` returns the canonical path for a tag's
-description file and is used by CLI commands to pass the correct path to `vcs.commit()`.
+Two one-time migrations run on `TomlStore::open()`:
+1. **State file migration**: if `<repo>/state.toml` exists and the XDG path does not,
+   the file is moved to the XDG location.
+2. **Tag description migration**: if `state.toml` contains a legacy `[tag_descriptions]`
+   table, each entry is extracted to its own file under `tags/` and the table is removed.
+
+Both migrations are idempotent (subsequent opens are no-ops).
 
 **`GitBackend`** wraps `Mutex<git2::Repository>` to satisfy `Send + Sync`. Commit
 messages follow the pattern `next: <verb> "<task title>"`.
@@ -269,12 +279,14 @@ pub struct AppContext {
 2. If command is Init → run init::run(args, cwd); exit
 3. AppContext::new(): locate repository root, select backend, open CachedStore
 4. Execute command logic (reads from store; writes to store + vcs)
-5. If mutation: vcs.commit(changed_paths, message)
+5. Task mutations (add/edit/done/cancel/delete/move/import/tag describe): vcs.commit(changed_paths, message)
+   State mutations (context/resource/user): write to XDG state file only; no commit
 6. Render output (text or JSON to stdout)
-7. On error: ctx.log.error(cmd_name, message); propagate to main
+7. If autosync enabled and command succeeded and is a mutation: run sync (pull + push)
+8. On error: ctx.log.error(cmd_name, message); propagate to main
 ```
 
-Read-only commands (list, show, forecast) skip step 5.
+Read-only commands (list, show, forecast, tree) skip steps 5 and 7.
 
 ---
 
@@ -304,8 +316,10 @@ fn push(&self) -> Result<()>
 fn head_hash(&self) -> Result<String>
 ```
 
-All mutations call `vcs.commit()` after writing TOML. Commit messages follow the pattern:
-`next: <verb> "<task title>"` — e.g. `next: add "Water plants"`.
+Task and tag-description mutations call `vcs.commit()` after writing TOML. Commit
+messages follow the pattern `next: <verb> "<task title>"` — e.g. `next: add "Water plants"`.
+State mutations (context, resource, user) write only to the XDG state file and do not
+produce a git commit.
 
 `pull` returns `PullResult::Clean` or `PullResult::Conflicts(Vec<PathBuf>)`. The sync
 command aborts and prints conflicting file paths when conflicts are detected.
@@ -315,7 +329,7 @@ command aborts and prints conflicting file paths when conflicts are detected.
 ## 7. Logging
 
 ```
-crates/next-cli/src/log.rs
+src/log.rs
 ```
 
 `Logger` writes an append-only plaintext log at `<repo_root>/next.log`:
@@ -380,7 +394,7 @@ tasks with no `assignee`.
 
 ## 9. ID resolution
 
-`crates/next-cli/src/resolve.rs`:
+`src/resolve.rs`:
 
 ```rust
 pub fn resolve_task_id(store: &dyn Store, id_str: &str) -> anyhow::Result<Uuid>
@@ -449,12 +463,22 @@ Accepted by `--due` and `--start` in `next add` and `next edit`.
 defaults when absent):
 
 ```toml
+repository            = "/home/alice/tasks"  # use next from any directory
+autosync              = false                # sync after each mutation (--autosync to override)
+list_limit            = 20                   # cap `next list` output; absent = unlimited
+forecast_horizon_days = 90
+next_count            = 10                   # tasks shown by `next next`
+
 [backend]
 kind = "local"   # "local" | "remote"
 
 [backend.remote]
 url   = "https://tasks.example.com"
 token = "my-bearer-token"
+
+[forgejo]
+base_url = "https://forgejo.example.com"
+token    = "my-secret-token"
 
 [scoring]
 due_overdue_base    = 12.0
