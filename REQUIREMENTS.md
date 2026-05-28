@@ -363,18 +363,28 @@ next resource                            # list resources and availability (with
 next resource set <#tag> on|off          # toggle a resource
 ```
 
-### 8.5 Tag descriptions
+### 8.5 Tag metadata
 
 ```
-next tag                                 # list all tags grouped by kind, with descriptions
-next tag describe <tag> <text>           # set a description for any tag (including @ctx and #res)
-next tag clear-description <tag>         # remove a tag description
+next tag                                          # list all tags grouped by kind
+next tag describe <tag> <text>                    # set description (any tag kind)
+next tag clear-description <tag>                  # remove description
+next tag set-url <tag> <url>                      # attach a reference URL
+next tag clear-url <tag>
+next tag set-priority <tag> low|medium|high       # default priority hint for tasks with this tag
+next tag clear-priority <tag>
+next tag data set <tag> <key> <value>             # store arbitrary JSON value
+next tag data get <tag> <key>
+next tag data unset <tag> <key>
+next tag data list <tag>
+next tag show <tag>                               # display all metadata for a tag
 ```
 
-Tag descriptions are stored as individual files under `tags/` and committed to git.
-`next tag describe` is the unified command for all tag kinds — pass `@work`, `#printer`,
-or a bare freeform tag. Descriptions appear in `next context`, `next resource`, and
-`next tag` output.
+Contexts (`@`), resources (`#`), and freeform tags are all stored identically under
+`tags/<tag>.toml` and committed to git. `next tag` is the unified command for all tag
+metadata — there are no separate describe/clear commands on `next context` or
+`next resource`. Descriptions appear in `next context`, `next resource`, and `next tag`
+output.
 
 ### 8.6 Tree view
 

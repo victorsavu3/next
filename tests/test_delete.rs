@@ -44,10 +44,7 @@ fn delete_without_yes_errors() {
     let task = env.ctx.store.list_tasks().unwrap().remove(0);
     let err = delete::run(delete::Args { id: task.id.to_string(), yes: false }, &mut env.ctx)
         .unwrap_err();
-    assert!(
-        err.to_string().contains("--yes") || err.to_string().contains("confirm"),
-        "unexpected error: {err}"
-    );
+    assert!(err.to_string().contains("aborted"), "unexpected error: {err}");
 
     // Task must still exist.
     assert_eq!(env.ctx.store.list_tasks().unwrap().len(), 1);

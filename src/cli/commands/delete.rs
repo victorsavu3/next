@@ -15,10 +15,14 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let task = ctx.store.get_task(id)?;
 
     if !args.yes {
-        anyhow::bail!(
-            "this will permanently delete {:?} — rerun with --yes to confirm",
-            task.title
-        );
+        eprint!("Delete {:?}? [y/N] ", task.title);
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| anyhow::anyhow!("failed to read input: {e}"))?;
+        if !matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            anyhow::bail!("aborted");
+        }
     }
 
     // Compute path before deleting so we can stage the removal.

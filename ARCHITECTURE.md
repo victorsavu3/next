@@ -116,6 +116,13 @@ pub trait Store: Send + Sync {
     fn get_task_by_webcal_uid(&self, uid: &str) -> Result<Option<Task>>;
     fn get_state(&self) -> Result<GlobalState>;
     fn save_state(&mut self, state: &GlobalState) -> Result<()>;
+    // Core tag metadata (stored in tags/<tag>.toml; committed to git)
+    fn get_tag_meta(&self, tag: &str) -> Result<Option<TagMeta>>;
+    fn set_tag_meta(&mut self, tag: &str, meta: TagMeta) -> Result<()>;
+    fn delete_tag_meta(&mut self, tag: &str) -> Result<()>;
+    fn list_tag_metas(&self) -> Result<HashMap<String, TagMeta>>;
+
+    // Convenience wrappers implemented as default trait methods
     fn get_tag_description(&self, tag: &str) -> Result<Option<String>>;
     fn set_tag_description(&mut self, tag: &str, desc: &str) -> Result<()>;
     fn delete_tag_description(&mut self, tag: &str) -> Result<()>;
@@ -137,6 +144,7 @@ pub struct Config {
     pub backend: BackendConfig,
     pub scoring: ScoringConfig,
     pub forgejo: ForgejoConfig,
+    pub sync: SyncConfig,              // git_subprocess: use shell git for push/pull
     pub forecast_horizon_days: u32,    // default 90
     pub next_count: usize,             // default 10
     pub list_limit: Option<usize>,     // cap `next list` output; None = unlimited
@@ -197,9 +205,17 @@ CREATE INDEX idx_tasks_forgejo ON tasks(forgejo_issue);
 CREATE INDEX idx_tasks_webcal  ON tasks(webcal_uid);
 ```
 
-**`TomlStore`** reads and writes one `.toml` file per task in `tasks/`.  Tag descriptions
-are stored as individual TOML files under `tags/`: the tag string maps directly to a path
-(`@work` → `tags/@work.toml`, `@home/kitchen` → `tags/@home/kitchen.toml`).
+**`TomlStore`** reads and writes one `.toml` file per task in `tasks/`.  Tag metadata
+(`TagMeta`: description, URL, priority, arbitrary data) is stored as individual TOML files
+under `tags/`: the tag string maps directly to a path (`@work` → `tags/@work.toml`,
+`@home/kitchen` → `tags/@home/kitchen.toml`).
+
+**Contexts and resources are just tags.** `@context` and `#resource` tags are classified
+by their prefix (`@` or `#`) but share the same `tags/` storage as freeform tags. There
+are no separate metadata commands for contexts or resources — use `next tag describe`,
+`next tag set-url`, `next tag set-priority`, etc. for all tag kinds.  The `next context`
+and `next resource` commands only manage the machine-local active-context / resource-availability
+state stored in `state.toml`; they do not touch tag metadata.
 
 Machine-local state (active contexts, active users, resource availability) is stored at
 `$XDG_STATE_HOME/task-manager/<fnv1a-hash-of-canonical-repo-path>/state.toml`.  This
@@ -272,11 +288,12 @@ pub struct AppContext {
 
 ## 5. Command execution lifecycle
 
-`next init` is the only command that runs before `AppContext` is constructed:
+`next init` and `next tutorial` run before `AppContext` is constructed:
 
 ```
 1. Parse CLI args (clap)
 2. If command is Init → run init::run(args, cwd); exit
+   If command is Tutorial → print embedded TUTORIAL.md; exit
 3. AppContext::new(): locate repository root, select backend, open CachedStore
 4. Execute command logic (reads from store; writes to store + vcs)
 5. Task mutations (add/edit/done/cancel/delete/move/import/tag describe): vcs.commit(changed_paths, message)

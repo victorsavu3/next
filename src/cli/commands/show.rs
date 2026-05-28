@@ -49,6 +49,17 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     if let Some(p) = parent {
         println!("Parent:   [{}] {}", &p.id.to_string()[..8], p.title);
     }
+
+    let children: Vec<_> = all_tasks
+        .iter()
+        .filter(|t| t.parent_id == Some(task.id))
+        .collect();
+    if !children.is_empty() {
+        println!("Children:");
+        for child in &children {
+            println!("  [{}] {}", &child.id.to_string()[..8], child.title);
+        }
+    }
     if !task.blocked_by.is_empty() {
         let blocker_strs: Vec<String> = task
             .blocked_by

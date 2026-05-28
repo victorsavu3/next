@@ -274,7 +274,10 @@ impl VcsBackend for GitBackend {
         repo.merge(&[&fetch_commit], None, None)
             .map_err(|e| AppError::Other(format!("git merge: {e}")))?;
 
-        let has_conflicts = repo.index().map(|i| i.has_conflicts()).unwrap_or(false);
+        let has_conflicts = repo
+            .index()
+            .map_err(|e| AppError::Other(format!("git index after merge: {e}")))?
+            .has_conflicts();
 
         if has_conflicts {
             let conflict_paths: Vec<PathBuf> = {
