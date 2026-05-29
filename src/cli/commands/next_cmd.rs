@@ -26,7 +26,7 @@ pub struct Args {
     #[arg(long)]
     pub json: bool,
 
-    /// Filter tokens: +tag, -tag, project:path, context:@name, user:name.
+    /// Filter tokens: +tag, -tag, parent:slug, context:@name, user:name.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub tokens: Vec<String>,
 }

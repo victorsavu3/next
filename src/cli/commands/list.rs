@@ -27,7 +27,7 @@ pub struct Args {
     #[arg(short = 'n', long)]
     pub limit: Option<usize>,
 
-    /// Filter tokens: +tag, -tag, project:path, context:@name, user:name.
+    /// Filter tokens: +tag, -tag, parent:slug (project scope), context:@name, user:name.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub tokens: Vec<String>,
 }

@@ -38,7 +38,7 @@ pub struct FilterSet {
     /// When set, only tasks that are descendants (or the root itself) of the
     /// task with this slug are returned.  Resolved against the full task list
     /// inside `apply`; silently returns nothing if the slug is not found.
-    pub project_root: Option<String>,
+    pub parent_slug: Option<String>,
 }
 
 /// Applies `filter` to `tasks` and returns those that pass.
@@ -69,8 +69,8 @@ pub fn apply(
         build_implicit_indexes(&tasks)
     };
 
-    // Pre-compute descendant set for project_root filter (empty = no filter).
-    let project_descendants: Option<HashSet<Uuid>> = filter.project_root.as_ref().map(|slug| {
+    // Pre-compute descendant set for parent_slug filter (empty = no filter).
+    let project_descendants: Option<HashSet<Uuid>> = filter.parent_slug.as_ref().map(|slug| {
         tasks
             .iter()
             .find(|t| t.slug.as_deref() == Some(slug.as_str()))

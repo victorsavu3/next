@@ -60,7 +60,7 @@ pub struct Task {
 
     /// Optional user-provided identifier, e.g. `"water-plants"` or `"work-infra"`.
     /// Must be unique across all tasks. Used to reference the task as a parent or
-    /// blocker without knowing its UUID, and as the target of `project:<slug>` filters.
+    /// blocker without knowing its UUID, and as the target of `parent:<slug>` filters.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
 

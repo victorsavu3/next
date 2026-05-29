@@ -8,7 +8,7 @@ use crate::domain::filter::FilterSet;
 pub struct FilterArgs {
     pub required_tags: Vec<String>,
     pub excluded_tags: Vec<String>,
-    pub project: Option<String>,
+    pub parent: Option<String>,
     pub context_override: Option<String>,
     /// `user:alice user:bob` → restrict to tasks assigned to alice or bob.
     pub user_override: Option<Vec<String>>,
@@ -25,7 +25,7 @@ impl FilterArgs {
     /// Recognised token forms:
     /// - `+tag` or bare `tag` → required_tags
     /// - `-tag`               → excluded_tags
-    /// - `project:path`       → project
+    /// - `parent:slug`        → parent
     /// - `context:@name`      → context_override
     /// - `user:name`          → user_override
     pub fn parse(tokens: Vec<String>) -> Self {
@@ -35,8 +35,8 @@ impl FilterArgs {
                 args.required_tags.push(tag.to_owned());
             } else if let Some(tag) = token.strip_prefix('-') {
                 args.excluded_tags.push(tag.to_owned());
-            } else if let Some(path) = token.strip_prefix("project:") {
-                args.project = Some(path.to_owned());
+            } else if let Some(slug) = token.strip_prefix("parent:") {
+                args.parent = Some(slug.to_owned());
             } else if let Some(ctx) = token.strip_prefix("context:") {
                 args.context_override = Some(ctx.to_owned());
             } else if let Some(user) = token.strip_prefix("user:") {
@@ -68,7 +68,7 @@ impl FilterArgs {
             user_override,
             include_future: self.future,
             disable_implicit: self.all,
-            project_root: self.project.clone(),
+            parent_slug: self.parent.clone(),
         })
     }
 }

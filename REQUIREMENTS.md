@@ -62,7 +62,7 @@ on the children. Hierarchy nests to unlimited depth. A task that has children is
 project — no special tag or field is required to declare it as such.
 
 Use `next tree` to see the full parent-child hierarchy and `next show` to inspect a
-single task and its direct children. Use `project:<slug>` as a filter token to list
+single task and its direct children. Use `parent:<slug>` as a filter token to list
 tasks within a specific subtree (see §5).
 
 A task's slug (e.g. `"work-infra"`) can be used instead of its UUID when specifying
@@ -212,7 +212,7 @@ All list commands MUST accept the following filter tokens, freely combinable:
 |--------|---------|
 | `+<tag>` | Task must have this tag |
 | `-<tag>` | Task must not have this tag |
-| `project:<slug>` | Task is a descendant of (or is) the task with this slug |
+| `parent:<slug>` | Task is a descendant of (or is) the task with this slug |
 | `context:<@tag>` | Use this context instead of the active set for this query |
 | `user:<name>` | Use this user instead of the active-user set for this query |
 | `--future` | Include tasks with future `start` date and planned recurrence instances |

@@ -342,9 +342,9 @@ fn project_filter_returns_descendants() {
     // An unrelated task
     add::run(add_args("Unrelated task"), &mut env.ctx).unwrap();
 
-    // project:launch with all=true so the parent itself passes the implicit gate
+    // parent:launch with all=true so the parent itself passes the implicit gate
     let today = chrono::Local::now().date_naive();
-    let mut filter_args = FilterArgs::parse(vec!["project:launch".into()]);
+    let mut filter_args = FilterArgs::parse(vec!["parent:launch".into()]);
     filter_args.all = true;
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.store.get_state().unwrap();
@@ -382,7 +382,7 @@ fn project_filter_includes_grandchildren() {
     .unwrap();
 
     let today = chrono::Local::now().date_naive();
-    let mut filter_args = FilterArgs::parse(vec!["project:project".into()]);
+    let mut filter_args = FilterArgs::parse(vec!["parent:project".into()]);
     filter_args.all = true;
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.store.get_state().unwrap();
@@ -400,7 +400,7 @@ fn project_filter_unknown_slug_returns_empty() {
     add::run(add_args("Some task"), &mut env.ctx).unwrap();
 
     let today = chrono::Local::now().date_naive();
-    let mut filter_args = FilterArgs::parse(vec!["project:nonexistent".into()]);
+    let mut filter_args = FilterArgs::parse(vec!["parent:nonexistent".into()]);
     filter_args.all = true;
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.store.get_state().unwrap();

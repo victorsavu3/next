@@ -115,14 +115,20 @@ next resource set #laptop on    # back — tasks reappear
 
 ## Projects and subtasks
 
+Any task with children is a project — no special type or tag is required. Use `--slug`
+on the parent so you can reference it by name.
+
 ```sh
 next add "Launch website" --slug launch
 next add "Write copy" --parent launch
 next add "Design logo" --parent launch
-next tree                               # see the hierarchy
+next tree                               # see the full hierarchy
+next list parent:launch                # scored list of tasks under 'launch'
+next show launch                       # full details for a single task
 ```
 
-A parent task is hidden from the default list until all children are done or cancelled.
+A parent task is hidden from the default list until all its direct children are done
+or cancelled — focus stays on the leaf work.
 
 Move or reparent a task:
 
@@ -141,7 +147,7 @@ All list commands accept filter tokens:
 next list +python -bug                 # has 'python', doesn't have 'bug'
 next list context:@work                # force context for this query
 next list user:alice                   # show alice's tasks only
-next list project:launch               # all tasks under the 'launch' project
+next list parent:launch                # all tasks under the 'launch' project
 next list --all                        # disable all implicit filters
 ```
 
