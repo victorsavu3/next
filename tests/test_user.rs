@@ -33,7 +33,7 @@ fn visible_titles(env: &mut common::TestEnv) -> Vec<String> {
     let state = env.ctx.store.get_state().unwrap();
     let all = env.ctx.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &FilterArgs::parse(vec![]).to_filter_set().unwrap(), &state, today);
-    let scored = scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring);
+    let scored = scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring, &std::collections::HashMap::new());
     scored.into_iter().map(|s| s.task.title).collect()
 }
 

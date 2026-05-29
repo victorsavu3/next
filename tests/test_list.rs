@@ -35,7 +35,7 @@ fn apply_filter(env: &mut common::TestEnv, tokens: Vec<String>) -> Vec<ScoredTas
     let state = env.ctx.store.get_state().unwrap();
     let all = env.ctx.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &filter_set, &state, today);
-    scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring)
+    scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring, &std::collections::HashMap::new())
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn apply_filter_with_future(env: &mut common::TestEnv, include_future: bool) -> 
     let state = env.ctx.store.get_state().unwrap();
     let all = env.ctx.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &filter_set, &state, today);
-    scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring)
+    scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring, &std::collections::HashMap::new())
 }
 
 #[test]
@@ -258,7 +258,7 @@ fn all_flag_also_shows_future_start_tasks() {
     let state = env.ctx.store.get_state().unwrap();
     let all = env.ctx.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &filter_set, &state, today);
-    let tasks = scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring);
+    let tasks = scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring, &std::collections::HashMap::new());
     assert_eq!(tasks.len(), 1, "--all must reveal future-start tasks");
 }
 

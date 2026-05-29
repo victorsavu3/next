@@ -218,17 +218,21 @@ git_subprocess = true
 The score shown in `next list` drives ordering. It combines:
 
 - **Due-date factor** — dominates when a deadline is set; highest when overdue
-- **Priority factor** — low / medium / high
-- **Age factor** — tasks grow slightly more urgent over time (capped)
+- **Priority factor** — low / medium / high (+0 / +1 / +2)
+- **Project factor** — parent task's priority offsets children (+0.5 / 0 / −0.5)
+- **Age factor** — tasks grow slightly more urgent over time (capped at +2)
+- **Tag factor** — each tag with explicit priority metadata adds an offset; applies to both the task's own tags and its parent's tags (`high` +1.0, `low` −0.5 by default)
+- **Started bonus** — +4.0 when status is `started`; moves active tasks above idle peers
 - **Manual adjustment** — `next edit <id> --adjust +2.0`
 
-Tune weights in the config:
+Tune any weight in the config:
 
 ```toml
 [scoring]
-priority_high = 3.0
-due_overdue_base = 15.0
-age_per_day = 0.02
+priority_high  = 3.0
+started_bonus  = 5.0
+tag_high       = 2.0
+age_per_day    = 0.02
 ```
 
 ---

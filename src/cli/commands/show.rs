@@ -24,11 +24,12 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     }
 
     let all_tasks = ctx.store.list_tasks()?;
+    let tag_metas = ctx.store.list_tag_metas()?;
     let parent = task
         .parent_id
         .and_then(|pid| all_tasks.iter().find(|t| t.id == pid));
 
-    let score = scoring::score(&task, parent, today, &ctx.config.scoring);
+    let score = scoring::score(&task, parent, today, &ctx.config.scoring, &tag_metas);
 
     let short_id = task.id.to_string().replace('-', "");
     println!("ID:       {}", &short_id[..8]);

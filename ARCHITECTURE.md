@@ -438,6 +438,9 @@ score(task) =
   + priority_factor(task.priority)
   + project_factor(parent.priority)   // 0.0 when no parent
   + age_factor(task, today)
+  + tag_factor(task.tags, tag_metas)
+  + tag_factor(parent.tags, tag_metas) // 0.0 when no parent
+  + started_factor(task.status)
   + task.score_adjustment
 ```
 
@@ -460,6 +463,13 @@ score(task) =
 
 **`age_factor`**: `min(age_days × 0.01, 2.0)` — returns `0.0` when `long_term = true`
 or `start > today`.
+
+**`tag_factor`**: sum of the priority offset for each tag that has an explicit `priority`
+set in its `TagMeta`. Tags with no metadata or no priority set contribute `0.0`.
+Applied once for the task's own tags and once for the parent's tags (if any).
+Default offsets: `tag_low = −0.5`, `tag_medium = 0.0`, `tag_high = +1.0`.
+
+**`started_factor`**: `+4.0` (configurable) when `status == Started`; `0.0` otherwise.
 
 ---
 
@@ -516,6 +526,10 @@ project_medium      = 0.0
 project_high        = 0.5
 age_per_day         = 0.01
 age_max             = 2.0
+tag_low             = -0.5   # offset when a task (or its parent) has a low-priority tag
+tag_medium          =  0.0   # neutral — tags without explicit priority contribute nothing
+tag_high            =  1.0   # offset when a task (or its parent) has a high-priority tag
+started_bonus       =  4.0   # flat bonus added when status == started
 ```
 
 ---

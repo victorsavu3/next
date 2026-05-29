@@ -143,6 +143,8 @@ score = due_factor + priority_factor + project_factor + age_factor + score_adjus
 - **Priority** — `high` (+2), `medium` (+1), `low` (0)
 - **Project factor** — parent task's priority offsets the score (+0.5 / 0.0 / −0.5)
 - **Age** — older tasks float up; capped at +2; zeroed when `long_term = true`
+- **Tag factor** — each tag with explicit `priority` metadata adds an offset (`high` +1.0, `low` −0.5); applied to both the task's own tags and the parent's tags
+- **Started bonus** — flat +4.0 when `status = started`; moves in-progress tasks above open peers
 - **Adjustment** — manual boost/penalty via `--adjust`
 
 ---

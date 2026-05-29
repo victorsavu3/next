@@ -5,7 +5,8 @@ use uuid::Uuid;
 
 use crate::{
     config::ScoringConfig,
-    domain::task::{Priority, Task},
+    domain::tag::TagMeta,
+    domain::task::{Priority, Status, Task},
 };
 
 /// A task paired with its computed urgency score.
@@ -67,14 +68,47 @@ pub fn age_factor(task: &Task, today: NaiveDate, w: &ScoringConfig) -> f64 {
     (age_days * w.age_per_day).min(w.age_max)
 }
 
+/// Tag-priority contribution: sum of the priority weights for each tag on the task
+/// that has an explicit priority set in its `TagMeta`. Tags with no metadata or no
+/// priority set contribute 0.0.
+pub fn tag_factor(tags: &[String], tag_metas: &HashMap<String, TagMeta>, w: &ScoringConfig) -> f64 {
+    tags.iter()
+        .filter_map(|t| tag_metas.get(t))
+        .filter_map(|meta| meta.priority.as_ref())
+        .map(|p| match p {
+            Priority::Low => w.tag_low,
+            Priority::Medium => w.tag_medium,
+            Priority::High => w.tag_high,
+        })
+        .sum()
+}
+
+/// Started-state contribution: a flat bonus when the task is in the `Started` state.
+pub fn started_factor(status: &Status, w: &ScoringConfig) -> f64 {
+    if *status == Status::Started { w.started_bonus } else { 0.0 }
+}
+
 /// Computes the total urgency score for `task`.
 ///
-/// `parent` is the parent task (if any), used for the project-priority factor.
-pub fn score(task: &Task, parent: Option<&Task>, today: NaiveDate, w: &ScoringConfig) -> f64 {
+/// `parent` is the parent task (if any); its priority and tags both contribute.
+/// `tag_metas` is the full tag-metadata map from the store.
+pub fn score(
+    task: &Task,
+    parent: Option<&Task>,
+    today: NaiveDate,
+    w: &ScoringConfig,
+    tag_metas: &HashMap<String, TagMeta>,
+) -> f64 {
+    let own_tags = tag_factor(&task.tags, tag_metas, w);
+    let parent_tags = parent.map_or(0.0, |p| tag_factor(&p.tags, tag_metas, w));
+
     due_factor(task.due, today, w)
         + priority_factor(&task.priority, w)
         + project_factor(parent.map(|p| &p.priority), w)
         + age_factor(task, today, w)
+        + own_tags
+        + parent_tags
+        + started_factor(&task.status, w)
         + task.score_adjustment
 }
 
@@ -88,6 +122,7 @@ pub fn score_and_sort(
     all_tasks: &[Task],
     today: NaiveDate,
     w: &ScoringConfig,
+    tag_metas: &HashMap<String, TagMeta>,
 ) -> Vec<ScoredTask> {
     let by_id: HashMap<Uuid, &Task> = all_tasks.iter().map(|t| (t.id, t)).collect();
 
@@ -95,7 +130,7 @@ pub fn score_and_sort(
         .into_iter()
         .map(|task| {
             let parent = task.parent_id.and_then(|id| by_id.get(&id).copied());
-            let s = score(&task, parent, today, w);
+            let s = score(&task, parent, today, w, tag_metas);
             ScoredTask { task, score: s }
         })
         .collect();
@@ -252,12 +287,71 @@ mod tests {
         assert_eq!(score, 2.0); // capped at age_max
     }
 
+    // --- tag_factor ---
+
+    fn meta_with_priority(p: Priority) -> TagMeta {
+        TagMeta { priority: Some(p), ..Default::default() }
+    }
+
+    #[test]
+    fn tag_factor_no_tags() {
+        assert_eq!(tag_factor(&[], &HashMap::new(), &weights()), 0.0);
+    }
+
+    #[test]
+    fn tag_factor_tag_without_meta() {
+        let task_tags = vec!["@work".to_string()];
+        assert_eq!(tag_factor(&task_tags, &HashMap::new(), &weights()), 0.0);
+    }
+
+    #[test]
+    fn tag_factor_high_priority_tag() {
+        let mut metas = HashMap::new();
+        metas.insert("@work".to_string(), meta_with_priority(Priority::High));
+        let tags = vec!["@work".to_string()];
+        assert_eq!(tag_factor(&tags, &metas, &weights()), 1.0); // tag_high default
+    }
+
+    #[test]
+    fn tag_factor_low_priority_tag() {
+        let mut metas = HashMap::new();
+        metas.insert("someday".to_string(), meta_with_priority(Priority::Low));
+        let tags = vec!["someday".to_string()];
+        assert_eq!(tag_factor(&tags, &metas, &weights()), -0.5); // tag_low default
+    }
+
+    #[test]
+    fn tag_factor_stacks_multiple_tags() {
+        let mut metas = HashMap::new();
+        metas.insert("@work".to_string(), meta_with_priority(Priority::High));
+        metas.insert("#laptop".to_string(), meta_with_priority(Priority::High));
+        let tags = vec!["@work".to_string(), "#laptop".to_string()];
+        assert_eq!(tag_factor(&tags, &metas, &weights()), 2.0); // 1.0 + 1.0
+    }
+
+    // --- started_factor ---
+
+    #[test]
+    fn started_factor_open_is_zero() {
+        assert_eq!(started_factor(&Status::Open, &weights()), 0.0);
+    }
+
+    #[test]
+    fn started_factor_started_is_bonus() {
+        assert_eq!(started_factor(&Status::Started, &weights()), 4.0); // default
+    }
+
+    #[test]
+    fn started_factor_done_is_zero() {
+        assert_eq!(started_factor(&Status::Done, &weights()), 0.0);
+    }
+
     // --- score ---
 
     #[test]
     fn score_no_due_medium_priority_no_parent() {
         let task = Task::new("simple task");
-        let s = score(&task, None, today(), &weights());
+        let s = score(&task, None, today(), &weights(), &HashMap::new());
         // priority_medium=1.0, no due, no parent, age≈0
         assert!((s - 1.0).abs() < 0.01);
     }
@@ -269,15 +363,51 @@ mod tests {
         let normal = Task::new("no due");
 
         let w = weights();
-        assert!(score(&overdue, None, today(), &w) > score(&normal, None, today(), &w));
+        let metas = HashMap::new();
+        assert!(score(&overdue, None, today(), &w, &metas) > score(&normal, None, today(), &w, &metas));
     }
 
     #[test]
     fn score_adjustment_applied() {
         let mut task = Task::new("boosted");
         task.score_adjustment = 5.0;
-        let s = score(&task, None, today(), &weights());
+        let s = score(&task, None, today(), &weights(), &HashMap::new());
         assert!((s - 6.0).abs() < 0.01); // 1.0 (medium) + 5.0 (adj) + 0 (age)
+    }
+
+    #[test]
+    fn score_started_bonus_applied() {
+        let mut task = Task::new("in progress");
+        task.mark_started();
+        let s = score(&task, None, today(), &weights(), &HashMap::new());
+        // 1.0 (medium) + 4.0 (started) + ~0 (age, negligible right after mark_started)
+        assert!((s - 5.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn score_high_priority_tag_boosts_score() {
+        let mut task = Task::new("tagged");
+        task.tags = vec!["@work".to_string()];
+        let mut metas = HashMap::new();
+        metas.insert("@work".to_string(), meta_with_priority(Priority::High));
+        let s = score(&task, None, today(), &weights(), &metas);
+        // 1.0 (medium) + 1.0 (tag_high) = 2.0
+        assert!((s - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn score_parent_tag_priority_contributes() {
+        let mut parent = Task::new("parent project");
+        parent.tags = vec!["@work".to_string()];
+        let child = Task::new("child task");
+
+        let mut metas = HashMap::new();
+        metas.insert("@work".to_string(), meta_with_priority(Priority::High));
+
+        let child_score = score(&child, Some(&parent), today(), &weights(), &metas);
+        let orphan_score = score(&child, None, today(), &weights(), &metas);
+        // child gets +1.0 from parent's @work tag
+        assert!((child_score - orphan_score - 1.0).abs() < 0.01);
     }
 
     #[test]
@@ -286,10 +416,9 @@ mod tests {
         urgent.due = Some(today() - chrono::Duration::days(1)); // overdue
 
         let normal = Task::new("normal");
-        // Default medium priority, no due
 
         let all = vec![normal.clone(), urgent.clone()];
-        let scored = score_and_sort(vec![normal, urgent], &all, today(), &weights());
+        let scored = score_and_sort(vec![normal, urgent], &all, today(), &weights(), &HashMap::new());
 
         assert_eq!(scored[0].task.title, "urgent");
         assert!(scored[0].score > scored[1].score);
@@ -306,11 +435,32 @@ mod tests {
         let orphan = Task::new("no parent");
 
         let all = vec![parent.clone(), child.clone(), orphan.clone()];
-        let scored = score_and_sort(vec![child, orphan], &all, today(), &weights());
+        let scored = score_and_sort(vec![child, orphan], &all, today(), &weights(), &HashMap::new());
 
         // child gets +0.5 from high-priority parent; orphan gets +0
         let child_score = scored.iter().find(|s| s.task.title == "child task").unwrap().score;
         let orphan_score = scored.iter().find(|s| s.task.title == "no parent").unwrap().score;
         assert!(child_score > orphan_score);
+    }
+
+    #[test]
+    fn score_and_sort_uses_parent_tag_priority() {
+        let mut parent = Task::new("high-relevance project");
+        parent.tags = vec!["@work".to_string()];
+
+        let mut child = Task::new("child task");
+        child.parent_id = Some(parent.id);
+        let orphan = Task::new("no parent");
+
+        let mut metas = HashMap::new();
+        metas.insert("@work".to_string(), meta_with_priority(Priority::High));
+
+        let all = vec![parent.clone(), child.clone(), orphan.clone()];
+        let scored = score_and_sort(vec![child, orphan], &all, today(), &weights(), &metas);
+
+        let child_score = scored.iter().find(|s| s.task.title == "child task").unwrap().score;
+        let orphan_score = scored.iter().find(|s| s.task.title == "no parent").unwrap().score;
+        // child gets +1.0 from parent's @work tag
+        assert!((child_score - orphan_score - 1.0).abs() < 0.01);
     }
 }

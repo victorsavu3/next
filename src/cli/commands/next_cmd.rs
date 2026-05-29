@@ -44,9 +44,10 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let filter_set = filter_args.to_filter_set()?;
     let state = ctx.store.get_state()?;
     let all_tasks = ctx.store.list_tasks()?;
+    let tag_metas = ctx.store.list_tag_metas()?;
 
     let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
-    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.config.scoring);
+    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.config.scoring, &tag_metas);
     scored.truncate(count);
 
     if filter_args.json {

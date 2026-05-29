@@ -190,6 +190,9 @@ The score MUST be the sum of the following weighted factors:
 | **Priority** | Always; `low` / `medium` / `high` map to fixed additive weights |
 | **Project factor** | When `parent_id` is set; parent task's priority contributes an offset |
 | **Age** | Only when `long_term = false` AND (`start` is unset OR `start` ≤ today) |
+| **Tag factor** | Sum of priority offsets for each of the task's tags that carry explicit `priority` metadata; tags with no priority metadata contribute `0.0` |
+| **Parent tag factor** | Same as tag factor, but applied to the parent task's tags (when a parent exists) |
+| **Started bonus** | Flat additive bonus when `status == started` |
 | **User adjustment** | Always; `score_adjustment` added directly |
 
 Default weights MUST be defined in code and SHOULD be overridable via a user config file

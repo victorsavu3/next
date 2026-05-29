@@ -19,6 +19,10 @@ fn default_project_medium() -> f64 { 0.0 }
 fn default_project_high() -> f64 { 0.5 }
 fn default_age_per_day() -> f64 { 0.01 }
 fn default_age_max() -> f64 { 2.0 }
+fn default_tag_low() -> f64 { -0.5 }
+fn default_tag_medium() -> f64 { 0.0 }
+fn default_tag_high() -> f64 { 1.0 }
+fn default_started_bonus() -> f64 { 4.0 }
 fn default_forecast_horizon_days() -> u32 { 90 }
 fn default_next_count() -> usize { 10 }
 
@@ -66,6 +70,18 @@ pub struct ScoringConfig {
     pub age_per_day: f64,
     #[serde(default = "default_age_max")]
     pub age_max: f64,
+
+    // Tag-priority factor (applied for each tag with explicit priority metadata)
+    #[serde(default = "default_tag_low")]
+    pub tag_low: f64,
+    #[serde(default = "default_tag_medium")]
+    pub tag_medium: f64,
+    #[serde(default = "default_tag_high")]
+    pub tag_high: f64,
+
+    // Started-state bonus
+    #[serde(default = "default_started_bonus")]
+    pub started_bonus: f64,
 }
 
 impl Default for ScoringConfig {
@@ -85,6 +101,10 @@ impl Default for ScoringConfig {
             project_high: default_project_high(),
             age_per_day: default_age_per_day(),
             age_max: default_age_max(),
+            tag_low: default_tag_low(),
+            tag_medium: default_tag_medium(),
+            tag_high: default_tag_high(),
+            started_bonus: default_started_bonus(),
         }
     }
 }
