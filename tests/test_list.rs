@@ -4,7 +4,6 @@ use chrono::Local;
 use next::domain::{filter, scoring::ScoredTask, scoring};
 use next::cli::commands::add;
 use next::cli::filter::FilterArgs;
-use next::store::Store as _;
 
 fn add_args(title: &str) -> add::Args {
     add::Args {

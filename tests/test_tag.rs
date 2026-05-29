@@ -2,7 +2,6 @@ mod common;
 
 use next::store::Store as _;
 use next::cli::commands::{add, tag};
-use next::domain::tag::TagMeta;
 use next::domain::task::Priority;
 
 fn add_args(title: &str) -> add::Args {
