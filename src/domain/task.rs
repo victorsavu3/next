@@ -60,13 +60,12 @@ pub struct Task {
 
     /// Optional user-provided identifier, e.g. `"water-plants"` or `"work-infra"`.
     /// Must be unique across all tasks. Used to reference the task as a parent or
-    /// blocker without knowing its UUID. Also serves as the project identifier
-    /// when a task with `stage = Project` acts as the parent of other tasks.
+    /// blocker without knowing its UUID, and as the target of `project:<slug>` filters.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
 
-    /// UUID of the parent task. A task is a subtask (or belongs to a project-task)
-    /// when this is set. The parent is blocked until all direct children are resolved.
+    /// UUID of the parent task. When set the task is a child of that task.
+    /// The parent is hidden from the default list until all direct children are resolved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<Uuid>,
 

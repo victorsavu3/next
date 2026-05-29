@@ -58,12 +58,12 @@ Exactly one of `rule` or `interval_days` MUST be present in a `[recurrence]` tab
 ### 1.2 Projects and subtasks
 
 There is no separate project type. Any task can have child tasks by setting `parent_id`
-on the children. Hierarchy nests to unlimited depth.
+on the children. Hierarchy nests to unlimited depth. A task that has children is a
+project — no special tag or field is required to declare it as such.
 
-A task is a **project** when it carries the `"project"` tag. There are no separate
-project commands — projects are plain tasks. Use `next add --tag project` to create one,
-`next tree` to see the full parent-child hierarchy, and `next show` to inspect a single
-task and its direct children.
+Use `next tree` to see the full parent-child hierarchy and `next show` to inspect a
+single task and its direct children. Use `project:<slug>` as a filter token to list
+tasks within a specific subtree (see §5).
 
 A task's slug (e.g. `"work-infra"`) can be used instead of its UUID when specifying
 `parent_id` or `blocked_by` on the command line. The tool resolves the slug to a UUID
@@ -212,7 +212,7 @@ All list commands MUST accept the following filter tokens, freely combinable:
 |--------|---------|
 | `+<tag>` | Task must have this tag |
 | `-<tag>` | Task must not have this tag |
-| `project:<path>` | Task is in this project or any descendant |
+| `project:<slug>` | Task is a descendant of (or is) the task with this slug |
 | `context:<@tag>` | Use this context instead of the active set for this query |
 | `user:<name>` | Use this user instead of the active-user set for this query |
 | `--future` | Include tasks with future `start` date and planned recurrence instances |
@@ -409,9 +409,8 @@ next tree [--all]
 ```
 
 Shows all tasks in their parent-child hierarchy. Top-level tasks (no parent) appear as
-roots; children are indented under their parent. Tasks tagged `project` that have
-children are marked with `[project]`. `--all` includes done and cancelled tasks;
-the default shows open tasks only.
+roots; children are indented under their parent. `--all` includes done and cancelled
+tasks; the default shows open and started tasks only.
 
 ### 8.7 User management
 

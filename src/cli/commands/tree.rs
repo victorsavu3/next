@@ -84,13 +84,7 @@ fn print_node(task: &Task, children: &HashMap<Uuid, Vec<&Task>>, depth: usize) {
         Status::Done => "✓",
         Status::Cancelled => "✗",
     };
-    let has_children = children.contains_key(&task.id);
-    let project_marker = if task.tags.iter().any(|t| t == "project") && has_children {
-        " [project]"
-    } else {
-        ""
-    };
-    println!("{indent}{status} [{short}] {}{project_marker}", task.title);
+    println!("{indent}{status} [{short}] {}", task.title);
 
     if let Some(kids) = children.get(&task.id) {
         let mut sorted: Vec<&Task> = kids.to_vec();

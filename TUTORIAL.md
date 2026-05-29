@@ -141,7 +141,7 @@ All list commands accept filter tokens:
 next list +python -bug                 # has 'python', doesn't have 'bug'
 next list context:@work                # force context for this query
 next list user:alice                   # show alice's tasks only
-next list project:lang/rust            # tasks in lang/rust project
+next list project:launch               # all tasks under the 'launch' project
 next list --all                        # disable all implicit filters
 ```
 

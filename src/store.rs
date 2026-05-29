@@ -18,9 +18,9 @@ pub enum PullResult {
 
 /// Persistent storage for tasks and global state.
 ///
-/// Projects are plain tasks (`stage = Stage::Project`) and are stored and
-/// retrieved through the same task methods. There is no separate project
-/// concept in the storage layer.
+/// A "project" is simply a task that has children via `parent_id`. There is no
+/// separate project type or storage path — all tasks are stored and retrieved
+/// through the same methods.
 ///
 /// Reads use `&self`; writes use `&mut self`. Implementations may use interior
 /// mutability internally (e.g. a SQLite connection behind a Mutex) but the trait
@@ -30,7 +30,7 @@ pub enum PullResult {
 /// (source of truth) backed by an SQLite cache for fast queries.
 /// `next-test-utils` provides an in-memory implementation for unit tests.
 pub trait Store: Send + Sync {
-    // --- Tasks (includes project-tasks) ---
+    // --- Tasks ---
 
     fn get_task(&self, id: Uuid) -> Result<Task>;
 

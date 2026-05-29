@@ -68,6 +68,7 @@ impl FilterArgs {
             user_override,
             include_future: self.future,
             disable_implicit: self.all,
+            project_root: self.project.clone(),
         })
     }
 }

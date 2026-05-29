@@ -34,6 +34,11 @@ pub struct FilterSet {
     /// Skip the implicit visibility gate entirely (show everything regardless
     /// of status, blocking, resources, context, or user).
     pub disable_implicit: bool,
+
+    /// When set, only tasks that are descendants (or the root itself) of the
+    /// task with this slug are returned.  Resolved against the full task list
+    /// inside `apply`; silently returns nothing if the slug is not found.
+    pub project_root: Option<String>,
 }
 
 /// Applies `filter` to `tasks` and returns those that pass.
@@ -63,6 +68,15 @@ pub fn apply(
     } else {
         build_implicit_indexes(&tasks)
     };
+
+    // Pre-compute descendant set for project_root filter (empty = no filter).
+    let project_descendants: Option<HashSet<Uuid>> = filter.project_root.as_ref().map(|slug| {
+        tasks
+            .iter()
+            .find(|t| t.slug.as_deref() == Some(slug.as_str()))
+            .map(|root| descendants_of(root.id, &tasks))
+            .unwrap_or_default()
+    });
 
     let active_contexts: &[String] = if filter.disable_implicit {
         &[]
@@ -121,6 +135,11 @@ pub fn apply(
             }
 
             // ── Explicit filters ─────────────────────────────────────────────
+            if let Some(ref desc) = project_descendants {
+                if !desc.contains(&task.id) {
+                    return false;
+                }
+            }
             for req in &filter.required_tags {
                 if !task.tags.iter().any(|t| tag::tag_matches(req, t)) {
                     return false;
@@ -182,6 +201,21 @@ fn build_implicit_indexes(tasks: &[Task]) -> (HashSet<Uuid>, HashSet<Uuid>) {
         .collect();
 
     (open_ids, parents_with_open_children)
+}
+
+/// Returns the set of all task IDs that are descendants of `root_id` (inclusive).
+fn descendants_of(root_id: Uuid, tasks: &[Task]) -> HashSet<Uuid> {
+    let mut result = HashSet::new();
+    result.insert(root_id);
+    let mut queue = vec![root_id];
+    while let Some(current) = queue.pop() {
+        for task in tasks {
+            if task.parent_id == Some(current) && result.insert(task.id) {
+                queue.push(task.id);
+            }
+        }
+    }
+    result
 }
 
 #[cfg(test)]

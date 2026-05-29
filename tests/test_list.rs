@@ -316,6 +316,100 @@ fn list_config_limit_applies_when_no_flag() {
 }
 
 #[test]
+fn project_filter_returns_descendants() {
+    let mut env = common::setup();
+
+    // Root task with slug "launch"
+    add::run(
+        add::Args { slug: Some("launch".into()), ..add_args("Launch blog") },
+        &mut env.ctx,
+    )
+    .unwrap();
+    let root = env.ctx.store.get_task_by_slug("launch").unwrap().unwrap();
+
+    // Two direct children
+    add::run(
+        add::Args { parent: Some(root.id.to_string()), ..add_args("Write copy") },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(
+        add::Args { parent: Some(root.id.to_string()), ..add_args("Design logo") },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    // An unrelated task
+    add::run(add_args("Unrelated task"), &mut env.ctx).unwrap();
+
+    // project:launch with all=true so the parent itself passes the implicit gate
+    let today = chrono::Local::now().date_naive();
+    let mut filter_args = FilterArgs::parse(vec!["project:launch".into()]);
+    filter_args.all = true;
+    let filter_set = filter_args.to_filter_set().unwrap();
+    let state = env.ctx.store.get_state().unwrap();
+    let all = env.ctx.store.list_tasks().unwrap();
+    let filtered = next::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    let titles: Vec<&str> = filtered.iter().map(|t| t.title.as_str()).collect();
+    assert!(titles.contains(&"Launch blog"), "root should be included");
+    assert!(titles.contains(&"Write copy"));
+    assert!(titles.contains(&"Design logo"));
+    assert!(!titles.contains(&"Unrelated task"));
+}
+
+#[test]
+fn project_filter_includes_grandchildren() {
+    let mut env = common::setup();
+
+    add::run(
+        add::Args { slug: Some("project".into()), ..add_args("Root") },
+        &mut env.ctx,
+    )
+    .unwrap();
+    let root = env.ctx.store.get_task_by_slug("project").unwrap().unwrap();
+
+    add::run(
+        add::Args { slug: Some("child".into()), parent: Some(root.id.to_string()), ..add_args("Child") },
+        &mut env.ctx,
+    )
+    .unwrap();
+    let child = env.ctx.store.get_task_by_slug("child").unwrap().unwrap();
+
+    add::run(
+        add::Args { parent: Some(child.id.to_string()), ..add_args("Grandchild") },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let today = chrono::Local::now().date_naive();
+    let mut filter_args = FilterArgs::parse(vec!["project:project".into()]);
+    filter_args.all = true;
+    let filter_set = filter_args.to_filter_set().unwrap();
+    let state = env.ctx.store.get_state().unwrap();
+    let all = env.ctx.store.list_tasks().unwrap();
+    let filtered = next::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    let titles: Vec<&str> = filtered.iter().map(|t| t.title.as_str()).collect();
+    assert!(titles.contains(&"Root"));
+    assert!(titles.contains(&"Child"));
+    assert!(titles.contains(&"Grandchild"));
+}
+
+#[test]
+fn project_filter_unknown_slug_returns_empty() {
+    let mut env = common::setup();
+    add::run(add_args("Some task"), &mut env.ctx).unwrap();
+
+    let today = chrono::Local::now().date_naive();
+    let mut filter_args = FilterArgs::parse(vec!["project:nonexistent".into()]);
+    filter_args.all = true;
+    let filter_set = filter_args.to_filter_set().unwrap();
+    let state = env.ctx.store.get_state().unwrap();
+    let all = env.ctx.store.list_tasks().unwrap();
+    let filtered = next::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    assert!(filtered.is_empty());
+}
+
+#[test]
 fn list_flag_overrides_config_limit() {
     let mut env = common::setup();
     for i in 1..=5 {

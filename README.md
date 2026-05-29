@@ -66,15 +66,16 @@ my-tasks/
 
 ## Projects and subtasks
 
-Any task can have subtasks. Give a task the `project` tag to mark it as a project.
-Subtasks attach via `--parent`. A parent task is hidden from the default scored list
-until all its direct children are resolved.
+Any task can have subtasks — no special tag or type is required. Subtasks attach via
+`--parent`. A parent task is hidden from the default scored list until all its direct
+children are resolved.
 
 ```sh
-next add "Launch blog" --slug launch-blog --tag project
+next add "Launch blog" --slug launch-blog
 next add "Write first post" --parent launch-blog
 next add "Set up hosting" --parent launch-blog
 next tree                      # show all tasks in a parent-child tree
+next list project:launch-blog  # list tasks within this project
 next show launch-blog          # show full details for a single task
 ```
 
@@ -88,7 +89,7 @@ All labels on a task are tags. Prefix conventions give some tags special meaning
 |--------|------|---------|--------|
 | `@` | Context | `@home`, `@work` | Hidden when a different context is active |
 | `#` | Resource | `#printer`, `#vacation` | Hidden when resource is unavailable |
-| *(none)* | Freeform | `python`, `project` | No implicit filter |
+| *(none)* | Freeform | `python`, `urgent` | No implicit filter |
 
 Tasks with no `@` tag are always shown regardless of the active context.
 
@@ -157,7 +158,7 @@ All list commands accept filter tokens in any order:
 |-------|---------|---------|
 | `+<tag>` | `+@home`, `+python` | Task must have this tag |
 | `-<tag>` | `-@work` | Task must not have this tag |
-| `project:<path>` | `project:work` | Task belongs to this project tree |
+| `project:<slug>` | `project:launch-blog` | Task is a descendant of (or is) the task with this slug |
 | `context:<@tag>` | `context:@home` | Override active context for this query |
 | `user:<name>` | `user:alice` | Override user filter for this query |
 | `--future` | | Include tasks with a future `start` date |
