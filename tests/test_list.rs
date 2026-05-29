@@ -408,6 +408,98 @@ fn project_filter_unknown_slug_returns_empty() {
     assert!(filtered.is_empty());
 }
 
+// ---------------------------------------------------------------------------
+// Parent filter — additional integration tests
+// ---------------------------------------------------------------------------
+
+fn apply_filter_all(env: &mut common::TestEnv, tokens: Vec<String>) -> Vec<ScoredTask> {
+    let today = chrono::Local::now().date_naive();
+    let mut filter_args = FilterArgs::parse(tokens);
+    filter_args.all = true;
+    let filter_set = filter_args.to_filter_set().unwrap();
+    let state = env.ctx.store.get_state().unwrap();
+    let all = env.ctx.store.list_tasks().unwrap();
+    let filtered = next::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring, &std::collections::HashMap::new())
+}
+
+#[test]
+fn parent_filter_excludes_sibling_subtrees() {
+    let mut env = common::setup();
+
+    add::run(add::Args { slug: Some("alpha".into()), ..add_args("Alpha") }, &mut env.ctx).unwrap();
+    let alpha = env.ctx.store.get_task_by_slug("alpha").unwrap().unwrap();
+    add::run(add::Args { parent: Some(alpha.id.to_string()), ..add_args("Alpha child") }, &mut env.ctx).unwrap();
+
+    add::run(add::Args { slug: Some("beta".into()), ..add_args("Beta") }, &mut env.ctx).unwrap();
+    let beta = env.ctx.store.get_task_by_slug("beta").unwrap().unwrap();
+    add::run(add::Args { parent: Some(beta.id.to_string()), ..add_args("Beta child") }, &mut env.ctx).unwrap();
+
+    let tasks = apply_filter_all(&mut env, vec!["parent:alpha".into()]);
+    let titles: Vec<&str> = tasks.iter().map(|t| t.task.title.as_str()).collect();
+    assert!(titles.contains(&"Alpha"), "root included");
+    assert!(titles.contains(&"Alpha child"), "child included");
+    assert!(!titles.contains(&"Beta"), "sibling root excluded");
+    assert!(!titles.contains(&"Beta child"), "sibling child excluded");
+}
+
+#[test]
+fn default_list_hides_parent_with_open_children() {
+    let mut env = common::setup();
+
+    add::run(add::Args { slug: Some("parent".into()), ..add_args("Parent task") }, &mut env.ctx).unwrap();
+    let parent = env.ctx.store.get_task_by_slug("parent").unwrap().unwrap();
+    add::run(add::Args { parent: Some(parent.id.to_string()), ..add_args("Child task") }, &mut env.ctx).unwrap();
+
+    let tasks = apply_filter(&mut env, vec![]);
+    let titles: Vec<&str> = tasks.iter().map(|t| t.task.title.as_str()).collect();
+    assert!(!titles.contains(&"Parent task"), "parent hidden while child is open");
+    assert!(titles.contains(&"Child task"), "child visible");
+}
+
+#[test]
+fn default_list_shows_parent_when_all_children_done() {
+    let mut env = common::setup();
+
+    add::run(add::Args { slug: Some("parent".into()), ..add_args("Parent task") }, &mut env.ctx).unwrap();
+    let parent = env.ctx.store.get_task_by_slug("parent").unwrap().unwrap();
+    add::run(
+        add::Args { slug: Some("child".into()), parent: Some(parent.id.to_string()), ..add_args("Child task") },
+        &mut env.ctx,
+    ).unwrap();
+
+    use next::cli::commands::done;
+    done::run(done::Args { id: "child".into(), json: false }, &mut env.ctx).unwrap();
+
+    let tasks = apply_filter(&mut env, vec![]);
+    let titles: Vec<&str> = tasks.iter().map(|t| t.task.title.as_str()).collect();
+    assert!(titles.contains(&"Parent task"), "parent visible once child is done");
+}
+
+#[test]
+fn parent_filter_only_returns_active_descendants_by_default() {
+    let mut env = common::setup();
+
+    add::run(add::Args { slug: Some("proj".into()), ..add_args("Project") }, &mut env.ctx).unwrap();
+    let proj = env.ctx.store.get_task_by_slug("proj").unwrap().unwrap();
+    add::run(add::Args { slug: Some("open-child".into()), parent: Some(proj.id.to_string()), ..add_args("Open child") }, &mut env.ctx).unwrap();
+    add::run(add::Args { slug: Some("done-child".into()), parent: Some(proj.id.to_string()), ..add_args("Done child") }, &mut env.ctx).unwrap();
+
+    use next::cli::commands::done;
+    done::run(done::Args { id: "done-child".into(), json: false }, &mut env.ctx).unwrap();
+
+    // Without --all, done children are excluded even within the parent: scope.
+    let today = chrono::Local::now().date_naive();
+    let filter_args = FilterArgs::parse(vec!["parent:proj".into()]);
+    let filter_set = filter_args.to_filter_set().unwrap();
+    let state = env.ctx.store.get_state().unwrap();
+    let all = env.ctx.store.list_tasks().unwrap();
+    let filtered = next::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    let titles: Vec<&str> = filtered.iter().map(|t| t.title.as_str()).collect();
+    assert!(titles.contains(&"Open child"));
+    assert!(!titles.contains(&"Done child"), "done task excluded without --all");
+}
+
 #[test]
 fn list_flag_overrides_config_limit() {
     let mut env = common::setup();
