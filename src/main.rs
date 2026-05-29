@@ -23,6 +23,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let cli_autosync = cli.autosync;
+    let cli_no_autosync = cli.no_autosync;
     let mut ctx = AppContext::new(cli.config.as_deref(), cli.repo.as_deref())?;
 
     // Default to `list` when no subcommand is given.
@@ -100,7 +101,7 @@ fn main() -> anyhow::Result<()> {
         ctx.log.error(cmd_name, &format!("{e:#}"));
     }
 
-    if result.is_ok() && is_mutation && (cli_autosync || ctx.config.autosync) {
+    if result.is_ok() && is_mutation && (cli_autosync || ctx.config.autosync) && !cli_no_autosync {
         let sync_args = sync_cmd::Args { push_only: false, pull_only: false };
         if let Err(e) = sync_cmd::run(sync_args, &mut ctx) {
             eprintln!("autosync failed: {e:#}");

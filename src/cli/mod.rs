@@ -2,6 +2,28 @@ pub mod commands;
 pub mod filter;
 pub mod render;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser as _;
+
+    #[test]
+    fn autosync_and_no_autosync_conflict() {
+        let result = Cli::try_parse_from(["next", "--autosync", "--no-autosync", "list"]);
+        assert!(result.is_err(), "--autosync and --no-autosync must conflict");
+    }
+
+    #[test]
+    fn autosync_alone_is_accepted() {
+        Cli::try_parse_from(["next", "--autosync", "list"]).unwrap();
+    }
+
+    #[test]
+    fn no_autosync_alone_is_accepted() {
+        Cli::try_parse_from(["next", "--no-autosync", "list"]).unwrap();
+    }
+}
+
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -24,6 +46,10 @@ pub struct Cli {
     /// Overrides `autosync = false` in the config file.
     #[arg(long, global = true)]
     pub autosync: bool,
+
+    /// Disable autosync for this command even if `autosync = true` in config.
+    #[arg(long, global = true, conflicts_with = "autosync")]
+    pub no_autosync: bool,
 
     /// Subcommand to run. Defaults to `list` when omitted.
     #[command(subcommand)]
