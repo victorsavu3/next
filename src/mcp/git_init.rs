@@ -52,11 +52,12 @@ pub fn clone_or_open(config: &McpConfig) -> anyhow::Result<PathBuf> {
     let mut fetch_opts = git2::FetchOptions::new();
     fetch_opts.remote_callbacks(callbacks);
 
-    RepoBuilder::new()
+    let repo = RepoBuilder::new()
         .fetch_options(fetch_opts)
         .clone(&url_for_auth, repo_path)
         .with_context(|| format!("git clone {git_url} failed"))?;
 
+    ensure_git_identity(&repo)?;
     init_repo_structure(repo_path)?;
     Ok(repo_path.clone())
 }
@@ -87,6 +88,30 @@ fn extract_credentials(url: &str) -> (String, Option<String>, Option<String>) {
     }
 
     (url.to_owned(), None, None)
+}
+
+/// Ensures `user.name` and `user.email` are set in the repo's local config,
+/// falling back to sensible defaults when neither global nor system config provides them.
+/// This is required for `next-mcp` to commit inside a container with no git identity.
+fn ensure_git_identity(repo: &git2::Repository) -> anyhow::Result<()> {
+    let mut config = repo.config()
+        .with_context(|| "failed to open git config")?;
+    let local = config.open_level(git2::ConfigLevel::Local)
+        .with_context(|| "failed to open local git config")?;
+
+    // Check if user.name is already set at any level.
+    let has_name = config.get_string("user.name").is_ok();
+    let has_email = config.get_string("user.email").is_ok();
+
+    if !has_name {
+        config.set_str("user.name", "next-mcp")?;
+    }
+    if !has_email {
+        config.set_str("user.email", "next-mcp@localhost")?;
+    }
+
+    drop(local);
+    Ok(())
 }
 
 /// Creates `tasks/` and `.gitignore` inside a freshly-cloned repo.
