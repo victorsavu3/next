@@ -411,6 +411,7 @@ async fn oauth_register_returns_client_id() {
     let body: Value = resp.json().await.unwrap();
     assert!(body["client_id"].as_str().is_some());
     assert_eq!(body["token_endpoint_auth_method"], "none");
+    assert_eq!(body["client_secret_expires_at"], 0);
 }
 
 #[tokio::test]

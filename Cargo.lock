@@ -1401,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "next"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1422,6 +1422,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
+ "tower-http",
  "uuid",
 ]
 

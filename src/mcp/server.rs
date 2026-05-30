@@ -3,12 +3,13 @@ use std::sync::Arc;
 
 use axum::{
     extract::{DefaultBodyLimit, Form, Json as ExtractJson, Query, State},
-    http::StatusCode,
+    http::{HeaderName, Method, StatusCode},
     middleware,
     response::{IntoResponse, Json, Redirect, Response},
     routing::{get, post},
     Router,
 };
+use tower_http::cors::{Any, CorsLayer};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
@@ -69,11 +70,24 @@ pub fn build_router(state: AppState) -> Router {
 
     // OAuth endpoints are public (no Bearer auth) — they ARE the auth flow.
     let oauth_routes = Router::new()
+        .route("/.well-known/oauth-protected-resource", get(protected_resource_metadata))
         .route("/.well-known/oauth-authorization-server", get(oauth_metadata))
         .route("/register", post(register_handler))
         .route("/authorize", get(authorize_handler))
         .route("/token", post(token_handler))
         .with_state(state.clone());
+
+    // CORS is required because claude.ai is a browser-based SPA that makes
+    // cross-origin requests to the OAuth endpoints.  WWW-Authenticate must be
+    // in Expose-Headers so the browser forwards it to Claude's JS code.
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers(Any)
+        .expose_headers([
+            axum::http::header::WWW_AUTHENTICATE,
+            HeaderName::from_static("content-type"),
+        ]);
 
     Router::new()
         .merge(mcp_route)
@@ -81,6 +95,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(oauth_routes)
         // Limit request bodies to 64 KB — more than enough for any valid MCP request.
         .layer(DefaultBodyLimit::max(65_536))
+        .layer(cors)
 }
 
 // ── MCP handler ───────────────────────────────────────────────────────────────
@@ -195,6 +210,16 @@ async fn webhook_handler(State(state): State<AppState>) -> Response {
 
 // ── OAuth 2.0 handlers ────────────────────────────────────────────────────────
 
+// RFC 9728 — tells clients which authorization server protects this resource.
+async fn protected_resource_metadata() -> impl IntoResponse {
+    Json(json!({
+        "resource": "https://next-mcp.victorsavu.eu",
+        "authorization_servers": ["https://next-mcp.victorsavu.eu"],
+        "scopes_supported": ["mcp"],
+        "bearer_methods_supported": ["header"],
+    }))
+}
+
 async fn oauth_metadata() -> impl IntoResponse {
     Json(json!({
         "issuer": "https://next-mcp.victorsavu.eu",
@@ -205,6 +230,7 @@ async fn oauth_metadata() -> impl IntoResponse {
         "grant_types_supported": ["authorization_code"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
+        "scopes_supported": ["mcp"],
     }))
 }
 
@@ -217,6 +243,7 @@ async fn register_handler(ExtractJson(body): ExtractJson<Value>) -> impl IntoRes
         Json(json!({
             "client_id": uuid::Uuid::new_v4().to_string(),
             "client_id_issued_at": chrono::Utc::now().timestamp(),
+            "client_secret_expires_at": 0,
             "redirect_uris": redirect_uris,
             "grant_types": ["authorization_code"],
             "response_types": ["code"],
