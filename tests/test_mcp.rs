@@ -395,6 +395,25 @@ async fn webhook_route_absent_without_token() {
 // ── OAuth tests ───────────────────────────────────────────────────────────────
 
 #[tokio::test]
+async fn oauth_register_returns_client_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let addr = start_test_server("tok", None, dir.path()).await;
+    let resp = Client::new()
+        .post(format!("http://{addr}/register"))
+        .json(&serde_json::json!({
+            "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+            "client_name": "claude-ai",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body: Value = resp.json().await.unwrap();
+    assert!(body["client_id"].as_str().is_some());
+    assert_eq!(body["token_endpoint_auth_method"], "none");
+}
+
+#[tokio::test]
 async fn oauth_metadata_advertises_authorization_code() {
     let dir = tempfile::tempdir().unwrap();
     let addr = start_test_server("tok", None, dir.path()).await;

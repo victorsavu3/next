@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
-    extract::{DefaultBodyLimit, Form, Query, State},
+    extract::{DefaultBodyLimit, Form, Json as ExtractJson, Query, State},
     http::StatusCode,
     middleware,
     response::{IntoResponse, Json, Redirect, Response},
@@ -70,6 +70,7 @@ pub fn build_router(state: AppState) -> Router {
     // OAuth endpoints are public (no Bearer auth) — they ARE the auth flow.
     let oauth_routes = Router::new()
         .route("/.well-known/oauth-authorization-server", get(oauth_metadata))
+        .route("/register", post(register_handler))
         .route("/authorize", get(authorize_handler))
         .route("/token", post(token_handler))
         .with_state(state.clone());
@@ -199,11 +200,29 @@ async fn oauth_metadata() -> impl IntoResponse {
         "issuer": "https://next-mcp.victorsavu.eu",
         "authorization_endpoint": "https://next-mcp.victorsavu.eu/authorize",
         "token_endpoint": "https://next-mcp.victorsavu.eu/token",
+        "registration_endpoint": "https://next-mcp.victorsavu.eu/register",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
     }))
+}
+
+// Dynamic client registration (RFC 7591) — accepts any client, issues a UUID client_id.
+// We don't validate client_id on subsequent requests so no state needs to be kept.
+async fn register_handler(ExtractJson(body): ExtractJson<Value>) -> impl IntoResponse {
+    let redirect_uris = body.get("redirect_uris").cloned().unwrap_or(json!([]));
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "client_id": uuid::Uuid::new_v4().to_string(),
+            "client_id_issued_at": chrono::Utc::now().timestamp(),
+            "redirect_uris": redirect_uris,
+            "grant_types": ["authorization_code"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+        })),
+    )
 }
 
 #[derive(Deserialize)]
