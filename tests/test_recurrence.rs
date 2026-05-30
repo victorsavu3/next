@@ -1,8 +1,8 @@
 mod common;
 
 use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
-use next::cli::commands::{add, cancel, done};
-use next::domain::task::Status;
+use next::cli::commands::{add, cancel, done, edit};
+use next::domain::task::{Recurrence, Status};
 use next::store::Store as _;
 
 fn add_args(title: &str) -> add::Args {
@@ -465,4 +465,205 @@ fn recur_schedule_next_occurrence_is_in_future() {
 
     let date = new_task.due.or(new_task.start).expect("no date on new task");
     assert!(date > today, "spawned schedule task's date {date} should be after today {today}");
+}
+
+/// Snap round-trips through TOML serialization (NextWeekday, NextWorkday, DayOfMonth).
+#[test]
+fn recur_snap_round_trips_toml() {
+    use next::domain::task::Snap;
+
+    let mut env = common::setup();
+
+    // NextWeekday snap
+    add::run(
+        add::Args {
+            due: Some("2026-06-06".into()),
+            recur_completion: Some(7),
+            recur_snap: Some("saturday".into()),
+            slug: Some("sat-task".into()),
+            ..add_args("Saturday task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let (fresh, _) = next::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let t = fresh.get_task_by_slug("sat-task").unwrap().unwrap();
+    assert!(
+        matches!(
+            t.recurrence,
+            Some(Recurrence::Completion { snap: Some(Snap::NextWeekday { weekday: 5 }), .. })
+        ),
+        "NextWeekday snap should round-trip"
+    );
+
+    // NextWorkday snap
+    add::run(
+        add::Args {
+            due: Some("2026-06-01".into()),
+            recur_completion: Some(30),
+            recur_snap: Some("next-workday".into()),
+            slug: Some("workday-task".into()),
+            ..add_args("Workday task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let (fresh2, _) = next::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let t2 = fresh2.get_task_by_slug("workday-task").unwrap().unwrap();
+    assert!(
+        matches!(t2.recurrence, Some(Recurrence::Completion { snap: Some(Snap::NextWorkday), .. })),
+        "NextWorkday snap should round-trip"
+    );
+}
+
+/// Editing a recurring task's RRULE preserves the original anchor.
+#[test]
+fn recur_edit_rule_preserves_anchor() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            start: Some("2026-06-01".into()),
+            recur_schedule: Some("FREQ=MONTHLY;BYMONTHDAY=1".into()),
+            slug: Some("monthly".into()),
+            ..add_args("Monthly task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let before = env.ctx.store.get_task_by_slug("monthly").unwrap().unwrap();
+    let original_anchor = match &before.recurrence {
+        Some(Recurrence::Schedule { anchor, .. }) => *anchor,
+        _ => panic!("expected schedule recurrence"),
+    };
+
+    // Change the rule but keep everything else.
+    edit::run(
+        edit::Args {
+            id: "monthly".into(),
+            recur_schedule: Some("FREQ=MONTHLY;BYMONTHDAY=15".into()),
+            title: None,
+            due: None,
+            start: None,
+            priority: None,
+            slug: None,
+            assignee: None,
+            clear_assignee: false,
+            tags: vec![],
+            remove_tags: vec![],
+            parent: None,
+            blocked_by: vec![],
+            description: None,
+            clear_description: false,
+            url: None,
+            clear_url: false,
+            notes: None,
+            recur_completion: None,
+            recur_snap: None,
+            clear_recurrence: false,
+            long_term: false,
+            adjust: None,
+            clear_due: false,
+            clear_start: false,
+            clear_parent: false,
+            clear_blocked_by: false,
+            json: false,
+            tag_tokens: vec![],
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let after = env.ctx.store.get_task_by_slug("monthly").unwrap().unwrap();
+    let new_anchor = match &after.recurrence {
+        Some(Recurrence::Schedule { anchor, rrule, .. }) => {
+            assert_eq!(rrule, "FREQ=MONTHLY;BYMONTHDAY=15", "rrule should be updated");
+            *anchor
+        }
+        _ => panic!("expected schedule recurrence after edit"),
+    };
+    assert_eq!(original_anchor, new_anchor, "anchor must not change when editing the rule");
+}
+
+/// Clearing the recurrence removes the rule and recurrence_id.
+#[test]
+fn recur_clear_recurrence_removes_rule() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            recur_completion: Some(7),
+            slug: Some("clearme".into()),
+            ..add_args("Recurring task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let before = env.ctx.store.get_task_by_slug("clearme").unwrap().unwrap();
+    assert!(before.recurrence.is_some(), "should have recurrence before clear");
+    assert!(before.recurrence_id.is_some(), "should have recurrence_id before clear");
+
+    edit::run(
+        edit::Args {
+            id: "clearme".into(),
+            clear_recurrence: true,
+            title: None,
+            due: None,
+            start: None,
+            priority: None,
+            slug: None,
+            assignee: None,
+            clear_assignee: false,
+            tags: vec![],
+            remove_tags: vec![],
+            parent: None,
+            blocked_by: vec![],
+            description: None,
+            clear_description: false,
+            url: None,
+            clear_url: false,
+            notes: None,
+            recur_schedule: None,
+            recur_completion: None,
+            recur_snap: None,
+            long_term: false,
+            adjust: None,
+            clear_due: false,
+            clear_start: false,
+            clear_parent: false,
+            clear_blocked_by: false,
+            json: false,
+            tag_tokens: vec![],
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let after = env.ctx.store.get_task_by_slug("clearme").unwrap().unwrap();
+    assert!(after.recurrence.is_none(), "recurrence should be cleared");
+    assert!(after.recurrence_id.is_none(), "recurrence_id should be cleared");
+}
+
+/// recurrence_id is set on the first instance when adding a recurring task.
+#[test]
+fn recur_first_instance_has_recurrence_id() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            recur_completion: Some(7),
+            slug: Some("first-instance".into()),
+            ..add_args("First instance")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let task = env.ctx.store.get_task_by_slug("first-instance").unwrap().unwrap();
+    assert_eq!(
+        task.recurrence_id,
+        Some(task.id),
+        "first instance should have recurrence_id == its own id"
+    );
 }

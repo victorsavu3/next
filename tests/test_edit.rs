@@ -47,6 +47,7 @@ fn base_edit(id: &str) -> edit::Args {
         recur_schedule: None,
         recur_completion: None,
         recur_snap: None,
+        clear_recurrence: false,
         long_term: false,
         adjust: None,
         clear_due: false,

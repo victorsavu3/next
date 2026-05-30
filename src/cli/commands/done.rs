@@ -20,7 +20,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let mut paths = vec![task_path];
 
     let today = chrono::Local::now().date_naive();
-    if let Some(next) = spawn_next(&task, today) {
+    if let Some(next) = spawn_next(&task, today)? {
         let next_path = crate::storage::task_path(&ctx.repo_root, &next);
         ctx.store.save_task(&next)?;
         paths.push(next_path);

@@ -91,6 +91,10 @@ pub struct Args {
     #[arg(long)]
     pub recur_snap: Option<String>,
 
+    /// Remove the recurrence rule from this task.
+    #[arg(long)]
+    pub clear_recurrence: bool,
+
     /// Suppress age-based scoring.
     #[arg(long)]
     pub long_term: bool,
@@ -218,7 +222,10 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         task.notes = Some(notes);
     }
 
-    if let Some(rule) = args.recur_schedule {
+    if args.clear_recurrence {
+        task.recurrence = None;
+        task.recurrence_id = None;
+    } else if let Some(rule) = args.recur_schedule {
         // Keep existing anchor if the task already has a Schedule rule; otherwise
         // derive anchor from start/due or fall back to today.
         let anchor = match &task.recurrence {
@@ -227,12 +234,22 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         };
         let snap = args.recur_snap.as_deref().map(parse_snap).transpose()?;
         task.recurrence = Some(Recurrence::Schedule { rrule: rule, anchor, snap });
+        task.recurrence_id.get_or_insert(task.id);
     } else if let Some(interval) = args.recur_completion {
         let snap = args.recur_snap.as_deref().map(parse_snap).transpose()?;
         task.recurrence = Some(Recurrence::Completion {
             interval_days: interval,
             snap,
         });
+        task.recurrence_id.get_or_insert(task.id);
+    } else if let Some(snap_str) = args.recur_snap {
+        // Standalone --recur-snap: update the snap on an existing recurrence rule.
+        let snap = Some(parse_snap(&snap_str)?);
+        match &mut task.recurrence {
+            Some(Recurrence::Schedule { snap: s, .. }) => *s = snap,
+            Some(Recurrence::Completion { snap: s, .. }) => *s = snap,
+            None => anyhow::bail!("--recur-snap requires an existing recurrence rule; use --recur-schedule or --recur-completion first"),
+        }
     }
 
     if args.long_term {

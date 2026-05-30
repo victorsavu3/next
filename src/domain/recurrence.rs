@@ -119,8 +119,13 @@ fn parse_rrule(rrule: &str) -> anyhow::Result<RRule> {
             }
             "BYDAY" => {
                 for token in value.split(',') {
-                    // Strip optional ±N prefix
-                    let token = token.trim().trim_start_matches(|c: char| c.is_ascii_digit() || c == '+' || c == '-');
+                    let token = token.trim();
+                    // Reject positional prefixes (e.g. "1MO", "-1FR") — not supported.
+                    let has_prefix = token.starts_with(|c: char| c.is_ascii_digit() || c == '+' || c == '-');
+                    anyhow::ensure!(
+                        !has_prefix,
+                        "positional BYDAY values (e.g. \"1MO\", \"-1FR\") are not supported"
+                    );
                     let wd = match token.to_uppercase().as_str() {
                         "MO" => 0u8,
                         "TU" => 1,
@@ -167,14 +172,21 @@ pub fn next_occurrence(
 
     match rule.freq {
         Freq::Weekly => {
-            // Walk day by day from after+1; check weekday membership and interval.
+            // When BYDAY is absent, default to the anchor's weekday (per RFC 5545).
+            let anchor_wd = anchor.weekday().num_days_from_monday() as u8;
+            let effective_by_day: &[u8] = if rule.by_day.is_empty() {
+                std::slice::from_ref(&anchor_wd)
+            } else {
+                &rule.by_day
+            };
+            // Walk day by day; limit extended to cover large INTERVAL values.
+            let limit = (rule.interval as usize) * 7 + 14;
             let anchor_monday =
                 anchor - Duration::days(anchor.weekday().num_days_from_monday() as i64);
             let mut d = after + Duration::days(1);
-            for _ in 0..400 {
+            for _ in 0..limit {
                 let wd = d.weekday().num_days_from_monday() as u8;
-                let in_by_day = rule.by_day.is_empty() || rule.by_day.contains(&wd);
-                if in_by_day {
+                if effective_by_day.contains(&wd) {
                     let d_monday =
                         d - Duration::days(d.weekday().num_days_from_monday() as i64);
                     let weeks = (d_monday - anchor_monday).num_days() / 7;
@@ -184,12 +196,14 @@ pub fn next_occurrence(
                 }
                 d += Duration::days(1);
             }
-            anyhow::bail!("no weekly occurrence found within 400 days")
+            anyhow::bail!("no weekly occurrence found within {} days", limit)
         }
 
         Freq::Daily => {
+            // Limit extended to cover large INTERVAL values.
+            let limit = (rule.interval as usize) + 10;
             let mut d = after + Duration::days(1);
-            for _ in 0..400 {
+            for _ in 0..limit {
                 let wd = d.weekday().num_days_from_monday() as u8;
                 let in_by_day = rule.by_day.is_empty() || rule.by_day.contains(&wd);
                 if in_by_day {
@@ -200,7 +214,7 @@ pub fn next_occurrence(
                 }
                 d += Duration::days(1);
             }
-            anyhow::bail!("no daily occurrence found within 400 days")
+            anyhow::bail!("no daily occurrence found within {} days", limit)
         }
 
         Freq::Monthly => {
@@ -280,9 +294,13 @@ pub fn next_occurrence(
 
 /// Creates the next recurring task instance from a completed task.
 ///
-/// Returns `None` if the task has no recurrence rule.
-pub fn spawn_next(task: &Task, today: NaiveDate) -> Option<Task> {
-    let recurrence = task.recurrence.as_ref()?;
+/// Returns `Ok(None)` if the task has no recurrence rule, `Err` if a
+/// schedule rule fails to produce a valid next date.
+pub fn spawn_next(task: &Task, today: NaiveDate) -> anyhow::Result<Option<Task>> {
+    let recurrence = match task.recurrence.as_ref() {
+        Some(r) => r,
+        None => return Ok(None),
+    };
 
     // For fixed schedule, don't go back before the current task's due/start date.
     let after = match recurrence {
@@ -295,18 +313,11 @@ pub fn spawn_next(task: &Task, today: NaiveDate) -> Option<Task> {
     };
 
     let occurrence = match recurrence {
-        Recurrence::Schedule {
-            rrule,
-            anchor,
-            snap,
-        } => {
-            let raw = next_occurrence(rrule, *anchor, after).ok()?;
+        Recurrence::Schedule { rrule, anchor, snap } => {
+            let raw = next_occurrence(rrule, *anchor, after)?;
             snap.as_ref().map_or(raw, |s| apply_snap(raw, s))
         }
-        Recurrence::Completion {
-            interval_days,
-            snap,
-        } => {
+        Recurrence::Completion { interval_days, snap } => {
             let raw = today + Duration::days(*interval_days as i64);
             snap.as_ref().map_or(raw, |s| apply_snap(raw, s))
         }
@@ -324,6 +335,13 @@ pub fn spawn_next(task: &Task, today: NaiveDate) -> Option<Task> {
     next.notes = task.notes.clone();
     next.long_term = task.long_term;
     next.score_adjustment = task.score_adjustment;
+    // Copy user/tool data but not the instance-specific time_log.
+    next.data = task
+        .data
+        .iter()
+        .filter(|(k, _)| k.as_str() != "time_log")
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
 
     match (task.start, task.due) {
         (Some(s), Some(d)) => {
@@ -336,7 +354,7 @@ pub fn spawn_next(task: &Task, today: NaiveDate) -> Option<Task> {
         (None, None) => next.start = Some(occurrence),
     }
 
-    Some(next)
+    Ok(Some(next))
 }
 
 // ─── tests ─────────────────────────────────────────────────────────────────
@@ -470,7 +488,7 @@ mod tests {
             snap: None,
         });
         let today = d(2026, 5, 5);
-        let next = spawn_next(&task, today).unwrap();
+        let next = spawn_next(&task, today).unwrap().unwrap();
         assert_eq!(next.due, Some(d(2026, 5, 12)));
     }
 
@@ -484,7 +502,7 @@ mod tests {
             snap: Some(Snap::NextWeekday { weekday: 5 }),
         });
         let today = d(2026, 5, 6); // Wednesday
-        let next = spawn_next(&task, today).unwrap();
+        let next = spawn_next(&task, today).unwrap().unwrap();
         // May 6 + 7 = May 13 (Wednesday), snap to next Saturday = May 16
         let due = next.due.unwrap();
         assert_eq!(due.weekday(), Weekday::Sat);
@@ -505,7 +523,7 @@ mod tests {
             snap: None,
         });
         let today = d(2026, 5, 10);
-        let next = spawn_next(&task, today).unwrap();
+        let next = spawn_next(&task, today).unwrap().unwrap();
         assert_eq!(next.start, Some(d(2026, 6, 1)));
         assert_eq!(next.due, Some(d(2026, 6, 3)));
     }
@@ -513,7 +531,7 @@ mod tests {
     #[test]
     fn spawn_next_no_spawn_without_recurrence() {
         let task = Task::new("One-off task");
-        assert!(spawn_next(&task, d(2026, 5, 10)).is_none());
+        assert!(spawn_next(&task, d(2026, 5, 10)).unwrap().is_none());
     }
 
     // ── apply_snap DayOfMonth edge cases ────────────────────────────────────
@@ -562,7 +580,7 @@ mod tests {
             snap: None,
         });
         let today = d(2026, 5, 10);
-        let next = spawn_next(&task, today).unwrap();
+        let next = spawn_next(&task, today).unwrap().unwrap();
         assert!(next.start.is_some(), "spawned task should have a start date");
         assert!(next.due.is_none(), "spawned task should not have a due date");
         assert_eq!(next.start, Some(today + Duration::days(7)));
@@ -578,7 +596,7 @@ mod tests {
             snap: None,
         });
         let today = d(2026, 5, 10);
-        let next = spawn_next(&task, today).unwrap();
+        let next = spawn_next(&task, today).unwrap().unwrap();
         assert!(next.due.is_some(), "spawned task should have a due date");
         assert!(next.start.is_none(), "spawned task should not have a start date");
         assert_eq!(next.due, Some(today + Duration::days(30)));
@@ -594,7 +612,7 @@ mod tests {
             snap: None,
         });
         let today = d(2026, 5, 8); // Friday
-        let next = spawn_next(&task, today).unwrap();
+        let next = spawn_next(&task, today).unwrap().unwrap();
         assert!(next.start.is_some(), "spawned task should have a start date");
         assert!(next.due.is_none(), "spawned task should not have a due date");
         assert!(!matches!(next.start.unwrap().weekday(), Weekday::Sat | Weekday::Sun));
@@ -610,7 +628,69 @@ mod tests {
             interval_days: 7,
             snap: None,
         });
-        let next = spawn_next(&task, d(2026, 5, 5)).unwrap();
+        let next = spawn_next(&task, d(2026, 5, 5)).unwrap().unwrap();
         assert!(next.slug.is_none(), "spawned task must not copy the slug");
+    }
+
+    // ── new unit tests for review findings ──────────────────────────────────
+
+    #[test]
+    fn weekly_without_byday_defaults_to_anchor_weekday() {
+        // FREQ=WEEKLY without BYDAY should recur on the same weekday as anchor.
+        let anchor = d(2026, 5, 4); // Monday
+        let after = d(2026, 5, 4);  // same day as anchor
+        let result = next_occurrence("FREQ=WEEKLY", anchor, after).unwrap();
+        // Should return the NEXT Monday (May 11), not the next day (Tuesday)
+        assert_eq!(result, d(2026, 5, 11));
+        assert_eq!(result.weekday(), Weekday::Mon);
+    }
+
+    #[test]
+    fn weekly_interval2_without_byday_respects_anchor_weekday() {
+        // FREQ=WEEKLY;INTERVAL=2 without BYDAY → every other Monday starting from anchor.
+        let anchor = d(2026, 5, 4); // Monday (week 0)
+        let after = d(2026, 5, 11); // Monday (week 1, odd) → next is May 18 (week 2, even)
+        let result = next_occurrence("FREQ=WEEKLY;INTERVAL=2", anchor, after).unwrap();
+        assert_eq!(result, d(2026, 5, 18));
+    }
+
+    #[test]
+    fn byday_positional_prefix_is_rejected() {
+        // "1MO" (first Monday of month) is not supported — should return an error.
+        let anchor = d(2026, 5, 4);
+        let after = d(2026, 5, 4);
+        let result = next_occurrence("FREQ=MONTHLY;BYDAY=1MO", anchor, after);
+        assert!(result.is_err(), "positional BYDAY should be rejected");
+    }
+
+    #[test]
+    fn spawn_next_copies_data_but_not_time_log() {
+        // Custom data keys are preserved; time_log is dropped.
+        let mut task = Task::new("Reviewed task");
+        task.due = Some(d(2026, 5, 1));
+        task.data.insert("ticket".into(), serde_json::Value::String("JIRA-99".into()));
+        task.data.insert("time_log".into(), serde_json::json!([{"event": "start"}]));
+        task.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
+        let next = spawn_next(&task, d(2026, 5, 5)).unwrap().unwrap();
+        assert_eq!(next.data.get("ticket").and_then(|v| v.as_str()), Some("JIRA-99"));
+        assert!(!next.data.contains_key("time_log"), "time_log must not be copied");
+    }
+
+    #[test]
+    fn spawn_next_late_completion_skips_past_dates() {
+        // Task due Apr 1, completed May 30 (overdue by ~60 days).
+        // Next occurrence should be after May 30, not after Apr 1.
+        let anchor = d(2026, 4, 1);
+        let mut task = Task::new("Monthly report");
+        task.due = Some(d(2026, 4, 1));
+        task.recurrence = Some(Recurrence::Schedule {
+            rrule: "FREQ=MONTHLY;BYMONTHDAY=1".into(),
+            anchor,
+            snap: None,
+        });
+        let today = d(2026, 5, 30);
+        let next = spawn_next(&task, today).unwrap().unwrap();
+        let date = next.due.or(next.start).unwrap();
+        assert!(date > today, "spawned date {date} should be after today {today}");
     }
 }

@@ -121,12 +121,14 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         let anchor = task.start.or(task.due).unwrap_or(today);
         let snap = args.recur_snap.as_deref().map(parse_snap).transpose()?;
         task.recurrence = Some(Recurrence::Schedule { rrule: rule, anchor, snap });
+        task.recurrence_id = Some(task.id);
     } else if let Some(interval) = args.recur_completion {
         let snap = args.recur_snap.as_deref().map(parse_snap).transpose()?;
         task.recurrence = Some(Recurrence::Completion {
             interval_days: interval,
             snap,
         });
+        task.recurrence_id = Some(task.id);
     }
 
     if let Some(ref parent_ref) = args.parent {
