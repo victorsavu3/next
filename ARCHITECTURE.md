@@ -21,14 +21,15 @@ This document describes the internal design of `next`. Read `REQUIREMENTS.md` fo
 └──────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
-│          next-mcp binary  (feature = "mcp")                      │
+│     next-mcp binary  (feature = "mcp")  runs as UID 1000         │
 │  ┌──────────────────┐  ┌─────────────┐  ┌──────────────────────┐│
 │  │  HTTP server     │  │ MCP tools   │  │   Sync manager       ││
-│  │  axum + JSON-RPC │─▶│ (same Store │  │ autosync / deferred  ││
-│  │  Bearer auth     │  │  & VcsBack) │  │ timer / periodic     ││
+│  │  axum, 64 KB cap │─▶│ (same Store │  │ Semaphore(1) guards  ││
+│  │  Bearer auth     │  │  & VcsBack) │  │ deferred/periodic    ││
 │  └──────────────────┘  └─────────────┘  └──────────────────────┘│
 │  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  git_init: clone from HTTPS on first start                  │ │
+│  │  git_init: HTTPS clone on first start; credentials stripped │ │
+│  │  from logs; default git identity set in local repo config   │ │
 │  └─────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -58,12 +59,12 @@ next/                             # crate root (also git repo)
       config.rs                   # McpConfig: all config from env vars
       git_init.rs                 # clone_or_open(): HTTPS git clone on first start
       protocol.rs                 # JSON-RPC 2.0 + MCP types
-      auth.rs                     # Bearer token middleware (MCP + webhook)
-      sync_manager.rs             # do_sync(), SyncScheduler (configurable deferred timer, default 30s), periodic sync
-      server.rs                   # axum router, MCP dispatch, webhook handler
+      auth.rs                     # Bearer token middleware (MCP + webhook); constant-time comparison that does not leak token length
+      sync_manager.rs             # do_sync(), SyncScheduler (Semaphore(1) + configurable deferred timer, default 30s), periodic sync
+      server.rs                   # axum router (64 KB body limit), MCP dispatch, webhook handler
       tools/
         mod.rs                    # all_tools() registry + dispatch()
-        tasks.rs                  # list_tasks, get_task, add_task, update_task, delete_task
+        tasks.rs                  # list_tasks, get_task, add_task, update_task, delete_task; validate_slug (allowlist: a-zA-Z0-9-_)
         state.rs                  # sync, get_state, set_context, set_resource, set_user_filter
         tags.rs                   # manage_tag
         data.rs                   # manage_task_data
@@ -121,7 +122,7 @@ next/                             # crate root (also git repo)
 | `task` | `Task`, `Status` (`Open`/`Started`/`Done`/`Cancelled`), `Priority`, `Recurrence`, `Snap` |
 | `recurrence` | `fn next_occurrence(rrule, anchor, after)`, `fn apply_snap(date, snap)`, `fn spawn_next(task, today)` |
 | `state` | `GlobalState` (active contexts, active users, resource availability map) |
-| `tag` | `TagKind` (Context / Resource / Freeform); tag parsing helpers |
+| `tag` | `TagKind` (Context / Resource / Freeform); `validate_tag` (allowlist: segments start with letter, contain `a-zA-Z0-9-_`, `/` separator allowed, `..` explicitly rejected) |
 | `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
 | `scoring` | `ScoredTask`, `ScoringWeights`, `fn score_and_sort(tasks, all_tasks, today, weights, tag_metas)` |
 | `date_parse` | `fn parse_date(expr, today) -> Result<NaiveDate>` |
@@ -629,5 +630,4 @@ MCP-only dependencies (feature = `"mcp"`):
 | Crate | Purpose |
 |-------|---------|
 | `tokio` | async runtime for `next-mcp` |
-| `axum` | HTTP server and middleware |
-| `tower`, `tower-http` | service layers |
+| `axum` | HTTP server, middleware, `DefaultBodyLimit` |

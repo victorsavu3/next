@@ -227,8 +227,6 @@ is the production-ready path.
 
 ---
 
----
-
 ## MCP server (`next-mcp`)
 
 `next-mcp` is an optional HTTP server that exposes the full task management API over the
@@ -239,27 +237,30 @@ remotely.
 ### Building
 
 ```sh
+# Binary only
 cargo build --release --features mcp --bin next-mcp
 
-# Or build the container image:
+# Container image (published at forgejo.victorsavu.eu/victor/next-mcp)
 podman build -f Containerfile -t localhost/next-mcp:latest .
 ```
 
-### Running
+### Configuration
 
-All configuration is passed via environment variables (no config file):
+All configuration is passed via environment variables — no config file.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `NEXT_BEARER_TOKEN` | ✓ | — | MCP client authentication token |
-| `NEXT_GIT_URL` | on first start | — | HTTPS URL to clone the tasks repository |
-| `NEXT_GIT_USER` | | — | Git username for HTTPS auth (or embed in URL) |
-| `NEXT_GIT_TOKEN` | | — | Git password/token for HTTPS auth |
+| `NEXT_BEARER_TOKEN` | ✓ | — | MCP client auth token |
+| `NEXT_GIT_URL` | first start | — | HTTPS URL to clone the tasks repo |
+| `NEXT_GIT_USER` | | — | Git username (or embed in URL as `https://user:token@…`) |
+| `NEXT_GIT_TOKEN` | | — | Git password/token |
 | `NEXT_REPO_PATH` | | `/data/tasks` | Local path for the tasks repository |
 | `NEXT_BIND_ADDR` | | `0.0.0.0:3000` | Listen address |
 | `NEXT_WEBHOOK_TOKEN` | | — | If set, enables `POST /webhook/sync` with this token |
 | `NEXT_SYNC_INTERVAL` | | `86400` | Periodic pull+push interval in seconds; `0` disables |
 | `NEXT_DEFERRED_SYNC_DELAY_SECS` | | `30` | Seconds before deferred sync fires after `autosync=false` |
+
+Credentials embedded in `NEXT_GIT_URL` are stripped before logging.
 
 ```sh
 NEXT_BEARER_TOKEN=secret \
@@ -282,6 +283,13 @@ NEXT_GIT_TOKEN=…
 NEXT_SYNC_INTERVAL=86400
 ```
 
+Two named volumes are used — Podman creates them automatically on first start:
+
+| Volume | Mount | Contents |
+|--------|-------|----------|
+| `next-tasks` | `/data/tasks` | Cloned tasks git repository |
+| `next-state` | `/data/state` | Machine-local state (active context, user filter, resources) |
+
 Then:
 
 ```sh
@@ -289,29 +297,43 @@ systemctl --user daemon-reload
 systemctl --user start next-mcp
 ```
 
-### MCP tools
+### MCP tools (13)
 
-| Tool | Description |
-|------|-------------|
-| `list_tasks` | List scored tasks; accepts filter tokens |
-| `get_task` | Full details of one task + direct children |
-| `add_task` | Create a task |
-| `update_task` | Edit fields or transition state (start/stop/done/cancel/move) |
-| `delete_task` | Permanently remove a task |
-| `sync` | Pull then push; cancels any pending deferred sync |
-| `get_state` | Active contexts, users, resource availability |
-| `set_context` | Replace active context filter |
-| `set_resource` | Toggle resource availability |
-| `set_user_filter` | Replace active user filter |
-| `manage_tag` | Tag metadata CRUD (list/show/describe/set_priority/set_url/…) |
-| `manage_task_data` | Task data key-value pairs (get/list/set/unset) |
-| `get_forecast` | Upcoming due dates within a configurable horizon |
+| Tool | R/M | Description |
+|------|-----|-------------|
+| `list_tasks` | R | List scored tasks; accepts filter tokens |
+| `get_task` | R | Full details of one task + direct children |
+| `add_task` | M | Create a task |
+| `update_task` | M | Edit fields or transition state (start/stop/done/cancel/move) |
+| `delete_task` | M | Permanently remove a task |
+| `sync` | M | Pull then push; fails fast if sync already in progress |
+| `get_state` | R | Active contexts, users, resource availability |
+| `set_context` | M | Replace active context filter |
+| `set_resource` | M | Toggle resource availability |
+| `set_user_filter` | M | Replace active user filter |
+| `manage_tag` | R/M | Tag metadata CRUD (list/show/describe/set_priority/set_url/…) |
+| `manage_task_data` | R/M | Task data key-value pairs (get/list/set/unset) |
+| `get_forecast` | R | Upcoming due dates within a configurable horizon |
 
-All mutation tools accept an `autosync: bool` parameter (default `true`). With `autosync: false` the mutation returns immediately and a deferred sync fires after `NEXT_DEFERRED_SYNC_DELAY_SECS` seconds — useful for bulk edits where an explicit `sync` call at the end is preferred.
+All mutation tools (M) accept an `autosync: bool` parameter (default `true`):
+
+- **`autosync: true`** — sync runs inline before the response is returned. Sync errors are logged but do not fail the tool call.
+- **`autosync: false`** — mutation returns immediately; a deferred sync fires `NEXT_DEFERRED_SYNC_DELAY_SECS` seconds after the last mutation in a batch. Useful when making many changes and calling `sync` explicitly at the end.
+
+At most one sync runs at a time — the `sync` tool and webhook return an error immediately if a sync is already in progress rather than queuing.
+
+**Slug format**: letters, digits, `-` and `_` only (e.g. `water-plants`, `work_infra`).
 
 ### Webhook
 
-`POST /webhook/sync` triggers an immediate pull+push using `NEXT_WEBHOOK_TOKEN` for auth (separate from the MCP bearer token). Wire it to your git host's push webhook to keep the container up to date when others push.
+`POST /webhook/sync` triggers an immediate pull+push using `NEXT_WEBHOOK_TOKEN` for auth (strictly separate from the MCP bearer token — neither token is accepted on the other route). Wire it to your git host's push webhook to keep the container up to date when others push.
+
+### Security notes
+
+- Container runs as unprivileged user `next` (UID 1000)
+- Request bodies are capped at 64 KB
+- Bearer token comparison is constant-time and does not leak the expected token's length
+- Embedded git credentials are stripped from `NEXT_GIT_URL` before any logging
 
 ---
 

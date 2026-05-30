@@ -622,31 +622,41 @@ inside containers without a pre-configured git identity.
 ### 12.4 Authentication
 
 - All routes MUST require `Authorization: Bearer <NEXT_BEARER_TOKEN>`; return `401` otherwise
-- The webhook route (`POST /webhook/sync`) MUST use a separate `NEXT_WEBHOOK_TOKEN`
-  so that the MCP bearer token cannot trigger syncs and vice versa
-- Bearer token comparison MUST be constant-time
+- The webhook route (`POST /webhook/sync`) MUST use a separate `NEXT_WEBHOOK_TOKEN`;
+  neither token MUST be accepted on the other route
+- Bearer token comparison MUST be constant-time and MUST NOT reveal the expected token's
+  length through response-time differences (always process all bytes of the expected token)
+- Request bodies MUST be limited to a small maximum size (≤ 64 KB) to resist memory-exhaustion attacks
 
 ### 12.5 MCP tools (13 total)
 
 All existing CLI operations MUST be exposed as MCP tools. Mutation tools MUST accept an
 `autosync: bool` parameter (default `true`):
-- `autosync = true`: sync (pull + push) runs synchronously before the tool response is returned; sync errors are logged but do NOT fail the tool call
-- `autosync = false`: a deferred sync is scheduled to fire after `NEXT_DEFERRED_SYNC_DELAY_SECS`; calling this on successive mutations MUST reset (not stack) the timer
+- `autosync = true`: sync runs inline before the response is returned; sync errors are logged but MUST NOT fail the tool call
+- `autosync = false`: a deferred sync is scheduled to fire after `NEXT_DEFERRED_SYNC_DELAY_SECS`; successive mutations MUST reset (not stack) the timer
 
-Calling the `sync` tool explicitly MUST cancel any pending deferred timer and run sync immediately, surfacing errors to the caller.
+The `sync` tool MUST cancel any pending deferred timer and run sync immediately, surfacing errors to the caller. It MUST return an error immediately if a sync is already in progress rather than queuing.
+
+**Input validation (slug):** The `slug` field accepted by `add_task` and `update_task` MUST be validated using an allowlist: letters (`a-z`, `A-Z`), digits (`0-9`), hyphen (`-`), and underscore (`_`). No other characters are permitted. This prevents path traversal when the slug is used as the task's TOML filename (`tasks/<slug>.toml`).
+
+**Input validation (tags):** Tags are validated by `domain::tag::validate_tag` using an allowlist per path segment: starts with an ASCII letter, then letters / digits / `-` / `_`. The `/` separator is allowed for hierarchical tags (e.g. `@home/kitchen`). The `..` component MUST be explicitly rejected. The `@` and `#` prefixes are permitted.
 
 ### 12.6 Sync mechanisms
 
-Three independent sync triggers MUST coexist:
+Four independent sync triggers MUST coexist:
 
 1. **Per-mutation autosync** — see §12.5
 2. **Deferred timer** — fires `NEXT_DEFERRED_SYNC_DELAY_SECS` after the last `autosync=false` mutation; MUST be reset each time a new mutation arrives before the timer fires
 3. **Periodic sync** — background task fires every `NEXT_SYNC_INTERVAL` seconds (0 = disabled)
 4. **Webhook** (`POST /webhook/sync`) — protected by `NEXT_WEBHOOK_TOKEN`; fires sync immediately and cancels any pending deferred timer; returns `200 {"status": "synced" | "error", ...}`
 
+At most one sync MUST run at a time. When an explicit sync (tool call or webhook) is already in progress, any concurrent explicit sync request MUST fail immediately with an error. Background syncs (deferred timer, periodic) MUST skip rather than queue when a sync is already running.
+
 ### 12.7 Container deployment
 
 - A `Containerfile` MUST be provided for building the image
 - A Podman Quadlet unit file (`quadlets/next-mcp.container`) MUST be provided
-- The image MUST use two named volumes: one for the tasks repository and one for the XDG machine-local state
+- The container MUST run as an unprivileged non-root user (UID 1000)
+- Two named volumes MUST be used: `next-tasks` at `/data/tasks` (tasks repository) and `next-state` at `/data/state` (XDG machine-local state via `XDG_STATE_HOME=/data/state`)
 - Secrets MUST be passed via an `EnvironmentFile`, not baked into the image
+- Credentials embedded in `NEXT_GIT_URL` MUST be stripped before any log output; only the credential-free URL MAY be logged
