@@ -58,7 +58,7 @@ pub fn clone_or_open(config: &McpConfig) -> anyhow::Result<PathBuf> {
         .clone(&url_for_auth, repo_path)
         .with_context(|| format!("git clone {} failed", url_for_auth))?;
 
-    ensure_git_identity(&repo)?;
+    ensure_git_identity(&repo, config.git_author_name.as_deref(), config.git_author_email.as_deref())?;
     init_repo_structure(repo_path)?;
     Ok(repo_path.clone())
 }
@@ -94,7 +94,11 @@ fn extract_credentials(url: &str) -> (String, Option<String>, Option<String>) {
 /// Ensures `user.name` and `user.email` are set in the repo's local config,
 /// falling back to sensible defaults when neither global nor system config provides them.
 /// This is required for `next-mcp` to commit inside a container with no git identity.
-fn ensure_git_identity(repo: &git2::Repository) -> anyhow::Result<()> {
+fn ensure_git_identity(
+    repo: &git2::Repository,
+    author_name: Option<&str>,
+    author_email: Option<&str>,
+) -> anyhow::Result<()> {
     let config = repo.config()
         .with_context(|| "failed to open git config")?;
 
@@ -103,11 +107,11 @@ fn ensure_git_identity(repo: &git2::Repository) -> anyhow::Result<()> {
     let has_email = config.get_string("user.email").is_ok();
 
     if !has_name || !has_email {
-        // Write defaults into the repo-local config only.
+        // Write into the repo-local config only.
         let mut local = config.open_level(git2::ConfigLevel::Local)
             .with_context(|| "failed to open local git config")?;
-        if !has_name  { local.set_str("user.name",  "next-mcp")?; }
-        if !has_email { local.set_str("user.email", "next-mcp@unknown")?; }
+        if !has_name  { local.set_str("user.name",  author_name.unwrap_or("next-mcp"))?; }
+        if !has_email { local.set_str("user.email", author_email.unwrap_or("next-mcp@unknown"))?; }
     }
 
     Ok(())

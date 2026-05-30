@@ -21,6 +21,10 @@ pub struct McpConfig {
     pub sync_interval: Option<Duration>,
     /// How long to wait before firing the deferred sync after a mutation with autosync=false.
     pub deferred_sync_delay: Duration,
+    /// git committer name written to the repo-local config when no identity is set.
+    pub git_author_name: Option<String>,
+    /// git committer email written to the repo-local config when no identity is set.
+    pub git_author_email: Option<String>,
 }
 
 impl McpConfig {
@@ -65,6 +69,9 @@ impl McpConfig {
             Err(_) => Duration::from_secs(30),
         };
 
+        let git_author_name  = std::env::var("NEXT_GIT_AUTHOR_NAME").ok().filter(|s| !s.is_empty());
+        let git_author_email = std::env::var("NEXT_GIT_AUTHOR_EMAIL").ok().filter(|s| !s.is_empty());
+
         Ok(Self {
             bearer_token,
             webhook_token,
@@ -75,6 +82,8 @@ impl McpConfig {
             git_token,
             sync_interval,
             deferred_sync_delay,
+            git_author_name,
+            git_author_email,
         })
     }
 }
