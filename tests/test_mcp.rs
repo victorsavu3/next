@@ -395,62 +395,31 @@ async fn webhook_route_absent_without_token() {
 // ── OAuth tests ───────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn oauth_metadata_returns_endpoints() {
+async fn oauth_metadata_returns_token_endpoint() {
     let dir = tempfile::tempdir().unwrap();
     let addr = start_test_server("tok", None, dir.path()).await;
-    let resp = Client::new()
+    let body: Value = Client::new()
         .get(format!("http://{addr}/.well-known/oauth-authorization-server"))
         .send()
         .await
+        .unwrap()
+        .json()
+        .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = resp.json().await.unwrap();
-    assert!(body["authorization_endpoint"].as_str().unwrap().ends_with("/oauth/authorize"));
-    assert!(body["token_endpoint"].as_str().unwrap().ends_with("/oauth/token"));
-    assert_eq!(body["response_types_supported"][0], "code");
+    assert_eq!(body["grant_types_supported"][0], "client_credentials");
+    assert!(body["token_endpoint"].as_str().unwrap().contains("/token"));
 }
 
 #[tokio::test]
-async fn oauth_full_pkce_flow() {
-    use base64::Engine as _;
-    use sha2::Digest as _;
-
+async fn token_endpoint_echoes_client_secret() {
     let dir = tempfile::tempdir().unwrap();
-    let addr = start_test_server("secret-token", None, dir.path()).await;
-    let client = Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-
-    // Build PKCE values
-    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-    let hash = sha2::Sha256::digest(verifier.as_bytes());
-    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash);
-
-    // Step 1: authorize — should redirect with code
-    let resp = client
-        .get(format!(
-            "http://{addr}/oauth/authorize?response_type=code&client_id=test&redirect_uri=http://localhost:9999/cb&code_challenge={challenge}&code_challenge_method=S256"
-        ))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    let location = resp.headers().get("location").unwrap().to_str().unwrap().to_owned();
-    let code = location
-        .split("code=")
-        .nth(1)
-        .unwrap()
-        .split('&')
-        .next()
-        .unwrap()
-        .to_owned();
-
-    // Step 2: exchange code for token
-    let token_resp: Value = client
-        .post(format!("http://{addr}/oauth/token"))
+    let addr = start_test_server("tok", None, dir.path()).await;
+    let body: Value = Client::new()
+        .post(format!("http://{addr}/token"))
         .form(&[
-            ("grant_type", "authorization_code"),
-            ("code", &code),
-            ("redirect_uri", "http://localhost:9999/cb"),
-            ("code_verifier", verifier),
+            ("grant_type", "client_credentials"),
+            ("client_id", "any"),
+            ("client_secret", "my-secret"),
         ])
         .send()
         .await
@@ -458,49 +427,8 @@ async fn oauth_full_pkce_flow() {
         .json()
         .await
         .unwrap();
-
-    assert_eq!(token_resp["access_token"], "secret-token");
-    assert_eq!(token_resp["token_type"], "bearer");
-}
-
-#[tokio::test]
-async fn oauth_token_rejects_replayed_code() {
-    let dir = tempfile::tempdir().unwrap();
-    let addr = start_test_server("tok", None, dir.path()).await;
-    let client = Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-
-    let resp = client
-        .get(format!(
-            "http://{addr}/oauth/authorize?response_type=code&client_id=c&redirect_uri=http://localhost:9999/cb"
-        ))
-        .send()
-        .await
-        .unwrap();
-    let location = resp.headers().get("location").unwrap().to_str().unwrap().to_owned();
-    let code = location.split("code=").nth(1).unwrap().split('&').next().unwrap().to_owned();
-
-    let first: Value = client
-        .post(format!("http://{addr}/oauth/token"))
-        .form(&[("grant_type", "authorization_code"), ("code", &code)])
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(first["token_type"], "bearer");
-
-    // Second use of same code must fail
-    let second: Value = client
-        .post(format!("http://{addr}/oauth/token"))
-        .form(&[("grant_type", "authorization_code"), ("code", &code)])
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(second["error"], "invalid_grant");
+    assert_eq!(body["access_token"], "my-secret");
+    assert_eq!(body["token_type"], "Bearer");
 }
 
 // ── Autosync behaviour ────────────────────────────────────────────────────────
