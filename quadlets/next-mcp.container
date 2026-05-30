@@ -4,7 +4,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Container]
-Image=localhost/next-mcp:latest
+Image=forgejo.victorsavu.eu/victor/next-mcp:latest
 PublishPort=3000:3000
 
 # Persistent storage: tasks repo and machine-local state (active context etc.)
