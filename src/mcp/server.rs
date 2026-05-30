@@ -227,7 +227,7 @@ async fn oauth_metadata() -> impl IntoResponse {
         "token_endpoint": "https://next-mcp.victorsavu.eu/token",
         "registration_endpoint": "https://next-mcp.victorsavu.eu/register",
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code"],
+        "grant_types_supported": ["authorization_code", "client_credentials"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         "scopes_supported": ["mcp"],
@@ -255,7 +255,8 @@ async fn register_handler(ExtractJson(body): ExtractJson<Value>) -> impl IntoRes
 #[derive(Deserialize)]
 struct AuthorizeParams {
     redirect_uri: String,
-    code_challenge: String,
+    // PKCE is preferred but treated as optional so flows without it don't get a 422.
+    code_challenge: Option<String>,
     state: Option<String>,
 }
 
@@ -267,13 +268,20 @@ async fn authorize_handler(
 
     app.oauth_codes.lock().await.insert(
         code.clone(),
-        PendingAuth { code_challenge: params.code_challenge },
+        PendingAuth { code_challenge: params.code_challenge.unwrap_or_default() },
     );
 
+    // Percent-encode state so special characters don't corrupt the redirect URL.
     let mut url = format!("{}?code={}", params.redirect_uri, code);
     if let Some(s) = &params.state {
         url.push_str("&state=");
-        url.push_str(s);
+        for b in s.bytes() {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+                url.push(b as char);
+            } else {
+                url.push_str(&format!("%{b:02X}"));
+            }
+        }
     }
 
     Redirect::to(&url).into_response()
@@ -281,40 +289,82 @@ async fn authorize_handler(
 
 #[derive(Deserialize)]
 struct TokenRequest {
-    code: String,
-    code_verifier: String,
+    grant_type: Option<String>,
+    // authorization_code fields
+    code: Option<String>,
+    code_verifier: Option<String>,
+    // client_credentials fields
+    client_secret: Option<String>,
 }
 
 async fn token_handler(
     State(app): State<AppState>,
     Form(req): Form<TokenRequest>,
 ) -> Response {
-    let pending = app.oauth_codes.lock().await.remove(&req.code);
-    let pending = match pending {
-        Some(p) => p,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "invalid_grant"})),
-            )
-                .into_response();
+    let grant = req.grant_type.as_deref().unwrap_or("authorization_code");
+
+    match grant {
+        "client_credentials" => {
+            // Echo client_secret as the access token so the user can configure
+            // their NEXT_BEARER_TOKEN directly as the client secret in Claude's
+            // connector settings, bypassing the full PKCE flow.
+            let secret = match req.client_secret {
+                Some(s) => s,
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": "invalid_request", "error_description": "client_secret required"})),
+                    ).into_response();
+                }
+            };
+            Json(json!({
+                "access_token": secret,
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            }))
+            .into_response()
         }
-    };
+        _ => {
+            // authorization_code (default)
+            let code = match req.code {
+                Some(c) => c,
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": "invalid_request", "error_description": "code required"})),
+                    ).into_response();
+                }
+            };
 
-    if !verify_pkce_s256(&req.code_verifier, &pending.code_challenge) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "invalid_grant"})),
-        )
-            .into_response();
+            let pending = app.oauth_codes.lock().await.remove(&code);
+            let pending = match pending {
+                Some(p) => p,
+                None => {
+                    return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_grant"}))).into_response();
+                }
+            };
+
+            // Only verify PKCE when the authorize request included a challenge.
+            if !pending.code_challenge.is_empty() {
+                let verifier = match req.code_verifier {
+                    Some(v) => v,
+                    None => {
+                        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_request", "error_description": "code_verifier required"}))).into_response();
+                    }
+                };
+                if !verify_pkce_s256(&verifier, &pending.code_challenge) {
+                    return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_grant"}))).into_response();
+                }
+            }
+
+            Json(json!({
+                "access_token": app.bearer_token,
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            }))
+            .into_response()
+        }
     }
-
-    Json(json!({
-        "access_token": app.bearer_token,
-        "token_type": "Bearer",
-        "expires_in": 3600,
-    }))
-    .into_response()
 }
 
 fn verify_pkce_s256(verifier: &str, challenge: &str) -> bool {
