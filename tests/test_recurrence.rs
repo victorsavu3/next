@@ -1,8 +1,9 @@
 mod common;
 
 use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
-use next::cli::commands::{add, done};
+use next::cli::commands::{add, cancel, done};
 use next::domain::task::Status;
+use next::store::Store as _;
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -295,6 +296,144 @@ fn recur_completion_no_snap_interval_days() {
 
     let date = new_task.due.or(new_task.start).expect("no date on new task");
     assert_eq!(date, today + Duration::days(30), "due should be today + 30");
+}
+
+/// Cancelling a recurring task must NOT spawn a next instance.
+#[test]
+fn recur_cancel_does_not_spawn() {
+    let mut env = common::setup();
+    let today = Local::now().date_naive();
+    add::run(
+        add::Args {
+            due: Some(today.to_string()),
+            recur_completion: Some(7),
+            slug: Some("cancel-me".into()),
+            ..add_args("Recurring to cancel")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    cancel::run(
+        cancel::Args { id: "cancel-me".into(), json: false },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let tasks = all_tasks(&env);
+    assert_eq!(tasks.len(), 1, "cancel must not spawn a new instance");
+    assert_eq!(tasks[0].status, Status::Cancelled);
+}
+
+/// Marking a non-recurring task done must not create any extra task.
+#[test]
+fn done_non_recurring_task_does_not_spawn() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            slug: Some("one-off".into()),
+            ..add_args("One-off task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    done::run(done_args("one-off"), &mut env.ctx).unwrap();
+
+    let tasks = all_tasks(&env);
+    assert_eq!(tasks.len(), 1, "no extra task should be created for non-recurring");
+    assert_eq!(tasks[0].status, Status::Done);
+}
+
+/// Spawned task must have slug = None (slugs are per-instance).
+#[test]
+fn recur_spawned_task_has_no_slug() {
+    let mut env = common::setup();
+    let today = Local::now().date_naive();
+    add::run(
+        add::Args {
+            due: Some(today.to_string()),
+            recur_completion: Some(7),
+            slug: Some("my-slug".into()),
+            ..add_args("Slugged recurring")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    done::run(done_args("my-slug"), &mut env.ctx).unwrap();
+
+    let tasks = all_tasks(&env);
+    let new_task = tasks
+        .iter()
+        .find(|t| t.status == Status::Open)
+        .expect("no open task");
+    assert!(new_task.slug.is_none(), "spawned task must not carry the parent's slug");
+}
+
+/// Completing the spawned task produces a 3rd instance (chain of spawns).
+#[test]
+fn recur_chain_of_three_spawns() {
+    let mut env = common::setup();
+    let today = Local::now().date_naive();
+    add::run(
+        add::Args {
+            due: Some(today.to_string()),
+            recur_completion: Some(7),
+            ..add_args("Chain task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    // First done → spawns instance 2
+    let id1 = all_tasks(&env)[0].id.to_string();
+    done::run(done_args(&id1), &mut env.ctx).unwrap();
+    assert_eq!(all_tasks(&env).len(), 2);
+
+    // Second done → spawns instance 3
+    let id2 = all_tasks(&env)
+        .iter()
+        .find(|t| t.status == Status::Open)
+        .expect("no open task after first spawn")
+        .id
+        .to_string();
+    done::run(done_args(&id2), &mut env.ctx).unwrap();
+
+    let tasks = all_tasks(&env);
+    assert_eq!(tasks.len(), 3, "chain should produce 3 total instances");
+    let open: Vec<_> = tasks.iter().filter(|t| t.status == Status::Open).collect();
+    assert_eq!(open.len(), 1, "exactly one open task in chain");
+}
+
+/// Old TOML files using the `rule` field name (pre-rename alias) load correctly.
+///
+/// The actual deserialization alias is verified by the storage unit test
+/// `schedule_recurrence_rule_alias_deserializes`. Here we verify that a task
+/// created with `add` and reloaded from a fresh store preserves its recurrence rule.
+#[test]
+fn backward_compat_rule_alias_loads() {
+    let mut env = common::setup();
+    // Add a task with a schedule recurrence.
+    add::run(
+        add::Args {
+            due: Some("2026-06-01".into()),
+            recur_schedule: Some("FREQ=MONTHLY;BYMONTHDAY=1".into()),
+            slug: Some("legacy".into()),
+            ..add_args("Legacy recurring task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    // Reload from a fresh store (exercises round-trip through TOML serialization).
+    let (fresh_store, _) = next::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let task = fresh_store
+        .get_task_by_slug("legacy")
+        .unwrap()
+        .expect("task should be found");
+    assert_eq!(task.title, "Legacy recurring task");
+    assert!(task.recurrence.is_some(), "recurrence should survive store reload");
 }
 
 /// 9. Any spawned schedule-based task has start or due strictly after today.

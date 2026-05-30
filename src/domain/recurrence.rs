@@ -61,7 +61,9 @@ pub fn apply_snap(mut date: NaiveDate, snap: &Snap) -> NaiveDate {
                 (date.year(), date.month() + 1)
             };
             NaiveDate::from_ymd_opt(y, m, d).unwrap_or_else(|| {
-                NaiveDate::from_ymd_opt(y, m + 1, 1).unwrap() - Duration::days(1)
+                // day doesn't exist in month m — clamp to the last day of that month
+                let (overflow_y, overflow_m) = if m == 12 { (y + 1, 1u32) } else { (y, m + 1) };
+                NaiveDate::from_ymd_opt(overflow_y, overflow_m, 1).unwrap() - Duration::days(1)
             })
         }
     }
@@ -512,5 +514,103 @@ mod tests {
     fn spawn_next_no_spawn_without_recurrence() {
         let task = Task::new("One-off task");
         assert!(spawn_next(&task, d(2026, 5, 10)).is_none());
+    }
+
+    // ── apply_snap DayOfMonth edge cases ────────────────────────────────────
+
+    #[test]
+    fn snap_day_of_month_november_date_to_december_no_panic() {
+        // date=Nov 15, dom:1 → Dec 1 (m+1 = 12, must not panic)
+        let date = d(2026, 11, 15);
+        let result = apply_snap(date, &Snap::DayOfMonth { day: 1 });
+        assert_eq!(result, d(2026, 12, 1));
+    }
+
+    #[test]
+    fn snap_day_of_month_november_end_to_december_no_panic() {
+        // date=Nov 30, dom:28 → Dec 28 (next month is December)
+        let date = d(2026, 11, 30);
+        let result = apply_snap(date, &Snap::DayOfMonth { day: 28 });
+        assert_eq!(result, d(2026, 12, 28));
+    }
+
+    #[test]
+    fn snap_day_of_month_december_wraps_to_january() {
+        // date=Dec 15, dom:1 → Jan 1 of next year (December branch)
+        let date = d(2026, 12, 15);
+        let result = apply_snap(date, &Snap::DayOfMonth { day: 1 });
+        assert_eq!(result, d(2027, 1, 1));
+    }
+
+    #[test]
+    fn snap_day_of_month_december_31_wraps_to_january() {
+        // date=Dec 31, dom:1 → Jan 1 next year
+        let date = d(2026, 12, 31);
+        let result = apply_snap(date, &Snap::DayOfMonth { day: 1 });
+        assert_eq!(result, d(2027, 1, 1));
+    }
+
+    // ── spawn_next with different date configurations ────────────────────────
+
+    #[test]
+    fn spawn_next_only_start_sets_start_on_new() {
+        // task with only start, no due → spawned task also gets only start
+        let mut task = Task::new("Morning run");
+        task.start = Some(d(2026, 5, 1));
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 7,
+            snap: None,
+        });
+        let today = d(2026, 5, 10);
+        let next = spawn_next(&task, today).unwrap();
+        assert!(next.start.is_some(), "spawned task should have a start date");
+        assert!(next.due.is_none(), "spawned task should not have a due date");
+        assert_eq!(next.start, Some(today + Duration::days(7)));
+    }
+
+    #[test]
+    fn spawn_next_only_due_sets_due_on_new() {
+        // task with only due, no start → spawned task also gets only due
+        let mut task = Task::new("Pay bills");
+        task.due = Some(d(2026, 5, 1));
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 30,
+            snap: None,
+        });
+        let today = d(2026, 5, 10);
+        let next = spawn_next(&task, today).unwrap();
+        assert!(next.due.is_some(), "spawned task should have a due date");
+        assert!(next.start.is_none(), "spawned task should not have a start date");
+        assert_eq!(next.due, Some(today + Duration::days(30)));
+    }
+
+    #[test]
+    fn spawn_next_no_dates_gets_start() {
+        // task with no start and no due → spawned task gets a start date
+        let mut task = Task::new("Daily standup");
+        task.recurrence = Some(Recurrence::Schedule {
+            rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR".into(),
+            anchor: d(2026, 5, 4), // Monday
+            snap: None,
+        });
+        let today = d(2026, 5, 8); // Friday
+        let next = spawn_next(&task, today).unwrap();
+        assert!(next.start.is_some(), "spawned task should have a start date");
+        assert!(next.due.is_none(), "spawned task should not have a due date");
+        assert!(!matches!(next.start.unwrap().weekday(), Weekday::Sat | Weekday::Sun));
+    }
+
+    #[test]
+    fn spawn_next_does_not_copy_slug() {
+        // slug must be None on spawned tasks (per-instance, not series-wide)
+        let mut task = Task::new("Weekly review");
+        task.slug = Some("weekly-review".into());
+        task.due = Some(d(2026, 5, 1));
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 7,
+            snap: None,
+        });
+        let next = spawn_next(&task, d(2026, 5, 5)).unwrap();
+        assert!(next.slug.is_none(), "spawned task must not copy the slug");
     }
 }

@@ -808,4 +808,27 @@ mod tests {
             Some(Recurrence::Schedule { ref rrule, .. }) if rrule == "FREQ=WEEKLY;BYDAY=MO"
         ));
     }
+
+    #[test]
+    fn schedule_recurrence_rule_alias_deserializes() {
+        // Old TOML files used `rule` instead of `rrule`. The alias must allow loading them.
+        let toml = r#"
+id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+title = "Legacy"
+status = "open"
+priority = "medium"
+created_at = "2026-01-01T00:00:00Z"
+updated_at = "2026-01-01T00:00:00Z"
+
+[recurrence]
+type = "schedule"
+rule = "FREQ=MONTHLY;BYMONTHDAY=1"
+anchor = "2026-06-01"
+"#;
+        let task: Task = toml::from_str(toml).expect("should parse with `rule` alias");
+        assert!(matches!(
+            task.recurrence,
+            Some(Recurrence::Schedule { ref rrule, .. }) if rrule == "FREQ=MONTHLY;BYMONTHDAY=1"
+        ));
+    }
 }
