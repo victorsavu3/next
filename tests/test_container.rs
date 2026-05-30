@@ -200,6 +200,61 @@ async fn container_auth_enforced() {
 }
 
 #[tokio::test]
+async fn container_auth_token_variants() {
+    if !container_tests_enabled() { return; }
+
+    const TOKEN: &str = "secure-bearer-token-abc123";
+
+    let bare = create_bare_repo();
+
+    let container = GenericImage::new("localhost/next-mcp", "latest")
+        .with_wait_for(WaitFor::message_on_stderr("next-mcp listening"))
+        .with_exposed_port(ContainerPort::Tcp(3000))
+        .with_env_var("NEXT_BEARER_TOKEN", TOKEN)
+        .with_env_var("NEXT_GIT_URL", format!("file://{CONTAINER_BARE_REPO}"))
+        .with_env_var("NEXT_SYNC_INTERVAL", "0")
+        .with_mount(Mount::bind_mount(bare.path().to_str().unwrap(), CONTAINER_BARE_REPO))
+        .start()
+        .await
+        .unwrap();
+
+    let port = container.get_host_port_ipv4(3000).await.unwrap();
+    let client = Client::new();
+
+    let req_body = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} });
+
+    let cases: &[(&str, &str)] = &[
+        ("empty token",     ""),
+        ("different token", "completely-different-token"),
+        ("truncated token", &TOKEN[..TOKEN.len() / 2]),          // first half only
+        ("extended token",  &format!("{TOKEN}extra")),           // correct + suffix
+    ];
+
+    for (label, bad_token) in cases {
+        let status = client
+            .post(format!("http://127.0.0.1:{port}/"))
+            .bearer_auth(bad_token)
+            .json(&req_body)
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "expected 401 for {label} (token={bad_token:?})"
+        );
+    }
+
+    // Confirm the correct token still works after all the failed attempts.
+    let resp = mcp_call(&client, port, TOKEN, "initialize", json!({})).await;
+    assert_eq!(
+        resp["result"]["protocolVersion"], "2024-11-05",
+        "correct token must still be accepted after failed attempts"
+    );
+}
+
+#[tokio::test]
 async fn container_add_task_persists_to_volume() {
     if !container_tests_enabled() { return; }
 
