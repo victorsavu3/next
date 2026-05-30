@@ -43,7 +43,11 @@ ENV XDG_STATE_HOME=/data/state
 
 USER next
 EXPOSE 3000
-VOLUME /data/tasks
-VOLUME /data/state
+
+# Persistent data lives under /data — operators must mount storage here.
+# Do NOT declare VOLUME instructions: they cause Podman/Docker to create
+# anonymous volumes for subdirectories when a parent path is mounted, which
+# silently shadows the operator's mount and loses data on container restart.
+# See quadlets/next-mcp.container for the recommended volume configuration.
 
 CMD ["next-mcp"]

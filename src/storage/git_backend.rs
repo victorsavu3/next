@@ -61,8 +61,13 @@ impl GitBackend {
     }
 }
 
-/// Builds a `RemoteCallbacks` that handles SSH (via agent) and HTTP/HTTPS
-/// (via the system git credential helper) based on what the server requests.
+/// Builds a `RemoteCallbacks` that handles SSH (via agent) and HTTP/HTTPS.
+///
+/// For HTTP/HTTPS, credentials are resolved in this order:
+/// 1. `NEXT_GIT_USER` + `NEXT_GIT_TOKEN` environment variables (used by
+///    `next-mcp` in containerised deployments where no credential helper is
+///    configured).
+/// 2. The system git credential helper as a fallback.
 ///
 /// The `tried` flag prevents the callback from looping when credentials are
 /// rejected — git2 re-invokes the callback on failure, so we return an error
@@ -80,6 +85,13 @@ fn remote_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
             return git2::Cred::ssh_key_from_agent(username.unwrap_or("git"));
         }
         if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
+            // Prefer explicit env-var credentials (no credential helper needed).
+            let env_user  = std::env::var("NEXT_GIT_USER").ok();
+            let env_token = std::env::var("NEXT_GIT_TOKEN").ok();
+            if let (Some(u), Some(t)) = (env_user.as_deref(), env_token.as_deref()) {
+                return git2::Cred::userpass_plaintext(u, t);
+            }
+            // Fall back to the system git credential helper.
             let config = git2::Config::open_default()
                 .map_err(|e| git2::Error::from_str(&e.to_string()))?;
             return git2::Cred::credential_helper(&config, url, username);

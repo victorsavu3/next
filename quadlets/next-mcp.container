@@ -7,9 +7,13 @@ Wants=network-online.target
 Image=forgejo.victorsavu.eu/victor/next-mcp:latest
 PublishPort=3000:3000
 
-# Persistent storage: tasks repo and machine-local state (active context etc.)
+# Persistent storage.
+# Option A — two named volumes (recommended, each independently backed up):
 Volume=next-tasks:/data/tasks:Z
 Volume=next-state:/data/state:Z
+# Option B — single host directory covering the whole /data tree:
+#   Volume=/var/next-mcp/data/:/data/:Z
+#   (creates tasks/ and state/ subdirectories automatically on first start)
 
 # Secrets and config — keep this file at ~/.config/next-mcp/env (chmod 600)
 EnvironmentFile=%h/.config/next-mcp/env
