@@ -1,28 +1,21 @@
 use axum::{
     body::Body,
     extract::State,
-    http::{HeaderValue, Request, StatusCode},
+    http::{Request, StatusCode},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
 };
 
 use super::server::AppState;
 
-const RESOURCE_METADATA_URL: &str =
-    "https://next-mcp.victorsavu.eu/.well-known/oauth-protected-resource";
-
 /// Middleware that requires a valid `Authorization: Bearer <token>` header.
-/// Returns 401 with a `WWW-Authenticate` header pointing to the protected-resource
-/// metadata document so OAuth clients can discover the authorization server.
 pub async fn require_mcp_bearer(
     State(state): State<AppState>,
     req: Request<Body>,
     next: Next,
-) -> Response {
-    if check_bearer(req.headers(), &state.bearer_token).is_err() {
-        return unauthorized_response();
-    }
-    next.run(req).await
+) -> Result<Response, StatusCode> {
+    check_bearer(req.headers(), &state.bearer_token)?;
+    Ok(next.run(req).await)
 }
 
 /// Middleware that requires the webhook-specific bearer token.
@@ -34,16 +27,6 @@ pub async fn require_webhook_bearer(
     let token = state.webhook_token.as_deref().ok_or(StatusCode::NOT_FOUND)?;
     check_bearer(req.headers(), token)?;
     Ok(next.run(req).await)
-}
-
-fn unauthorized_response() -> Response {
-    let www_auth = format!(r#"Bearer resource_metadata="{RESOURCE_METADATA_URL}""#);
-    let mut resp = StatusCode::UNAUTHORIZED.into_response();
-    resp.headers_mut().insert(
-        axum::http::header::WWW_AUTHENTICATE,
-        HeaderValue::from_str(&www_auth).unwrap(),
-    );
-    resp
 }
 
 fn check_bearer(headers: &axum::http::HeaderMap, expected: &str) -> Result<(), StatusCode> {

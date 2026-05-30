@@ -41,7 +41,12 @@ async fn main() -> anyhow::Result<()> {
         spawn_periodic_sync(ctx.clone(), interval, &scheduler);
     }
 
-    let state = AppState::new(ctx, config.bearer_token, config.webhook_token, scheduler);
+    let state = AppState {
+        ctx,
+        bearer_token: config.bearer_token,
+        webhook_token: config.webhook_token,
+        scheduler,
+    };
 
     let router = build_router(state);
 

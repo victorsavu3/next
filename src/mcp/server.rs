@@ -1,16 +1,13 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
-    extract::{DefaultBodyLimit, Form, Json as ExtractJson, Query, State},
-    http::{HeaderName, Method, StatusCode},
+    extract::{DefaultBodyLimit, State},
+    http::StatusCode,
     middleware,
-    response::{IntoResponse, Json, Redirect, Response},
-    routing::{get, post},
+    response::{IntoResponse, Json, Response},
+    routing::post,
     Router,
 };
-use tower_http::cors::{Any, CorsLayer};
-use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
@@ -25,34 +22,12 @@ use super::tools;
 
 // ── Shared state ──────────────────────────────────────────────────────────────
 
-struct PendingAuth {
-    code_challenge: String,
-}
-
 #[derive(Clone)]
 pub struct AppState {
     pub ctx: Arc<Mutex<AppContext>>,
     pub bearer_token: String,
     pub webhook_token: Option<String>,
     pub scheduler: SyncScheduler,
-    oauth_codes: Arc<Mutex<HashMap<String, PendingAuth>>>,
-}
-
-impl AppState {
-    pub fn new(
-        ctx: Arc<Mutex<AppContext>>,
-        bearer_token: String,
-        webhook_token: Option<String>,
-        scheduler: SyncScheduler,
-    ) -> Self {
-        Self {
-            ctx,
-            bearer_token,
-            webhook_token,
-            scheduler,
-            oauth_codes: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -68,34 +43,11 @@ pub fn build_router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), require_webhook_bearer))
         .with_state(state.clone());
 
-    // OAuth endpoints are public (no Bearer auth) — they ARE the auth flow.
-    let oauth_routes = Router::new()
-        .route("/.well-known/oauth-protected-resource", get(protected_resource_metadata))
-        .route("/.well-known/oauth-authorization-server", get(oauth_metadata))
-        .route("/register", post(register_handler))
-        .route("/authorize", get(authorize_handler))
-        .route("/token", post(token_handler))
-        .with_state(state.clone());
-
-    // CORS is required because claude.ai is a browser-based SPA that makes
-    // cross-origin requests to the OAuth endpoints.  WWW-Authenticate must be
-    // in Expose-Headers so the browser forwards it to Claude's JS code.
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers(Any)
-        .expose_headers([
-            axum::http::header::WWW_AUTHENTICATE,
-            HeaderName::from_static("content-type"),
-        ]);
-
     Router::new()
         .merge(mcp_route)
         .merge(webhook_route)
-        .merge(oauth_routes)
         // Limit request bodies to 64 KB — more than enough for any valid MCP request.
         .layer(DefaultBodyLimit::max(65_536))
-        .layer(cors)
 }
 
 // ── MCP handler ───────────────────────────────────────────────────────────────
@@ -206,170 +158,4 @@ async fn webhook_handler(State(state): State<AppState>) -> Response {
         )
             .into_response(),
     }
-}
-
-// ── OAuth 2.0 handlers ────────────────────────────────────────────────────────
-
-// RFC 9728 — tells clients which authorization server protects this resource.
-async fn protected_resource_metadata() -> impl IntoResponse {
-    Json(json!({
-        "resource": "https://next-mcp.victorsavu.eu",
-        "authorization_servers": ["https://next-mcp.victorsavu.eu"],
-        "scopes_supported": ["mcp"],
-        "bearer_methods_supported": ["header"],
-    }))
-}
-
-async fn oauth_metadata() -> impl IntoResponse {
-    Json(json!({
-        "issuer": "https://next-mcp.victorsavu.eu",
-        "authorization_endpoint": "https://next-mcp.victorsavu.eu/authorize",
-        "token_endpoint": "https://next-mcp.victorsavu.eu/token",
-        "registration_endpoint": "https://next-mcp.victorsavu.eu/register",
-        "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code", "client_credentials"],
-        "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["none"],
-        "scopes_supported": ["mcp"],
-    }))
-}
-
-// Dynamic client registration (RFC 7591) — accepts any client, issues a UUID client_id.
-// We don't validate client_id on subsequent requests so no state needs to be kept.
-async fn register_handler(ExtractJson(body): ExtractJson<Value>) -> impl IntoResponse {
-    let redirect_uris = body.get("redirect_uris").cloned().unwrap_or(json!([]));
-    (
-        StatusCode::CREATED,
-        Json(json!({
-            "client_id": uuid::Uuid::new_v4().to_string(),
-            "client_id_issued_at": chrono::Utc::now().timestamp(),
-            "client_secret_expires_at": 0,
-            "redirect_uris": redirect_uris,
-            "grant_types": ["authorization_code"],
-            "response_types": ["code"],
-            "token_endpoint_auth_method": "none",
-        })),
-    )
-}
-
-#[derive(Deserialize)]
-struct AuthorizeParams {
-    redirect_uri: String,
-    // PKCE is preferred but treated as optional so flows without it don't get a 422.
-    code_challenge: Option<String>,
-    state: Option<String>,
-}
-
-async fn authorize_handler(
-    State(app): State<AppState>,
-    Query(params): Query<AuthorizeParams>,
-) -> Response {
-    let code = uuid::Uuid::new_v4().to_string().replace('-', "");
-
-    app.oauth_codes.lock().await.insert(
-        code.clone(),
-        PendingAuth { code_challenge: params.code_challenge.unwrap_or_default() },
-    );
-
-    // Percent-encode state so special characters don't corrupt the redirect URL.
-    let mut url = format!("{}?code={}", params.redirect_uri, code);
-    if let Some(s) = &params.state {
-        url.push_str("&state=");
-        for b in s.bytes() {
-            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
-                url.push(b as char);
-            } else {
-                url.push_str(&format!("%{b:02X}"));
-            }
-        }
-    }
-
-    Redirect::to(&url).into_response()
-}
-
-#[derive(Deserialize)]
-struct TokenRequest {
-    grant_type: Option<String>,
-    // authorization_code fields
-    code: Option<String>,
-    code_verifier: Option<String>,
-    // client_credentials fields
-    client_secret: Option<String>,
-}
-
-async fn token_handler(
-    State(app): State<AppState>,
-    Form(req): Form<TokenRequest>,
-) -> Response {
-    let grant = req.grant_type.as_deref().unwrap_or("authorization_code");
-
-    match grant {
-        "client_credentials" => {
-            // Echo client_secret as the access token so the user can configure
-            // their NEXT_BEARER_TOKEN directly as the client secret in Claude's
-            // connector settings, bypassing the full PKCE flow.
-            let secret = match req.client_secret {
-                Some(s) => s,
-                None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(json!({"error": "invalid_request", "error_description": "client_secret required"})),
-                    ).into_response();
-                }
-            };
-            Json(json!({
-                "access_token": secret,
-                "token_type": "Bearer",
-                "expires_in": 3600,
-            }))
-            .into_response()
-        }
-        _ => {
-            // authorization_code (default)
-            let code = match req.code {
-                Some(c) => c,
-                None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(json!({"error": "invalid_request", "error_description": "code required"})),
-                    ).into_response();
-                }
-            };
-
-            let pending = app.oauth_codes.lock().await.remove(&code);
-            let pending = match pending {
-                Some(p) => p,
-                None => {
-                    return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_grant"}))).into_response();
-                }
-            };
-
-            // Only verify PKCE when the authorize request included a challenge.
-            if !pending.code_challenge.is_empty() {
-                let verifier = match req.code_verifier {
-                    Some(v) => v,
-                    None => {
-                        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_request", "error_description": "code_verifier required"}))).into_response();
-                    }
-                };
-                if !verify_pkce_s256(&verifier, &pending.code_challenge) {
-                    return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_grant"}))).into_response();
-                }
-            }
-
-            Json(json!({
-                "access_token": app.bearer_token,
-                "token_type": "Bearer",
-                "expires_in": 3600,
-            }))
-            .into_response()
-        }
-    }
-}
-
-fn verify_pkce_s256(verifier: &str, challenge: &str) -> bool {
-    use base64::Engine as _;
-    use sha2::Digest as _;
-    let hash = sha2::Sha256::digest(verifier.as_bytes());
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash) == challenge
 }
