@@ -395,7 +395,7 @@ async fn webhook_route_absent_without_token() {
 // ── OAuth tests ───────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn oauth_metadata_returns_token_endpoint() {
+async fn oauth_metadata_advertises_authorization_code() {
     let dir = tempfile::tempdir().unwrap();
     let addr = start_test_server("tok", None, dir.path()).await;
     let body: Value = Client::new()
@@ -406,20 +406,46 @@ async fn oauth_metadata_returns_token_endpoint() {
         .json()
         .await
         .unwrap();
-    assert_eq!(body["grant_types_supported"][0], "client_credentials");
+    assert_eq!(body["grant_types_supported"][0], "authorization_code");
+    assert!(body["authorization_endpoint"].as_str().unwrap().contains("/authorize"));
     assert!(body["token_endpoint"].as_str().unwrap().contains("/token"));
 }
 
 #[tokio::test]
-async fn token_endpoint_echoes_client_secret() {
+async fn oauth_full_pkce_flow_returns_bearer_token() {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
     let dir = tempfile::tempdir().unwrap();
-    let addr = start_test_server("tok", None, dir.path()).await;
-    let body: Value = Client::new()
+    let addr = start_test_server("the-bearer-token", None, dir.path()).await;
+    let client = Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(sha2::Sha256::digest(verifier.as_bytes()));
+
+    // Step 1: /authorize — redirects with code
+    let resp = client
+        .get(format!(
+            "http://{addr}/authorize?response_type=code&client_id=claude-ai\
+             &redirect_uri=https://example.com/cb\
+             &code_challenge={challenge}&code_challenge_method=S256\
+             &state=xyz"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let location = resp.headers().get("location").unwrap().to_str().unwrap();
+    let code = location.split("code=").nth(1).unwrap().split('&').next().unwrap();
+
+    // Step 2: /token — exchanges code + verifier for the configured bearer token
+    let body: Value = client
         .post(format!("http://{addr}/token"))
         .form(&[
-            ("grant_type", "client_credentials"),
-            ("client_id", "any"),
-            ("client_secret", "my-secret"),
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("code_verifier", verifier),
         ])
         .send()
         .await
@@ -427,8 +453,82 @@ async fn token_endpoint_echoes_client_secret() {
         .json()
         .await
         .unwrap();
-    assert_eq!(body["access_token"], "my-secret");
+    assert_eq!(body["access_token"], "the-bearer-token");
     assert_eq!(body["token_type"], "Bearer");
+}
+
+#[tokio::test]
+async fn oauth_token_rejects_wrong_verifier() {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let addr = start_test_server("tok", None, dir.path()).await;
+    let client = Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(sha2::Sha256::digest(b"correct-verifier"));
+
+    let resp = client
+        .get(format!(
+            "http://{addr}/authorize?response_type=code&client_id=x\
+             &redirect_uri=https://example.com/cb\
+             &code_challenge={challenge}&code_challenge_method=S256"
+        ))
+        .send()
+        .await
+        .unwrap();
+    let location = resp.headers().get("location").unwrap().to_str().unwrap();
+    let code = location.split("code=").nth(1).unwrap().split('&').next().unwrap();
+
+    let body: Value = client
+        .post(format!("http://{addr}/token"))
+        .form(&[("grant_type", "authorization_code"), ("code", code), ("code_verifier", "wrong")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn oauth_token_rejects_replayed_code() {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let addr = start_test_server("tok", None, dir.path()).await;
+    let client = Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+
+    let verifier = "replay-test-verifier-string-long-enough";
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(sha2::Sha256::digest(verifier.as_bytes()));
+
+    let resp = client
+        .get(format!(
+            "http://{addr}/authorize?response_type=code&client_id=x\
+             &redirect_uri=https://example.com/cb\
+             &code_challenge={challenge}&code_challenge_method=S256"
+        ))
+        .send()
+        .await
+        .unwrap();
+    let location = resp.headers().get("location").unwrap().to_str().unwrap().to_owned();
+    let code = location.split("code=").nth(1).unwrap().split('&').next().unwrap().to_owned();
+
+    let first: Value = client
+        .post(format!("http://{addr}/token"))
+        .form(&[("grant_type", "authorization_code"), ("code", &code), ("code_verifier", verifier)])
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(first["token_type"], "Bearer");
+
+    let second: Value = client
+        .post(format!("http://{addr}/token"))
+        .form(&[("grant_type", "authorization_code"), ("code", &code), ("code_verifier", verifier)])
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(second["error"], "invalid_grant");
 }
 
 // ── Autosync behaviour ────────────────────────────────────────────────────────

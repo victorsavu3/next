@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
-    extract::{DefaultBodyLimit, Form, State},
+    extract::{DefaultBodyLimit, Form, Query, State},
     http::StatusCode,
     middleware,
-    response::{IntoResponse, Json, Response},
+    response::{IntoResponse, Json, Redirect, Response},
     routing::{get, post},
     Router,
 };
@@ -23,12 +24,17 @@ use super::tools;
 
 // ── Shared state ──────────────────────────────────────────────────────────────
 
+struct PendingAuth {
+    code_challenge: String,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub ctx: Arc<Mutex<AppContext>>,
     pub bearer_token: String,
     pub webhook_token: Option<String>,
     pub scheduler: SyncScheduler,
+    oauth_codes: Arc<Mutex<HashMap<String, PendingAuth>>>,
 }
 
 impl AppState {
@@ -38,7 +44,13 @@ impl AppState {
         webhook_token: Option<String>,
         scheduler: SyncScheduler,
     ) -> Self {
-        Self { ctx, bearer_token, webhook_token, scheduler }
+        Self {
+            ctx,
+            bearer_token,
+            webhook_token,
+            scheduler,
+            oauth_codes: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 }
 
@@ -58,6 +70,7 @@ pub fn build_router(state: AppState) -> Router {
     // OAuth endpoints are public (no Bearer auth) — they ARE the auth flow.
     let oauth_routes = Router::new()
         .route("/.well-known/oauth-authorization-server", get(oauth_metadata))
+        .route("/authorize", get(authorize_handler))
         .route("/token", post(token_handler))
         .with_state(state.clone());
 
@@ -184,20 +197,83 @@ async fn webhook_handler(State(state): State<AppState>) -> Response {
 async fn oauth_metadata() -> impl IntoResponse {
     Json(json!({
         "issuer": "https://next-mcp.victorsavu.eu",
+        "authorization_endpoint": "https://next-mcp.victorsavu.eu/authorize",
         "token_endpoint": "https://next-mcp.victorsavu.eu/token",
-        "grant_types_supported": ["client_credentials"],
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none"],
     }))
 }
 
 #[derive(Deserialize)]
-struct TokenRequest {
-    client_secret: String,
+struct AuthorizeParams {
+    redirect_uri: String,
+    code_challenge: String,
+    state: Option<String>,
 }
 
-async fn token_handler(Form(req): Form<TokenRequest>) -> impl IntoResponse {
+async fn authorize_handler(
+    State(app): State<AppState>,
+    Query(params): Query<AuthorizeParams>,
+) -> Response {
+    let code = uuid::Uuid::new_v4().to_string().replace('-', "");
+
+    app.oauth_codes.lock().await.insert(
+        code.clone(),
+        PendingAuth { code_challenge: params.code_challenge },
+    );
+
+    let mut url = format!("{}?code={}", params.redirect_uri, code);
+    if let Some(s) = &params.state {
+        url.push_str("&state=");
+        url.push_str(s);
+    }
+
+    Redirect::to(&url).into_response()
+}
+
+#[derive(Deserialize)]
+struct TokenRequest {
+    code: String,
+    code_verifier: String,
+}
+
+async fn token_handler(
+    State(app): State<AppState>,
+    Form(req): Form<TokenRequest>,
+) -> Response {
+    let pending = app.oauth_codes.lock().await.remove(&req.code);
+    let pending = match pending {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid_grant"})),
+            )
+                .into_response();
+        }
+    };
+
+    if !verify_pkce_s256(&req.code_verifier, &pending.code_challenge) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid_grant"})),
+        )
+            .into_response();
+    }
+
     Json(json!({
-        "access_token": req.client_secret,
+        "access_token": app.bearer_token,
         "token_type": "Bearer",
         "expires_in": 3600,
     }))
+    .into_response()
+}
+
+fn verify_pkce_s256(verifier: &str, challenge: &str) -> bool {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let hash = sha2::Sha256::digest(verifier.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash) == challenge
 }
