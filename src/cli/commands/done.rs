@@ -1,4 +1,4 @@
-use crate::{resolve::resolve_task_id, AppContext};
+use crate::{domain::recurrence::spawn_next, resolve::resolve_task_id, AppContext};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -17,8 +17,17 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     ctx.store.save_task(&task)?;
 
     let task_path = crate::storage::task_path(&ctx.repo_root, &task);
+    let mut paths = vec![task_path];
+
+    let today = chrono::Local::now().date_naive();
+    if let Some(next) = spawn_next(&task, today) {
+        let next_path = crate::storage::task_path(&ctx.repo_root, &next);
+        ctx.store.save_task(&next)?;
+        paths.push(next_path);
+    }
+
     ctx.vcs
-        .commit(&[task_path], &format!("next: done {}", task.title))?;
+        .commit(&paths, &format!("next: done {}", task.title))?;
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);

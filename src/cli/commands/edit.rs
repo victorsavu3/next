@@ -2,6 +2,7 @@ use chrono::Local;
 use super::add::validate_url;
 use crate::domain::{
     date_parse::parse_date,
+    recurrence::parse_snap,
     tag,
     task::{Priority, Recurrence},
 };
@@ -84,6 +85,11 @@ pub struct Args {
     /// Completion-based recurrence interval in days.
     #[arg(long)]
     pub recur_completion: Option<u32>,
+
+    /// Calendar snap applied to the computed next occurrence date.
+    /// Values: next-workday, monday … sunday, dom:N (day-of-month).
+    #[arg(long)]
+    pub recur_snap: Option<String>,
 
     /// Suppress age-based scoring.
     #[arg(long)]
@@ -213,10 +219,19 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     }
 
     if let Some(rule) = args.recur_schedule {
-        task.recurrence = Some(Recurrence::Schedule { rule });
+        // Keep existing anchor if the task already has a Schedule rule; otherwise
+        // derive anchor from start/due or fall back to today.
+        let anchor = match &task.recurrence {
+            Some(Recurrence::Schedule { anchor, .. }) => *anchor,
+            _ => task.start.or(task.due).unwrap_or(today),
+        };
+        let snap = args.recur_snap.as_deref().map(parse_snap).transpose()?;
+        task.recurrence = Some(Recurrence::Schedule { rrule: rule, anchor, snap });
     } else if let Some(interval) = args.recur_completion {
+        let snap = args.recur_snap.as_deref().map(parse_snap).transpose()?;
         task.recurrence = Some(Recurrence::Completion {
             interval_days: interval,
+            snap,
         });
     }
 

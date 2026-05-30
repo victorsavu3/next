@@ -504,7 +504,7 @@ mod tests {
         task.notes = Some("Some notes".into());
         task.score_adjustment = 1.5;
         task.long_term = true;
-        task.recurrence = Some(Recurrence::Completion { interval_days: 7 });
+        task.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
 
         store.save_task(&task).unwrap();
         let loaded = store.get_task(task.id).unwrap();
@@ -519,7 +519,7 @@ mod tests {
         assert!(loaded.long_term);
         assert!(matches!(
             loaded.recurrence,
-            Some(Recurrence::Completion { interval_days: 7 })
+            Some(Recurrence::Completion { interval_days: 7, snap: None })
         ));
     }
 
@@ -793,16 +793,19 @@ mod tests {
 
     #[test]
     fn schedule_recurrence_round_trips() {
+        use chrono::NaiveDate;
         let (_dir, mut store) = temp_store();
         let mut task = Task::new("Weekly review");
         task.recurrence = Some(Recurrence::Schedule {
-            rule: "every Monday".into(),
+            rrule: "FREQ=WEEKLY;BYDAY=MO".into(),
+            anchor: NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            snap: None,
         });
         store.save_task(&task).unwrap();
         let loaded = store.get_task(task.id).unwrap();
         assert!(matches!(
             loaded.recurrence,
-            Some(Recurrence::Schedule { rule }) if rule == "every Monday"
+            Some(Recurrence::Schedule { ref rrule, .. }) if rrule == "FREQ=WEEKLY;BYDAY=MO"
         ));
     }
 }

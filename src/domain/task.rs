@@ -24,17 +24,42 @@ pub enum Priority {
     High,
 }
 
+/// Calendar snap applied after computing the raw next date.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Snap {
+    /// Advance to the next occurrence of this ISO weekday (0=Mon … 6=Sun).
+    /// If the raw date already falls on this weekday, keep it.
+    NextWeekday { weekday: u8 },
+    /// Advance to the next Mon–Fri. Keep the date if it already qualifies.
+    NextWorkday,
+    /// Use day `day` of the current month if it is still in the future;
+    /// otherwise use day `day` of the next month.
+    DayOfMonth { day: u8 },
+}
+
 /// Recurrence rule attached to a task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Recurrence {
-    /// Recurs on a fixed calendar schedule regardless of when it was last completed.
-    /// `rule` is a human-readable expression (e.g. `"every Monday"`, `"1st of every month"`)
-    /// that is translated to an RFC 5545 RRULE at runtime.
-    Schedule { rule: String },
+    /// Fixed calendar schedule. `rrule` is an RFC 5545 RRULE string (without prefix).
+    /// `anchor` pins the series to a specific start date for INTERVAL calculations.
+    Schedule {
+        /// Accept old field name "rule" from existing TOML files.
+        #[serde(alias = "rule")]
+        rrule: String,
+        /// Immutable series anchor; must equal the first instance's `start` or `due` date.
+        anchor: chrono::NaiveDate,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        snap: Option<Snap>,
+    },
 
-    /// Recurs a fixed number of days after the previous completion.
-    Completion { interval_days: u32 },
+    /// Next instance is `interval_days` after completion, then optionally snapped.
+    Completion {
+        interval_days: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        snap: Option<Snap>,
+    },
 }
 
 /// A single task — the central domain object.

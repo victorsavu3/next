@@ -124,7 +124,7 @@ fn init_then_add_task_works() {
             due: None, start: None, priority: None, slug: None,
             assignee: None, tags: vec![], parent: None, blocked_by: vec![],
             description: None, url: None, notes: None, recur_schedule: None,
-            recur_completion: None, long_term: false, adjust: None, json: false,
+            recur_completion: None, recur_snap: None, long_term: false, adjust: None, json: false,
         },
         &mut ctx,
     )

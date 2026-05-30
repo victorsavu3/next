@@ -83,10 +83,10 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     }
     if let Some(ref rec) = task.recurrence {
         match rec {
-            crate::domain::task::Recurrence::Schedule { rule } => {
-                println!("Recur:    schedule ({rule})");
+            crate::domain::task::Recurrence::Schedule { rrule, .. } => {
+                println!("Recur:    schedule ({rrule})");
             }
-            crate::domain::task::Recurrence::Completion { interval_days } => {
+            crate::domain::task::Recurrence::Completion { interval_days, .. } => {
                 println!("Recur:    {interval_days}d after completion");
             }
         }

@@ -19,6 +19,7 @@ fn add_args(title: &str) -> add::Args {
         notes: None,
         recur_schedule: None,
         recur_completion: None,
+        recur_snap: None,
         long_term: false,
         adjust: None,
         json: false,
