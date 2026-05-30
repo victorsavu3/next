@@ -213,6 +213,13 @@ next add "Weekly chore" --recur-completion 7 --recur-snap saturday
 
 When a task has both `start` and `due` dates the offset is preserved — a task starting the 1st and due the 3rd will always have that 2-day window.
 
+**Editing recurrence** — change or remove the rule after creation:
+
+```sh
+next edit standup --recur-snap monday    # change snap; rule and anchor unchanged
+next edit standup --clear-recurrence     # remove recurrence entirely
+```
+
 ---
 
 ## Forecast

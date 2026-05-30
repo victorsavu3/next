@@ -320,7 +320,10 @@ Same flags as `next add`, plus:
 | `--clear-assignee` | flag | false | Remove the assignee. |
 | `--clear-description` | flag | false | Remove the description. |
 | `--clear-url` | flag | false | Remove the URL. |
+| `--clear-recurrence` | flag | false | Remove the recurrence rule and `recurrence_id`. |
 | `--json` | flag | false | Emit the updated task as JSON. |
+
+`--recur-schedule`, `--recur-completion`, and `--recur-snap` work the same as in `next add`. When editing a schedule rule, the original `anchor` date is preserved so interval alignment stays correct. `--recur-snap` can also be used standalone to change the snap on an existing recurring task without re-specifying the full rule.
 
 Trailing `+tag` and `-tag` tokens may also be used to add or remove tags:
 
@@ -335,6 +338,8 @@ next edit a1b2 --due "next Friday"
 next edit a1b2 --priority high --tag @work
 next edit a1b2 --remove-tag @home --clear-due
 next edit a1b2 --url "https://example.com/ticket-42" --description "See comments in ticket"
+next edit standup --recur-snap monday        # change snap without re-specifying the rule
+next edit old-task --clear-recurrence        # remove the recurrence rule entirely
 ```
 
 ---
@@ -654,7 +659,7 @@ The next instance is determined by an RFC 5545 RRULE string. The `anchor` date (
 |-------|---------|-------|
 | `FREQ` | `FREQ=WEEKLY` | Required. `DAILY`, `WEEKLY`, `MONTHLY`, `YEARLY`. |
 | `INTERVAL` | `INTERVAL=3` | Every Nth period. Default 1. |
-| `BYDAY` | `BYDAY=MO,TU,WE,TH,FR` | Weekday list (`MO TU WE TH FR SA SU`). Used with `FREQ=WEEKLY`. |
+| `BYDAY` | `BYDAY=MO,TU,WE,TH,FR` | Comma-separated weekday codes (`MO TU WE TH FR SA SU`). When omitted in a weekly rule, defaults to the anchor's weekday. Positional prefixes like `1MO` (first Monday of month) are **not** supported and will be rejected. |
 | `BYMONTHDAY` | `BYMONTHDAY=1` | Day of month. Used with `FREQ=MONTHLY`. |
 
 **Common patterns**
@@ -663,7 +668,10 @@ The next instance is determined by an RFC 5545 RRULE string. The `anchor` date (
 # Every weekday (Mon–Fri)
 --recur-schedule "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
 
-# Every Monday
+# Every Monday (BYDAY omitted → defaults to anchor's weekday)
+--recur-schedule "FREQ=WEEKLY"
+
+# Every Monday (explicit)
 --recur-schedule "FREQ=WEEKLY;BYDAY=MO"
 
 # 1st of every month
@@ -677,6 +685,8 @@ The next instance is determined by an RFC 5545 RRULE string. The `anchor` date (
 ```
 
 When a task has both `start` and `due` dates, the start-to-due offset is preserved on every new instance. For example, a task with start=June 1, due=June 3 will next appear as start=July 1, due=July 3.
+
+If you complete a task late (past its due date), the next occurrence is computed from `today` rather than from the original due date, so the series never schedules a date that has already passed.
 
 ### Completion-based (`--recur-completion <days>`)
 
@@ -705,11 +715,23 @@ next add "Weekly chore" --recur-completion 7 --recur-snap saturday
 next add "Monthly report" --recur-schedule "FREQ=MONTHLY;BYMONTHDAY=1" --recur-snap next-workday
 ```
 
+### Managing recurrence with `next edit`
+
+Use `next edit` to change recurrence settings on an existing task:
+
+```sh
+next edit standup --recur-snap monday          # change snap without re-specifying the rule
+next edit standup --recur-schedule "FREQ=DAILY" # change the rule; anchor is preserved
+next edit standup --clear-recurrence           # remove the rule entirely
+```
+
+When you change a schedule rule the `anchor` date is **preserved**, keeping all interval calculations aligned.
+
 ### Series identity
 
-All instances of the same recurring task share a `recurrence_id` UUID. The first instance's `id` becomes the `recurrence_id` for all subsequent ones.
+All instances of the same recurring task share a `recurrence_id` UUID equal to the first instance's `id`. You can use this to query all instances of a series.
 
-Slugs are **not** propagated — each instance gets no slug unless you set one with `next edit`. This prevents slug-collision on recurring tasks.
+Slugs are **not** propagated — each instance gets no slug. This prevents slug collisions on high-frequency tasks. Arbitrary data set with `next data set` is copied to each new instance (the `time_log` entry is not, since it records per-instance work time).
 
 ---
 
