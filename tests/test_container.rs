@@ -223,6 +223,16 @@ async fn container_auth_token_variants() {
 
     let req_body = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} });
 
+    // No Authorization header at all — distinct from an empty token value.
+    let status = client
+        .post(format!("http://127.0.0.1:{port}/"))
+        .json(&req_body)
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "expected 401 for missing Authorization header");
+
     let cases: &[(&str, &str)] = &[
         ("empty token",     ""),
         ("different token", "completely-different-token"),
