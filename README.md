@@ -227,6 +227,94 @@ is the production-ready path.
 
 ---
 
+---
+
+## MCP server (`next-mcp`)
+
+`next-mcp` is an optional HTTP server that exposes the full task management API over the
+[Model Context Protocol](https://spec.modelcontextprotocol.io/) (MCP). It is designed to
+run as a Podman Quadlet container so that AI assistants (Claude, etc.) can manage tasks
+remotely.
+
+### Building
+
+```sh
+cargo build --release --features mcp --bin next-mcp
+
+# Or build the container image:
+podman build -f Containerfile -t localhost/next-mcp:latest .
+```
+
+### Running
+
+All configuration is passed via environment variables (no config file):
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `NEXT_BEARER_TOKEN` | ✓ | — | MCP client authentication token |
+| `NEXT_GIT_URL` | on first start | — | HTTPS URL to clone the tasks repository |
+| `NEXT_GIT_USER` | | — | Git username for HTTPS auth (or embed in URL) |
+| `NEXT_GIT_TOKEN` | | — | Git password/token for HTTPS auth |
+| `NEXT_REPO_PATH` | | `/data/tasks` | Local path for the tasks repository |
+| `NEXT_BIND_ADDR` | | `0.0.0.0:3000` | Listen address |
+| `NEXT_WEBHOOK_TOKEN` | | — | If set, enables `POST /webhook/sync` with this token |
+| `NEXT_SYNC_INTERVAL` | | `86400` | Periodic pull+push interval in seconds; `0` disables |
+| `NEXT_DEFERRED_SYNC_DELAY_SECS` | | `30` | Seconds before deferred sync fires after `autosync=false` |
+
+```sh
+NEXT_BEARER_TOKEN=secret \
+NEXT_GIT_URL=https://git.example.com/user/tasks.git \
+NEXT_GIT_TOKEN=my-pat \
+next-mcp
+```
+
+### Quadlet (Podman)
+
+Copy `quadlets/next-mcp.container` to `~/.config/containers/systemd/` and create
+`~/.config/next-mcp/env` (chmod 600):
+
+```
+NEXT_BEARER_TOKEN=…
+NEXT_WEBHOOK_TOKEN=…          # optional; enables POST /webhook/sync
+NEXT_GIT_URL=https://git.example.com/user/tasks.git
+NEXT_GIT_USER=user
+NEXT_GIT_TOKEN=…
+NEXT_SYNC_INTERVAL=86400
+```
+
+Then:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user start next-mcp
+```
+
+### MCP tools
+
+| Tool | Description |
+|------|-------------|
+| `list_tasks` | List scored tasks; accepts filter tokens |
+| `get_task` | Full details of one task + direct children |
+| `add_task` | Create a task |
+| `update_task` | Edit fields or transition state (start/stop/done/cancel/move) |
+| `delete_task` | Permanently remove a task |
+| `sync` | Pull then push; cancels any pending deferred sync |
+| `get_state` | Active contexts, users, resource availability |
+| `set_context` | Replace active context filter |
+| `set_resource` | Toggle resource availability |
+| `set_user_filter` | Replace active user filter |
+| `manage_tag` | Tag metadata CRUD (list/show/describe/set_priority/set_url/…) |
+| `manage_task_data` | Task data key-value pairs (get/list/set/unset) |
+| `get_forecast` | Upcoming due dates within a configurable horizon |
+
+All mutation tools accept an `autosync: bool` parameter (default `true`). With `autosync: false` the mutation returns immediately and a deferred sync fires after `NEXT_DEFERRED_SYNC_DELAY_SECS` seconds — useful for bulk edits where an explicit `sync` call at the end is preferred.
+
+### Webhook
+
+`POST /webhook/sync` triggers an immediate pull+push using `NEXT_WEBHOOK_TOKEN` for auth (separate from the MCP bearer token). Wire it to your git host's push webhook to keep the container up to date when others push.
+
+---
+
 ## See also
 
 - `REQUIREMENTS.md` — functional requirements

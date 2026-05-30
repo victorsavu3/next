@@ -80,6 +80,18 @@ fn create_bare_repo() -> tempfile::TempDir {
     bare
 }
 
+/// Returns the number of commits in a bare git repo on the host.
+fn bare_repo_commit_count(bare_path: &std::path::Path) -> usize {
+    let out = std::process::Command::new("git")
+        .args(["-C", bare_path.to_str().unwrap(), "log", "--oneline"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .count()
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async fn mcp_call(client: &Client, port: u16, token: &str, method: &str, params: Value) -> Value {
@@ -325,4 +337,95 @@ async fn container_webhook_sync() {
         .bearer_auth("mcp-tok")
         .send().await.unwrap().status();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn container_sync_pushes_to_remote() {
+    if !container_tests_enabled() { return; }
+
+    let bare = create_bare_repo();
+    let initial_commits = bare_repo_commit_count(bare.path());
+
+    let container = GenericImage::new("localhost/next-mcp", "latest")
+        .with_wait_for(WaitFor::message_on_stderr("next-mcp listening"))
+        .with_exposed_port(ContainerPort::Tcp(3000))
+        .with_env_var("NEXT_BEARER_TOKEN", "tok")
+        .with_env_var("NEXT_GIT_URL", format!("file://{CONTAINER_BARE_REPO}"))
+        .with_env_var("NEXT_SYNC_INTERVAL", "0")
+        .with_mount(Mount::bind_mount(bare.path().to_str().unwrap(), CONTAINER_BARE_REPO))
+        .start()
+        .await
+        .unwrap();
+
+    let port = container.get_host_port_ipv4(3000).await.unwrap();
+    let client = Client::new();
+
+    // Add a task without autosync so nothing is pushed yet.
+    let add = tool_call(&client, port, "tok", "add_task",
+        json!({ "title": "Sync test task", "autosync": false })).await;
+    assert!(!is_error(&add), "add_task failed: {add}");
+
+    // Bare repo should still have only the initial commits (no push yet).
+    assert_eq!(
+        bare_repo_commit_count(bare.path()),
+        initial_commits,
+        "bare repo should not have new commits before explicit sync"
+    );
+
+    // Call the sync tool.
+    let sync_resp = tool_call(&client, port, "tok", "sync", json!({})).await;
+    assert!(!is_error(&sync_resp), "sync failed: {sync_resp}");
+
+    // Bare repo should now have the new commit.
+    assert!(
+        bare_repo_commit_count(bare.path()) > initial_commits,
+        "bare repo should have new commits after sync"
+    );
+}
+
+#[tokio::test]
+async fn container_deferred_sync_fires_after_delay() {
+    if !container_tests_enabled() { return; }
+
+    let bare = create_bare_repo();
+    let initial_commits = bare_repo_commit_count(bare.path());
+
+    // Use a very short deferred delay so the test doesn't take 30 seconds.
+    let container = GenericImage::new("localhost/next-mcp", "latest")
+        .with_wait_for(WaitFor::message_on_stderr("next-mcp listening"))
+        .with_exposed_port(ContainerPort::Tcp(3000))
+        .with_env_var("NEXT_BEARER_TOKEN", "tok")
+        .with_env_var("NEXT_GIT_URL", format!("file://{CONTAINER_BARE_REPO}"))
+        .with_env_var("NEXT_SYNC_INTERVAL", "0")
+        .with_env_var("NEXT_DEFERRED_SYNC_DELAY_SECS", "3")
+        .with_mount(Mount::bind_mount(bare.path().to_str().unwrap(), CONTAINER_BARE_REPO))
+        .start()
+        .await
+        .unwrap();
+
+    let port = container.get_host_port_ipv4(3000).await.unwrap();
+    let client = Client::new();
+
+    // Add tasks with autosync=false — this schedules the deferred 3-second timer.
+    for i in 0..3 {
+        let add = tool_call(&client, port, "tok", "add_task",
+            json!({ "title": format!("Deferred task {i}"), "autosync": false })).await;
+        assert!(!is_error(&add), "add_task {i} failed: {add}");
+    }
+
+    // Nothing pushed yet.
+    assert_eq!(
+        bare_repo_commit_count(bare.path()),
+        initial_commits,
+        "bare repo should not have new commits immediately after mutations"
+    );
+
+    // Wait long enough for the deferred timer to fire (3s delay + buffer).
+    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+
+    // Deferred sync should have pushed the commits.
+    assert!(
+        bare_repo_commit_count(bare.path()) > initial_commits,
+        "bare repo should have new commits after deferred sync delay"
+    );
 }

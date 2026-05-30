@@ -48,7 +48,7 @@ async fn start_test_server(
         log,
     };
     let ctx = Arc::new(Mutex::new(ctx));
-    let scheduler = spawn_deferred_sync(ctx.clone());
+    let scheduler = spawn_deferred_sync(ctx.clone(), std::time::Duration::from_secs(30));
 
     let state = AppState {
         ctx,

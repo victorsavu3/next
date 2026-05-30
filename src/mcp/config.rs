@@ -19,6 +19,8 @@ pub struct McpConfig {
     pub git_token: Option<String>,
     /// How often to run a background pull+push (None = disabled).
     pub sync_interval: Option<Duration>,
+    /// How long to wait before firing the deferred sync after a mutation with autosync=false.
+    pub deferred_sync_delay: Duration,
 }
 
 impl McpConfig {
@@ -53,6 +55,16 @@ impl McpConfig {
             Err(_) => Some(Duration::from_secs(86400)), // 1 day default
         };
 
+        let deferred_sync_delay = match std::env::var("NEXT_DEFERRED_SYNC_DELAY_SECS") {
+            Ok(s) => {
+                let secs: u64 = s.parse().map_err(|_| {
+                    anyhow::anyhow!("NEXT_DEFERRED_SYNC_DELAY_SECS must be a positive integer")
+                })?;
+                Duration::from_secs(secs.max(1))
+            }
+            Err(_) => Duration::from_secs(30),
+        };
+
         Ok(Self {
             bearer_token,
             webhook_token,
@@ -62,6 +74,7 @@ impl McpConfig {
             git_user,
             git_token,
             sync_interval,
+            deferred_sync_delay,
         })
     }
 }

@@ -59,7 +59,7 @@ next/                             # crate root (also git repo)
       git_init.rs                 # clone_or_open(): HTTPS git clone on first start
       protocol.rs                 # JSON-RPC 2.0 + MCP types
       auth.rs                     # Bearer token middleware (MCP + webhook)
-      sync_manager.rs             # do_sync(), SyncScheduler (deferred 30s timer), periodic sync
+      sync_manager.rs             # do_sync(), SyncScheduler (configurable deferred timer, default 30s), periodic sync
       server.rs                   # axum router, MCP dispatch, webhook handler
       tools/
         mod.rs                    # all_tools() registry + dispatch()
@@ -104,6 +104,8 @@ next/                             # crate root (also git repo)
     test_add.rs   test_data.rs    test_done.rs   test_edit.rs
     test_init.rs  test_list.rs    test_open.rs   test_tag.rs   test_tree.rs
     cache_sync.rs locking.rs      migration.rs   sync.rs
+    test_mcp.rs                   # in-process MCP HTTP integration tests (requires --features mcp)
+    test_container.rs             # container integration tests (requires CONTAINER_TESTS=1)
 ```
 
 ---
@@ -602,7 +604,7 @@ propagates the `anyhow::Error` to produce a non-zero exit code.
 | CLI commands | `tests/test_*.rs` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |
 | MCP unit tests | `src/mcp/tools/*.rs` | Unit tests per tool module using real `AppContext` in a `tempdir` git repo (requires `--features mcp`) |
 | MCP integration tests | `tests/test_mcp.rs` | Start a real HTTP server on `127.0.0.1:0` in `#[tokio::test]`; test all 13 tools, auth, webhook, and autosync (requires `--features mcp`) |
-| Container tests | `tests/test_container.rs` | Start the real container image via `testcontainers`; opt-in with `CONTAINER_TESTS=1` (requires `--features mcp` and a pre-built image) |
+| Container tests | `tests/test_container.rs` | Start the real container image via `testcontainers` (Podman); opt-in with `CONTAINER_TESTS=1 DOCKER_HOST=unix:///…/podman.sock`; covers git clone, auth, sync push, deferred timer, webhook, and idempotent restart |
 
 ---
 

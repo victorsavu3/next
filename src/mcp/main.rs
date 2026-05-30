@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let ctx = Arc::new(Mutex::new(ctx));
 
     // Background deferred-sync task.
-    let scheduler = spawn_deferred_sync(ctx.clone());
+    let scheduler = spawn_deferred_sync(ctx.clone(), config.deferred_sync_delay);
 
     // Background periodic-sync task (if configured).
     if let Some(interval) = config.sync_interval {

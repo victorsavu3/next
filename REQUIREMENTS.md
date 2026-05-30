@@ -574,3 +574,79 @@ next export ical [filters...] [--output <file>]
   text when stdout is not a TTY (pipe-safe)
 - Date expressions in `--due` and `--start` MUST accept natural-language input
   ("tomorrow", "in two weeks", "next Monday", "2026-06-01") in addition to ISO 8601
+
+---
+
+## 12. MCP server (`next-mcp`)
+
+The MCP server is an optional Cargo feature (`--features mcp`) that produces a second
+binary. It implements the MCP Streamable HTTP transport (JSON-RPC 2.0 over HTTP POST).
+
+### 12.1 Feature flag
+
+- The `mcp` feature MUST be `off` by default
+- All MCP runtime dependencies MUST be declared `optional = true` and activated only by the feature
+- `cargo build` and `cargo test` without `--features mcp` MUST produce exactly the same
+  artefacts as before the feature was added
+
+### 12.2 Configuration
+
+All configuration MUST be read from environment variables (no config file):
+
+| Variable | Required | Default |
+|----------|----------|---------|
+| `NEXT_BEARER_TOKEN` | ✓ | — |
+| `NEXT_GIT_URL` | on first start | — |
+| `NEXT_GIT_USER` / `NEXT_GIT_TOKEN` | | — |
+| `NEXT_REPO_PATH` | | `/data/tasks` |
+| `NEXT_BIND_ADDR` | | `0.0.0.0:3000` |
+| `NEXT_WEBHOOK_TOKEN` | | — |
+| `NEXT_SYNC_INTERVAL` | | `86400` (s); `0` disables |
+| `NEXT_DEFERRED_SYNC_DELAY_SECS` | | `30` |
+
+Credentials MAY alternatively be embedded in `NEXT_GIT_URL` as `https://user:token@host/repo.git`.
+
+### 12.3 Git repository initialisation
+
+On startup, `next-mcp` MUST:
+1. If `NEXT_REPO_PATH/.git` exists: open the repository
+2. Otherwise: clone `NEXT_GIT_URL` into `NEXT_REPO_PATH` using HTTPS credentials
+3. Error and exit non-zero if neither condition is satisfied
+
+The clone operation MUST be idempotent — a second start against the same volume MUST NOT re-clone.
+
+After clone, `next-mcp` MUST set `user.name` and `user.email` in the local git config
+if they are not already provided by global or system config, so that commits succeed
+inside containers without a pre-configured git identity.
+
+### 12.4 Authentication
+
+- All routes MUST require `Authorization: Bearer <NEXT_BEARER_TOKEN>`; return `401` otherwise
+- The webhook route (`POST /webhook/sync`) MUST use a separate `NEXT_WEBHOOK_TOKEN`
+  so that the MCP bearer token cannot trigger syncs and vice versa
+- Bearer token comparison MUST be constant-time
+
+### 12.5 MCP tools (13 total)
+
+All existing CLI operations MUST be exposed as MCP tools. Mutation tools MUST accept an
+`autosync: bool` parameter (default `true`):
+- `autosync = true`: sync (pull + push) runs synchronously before the tool response is returned; sync errors are logged but do NOT fail the tool call
+- `autosync = false`: a deferred sync is scheduled to fire after `NEXT_DEFERRED_SYNC_DELAY_SECS`; calling this on successive mutations MUST reset (not stack) the timer
+
+Calling the `sync` tool explicitly MUST cancel any pending deferred timer and run sync immediately, surfacing errors to the caller.
+
+### 12.6 Sync mechanisms
+
+Three independent sync triggers MUST coexist:
+
+1. **Per-mutation autosync** — see §12.5
+2. **Deferred timer** — fires `NEXT_DEFERRED_SYNC_DELAY_SECS` after the last `autosync=false` mutation; MUST be reset each time a new mutation arrives before the timer fires
+3. **Periodic sync** — background task fires every `NEXT_SYNC_INTERVAL` seconds (0 = disabled)
+4. **Webhook** (`POST /webhook/sync`) — protected by `NEXT_WEBHOOK_TOKEN`; fires sync immediately and cancels any pending deferred timer; returns `200 {"status": "synced" | "error", ...}`
+
+### 12.7 Container deployment
+
+- A `Containerfile` MUST be provided for building the image
+- A Podman Quadlet unit file (`quadlets/next-mcp.container`) MUST be provided
+- The image MUST use two named volumes: one for the tasks repository and one for the XDG machine-local state
+- Secrets MUST be passed via an `EnvironmentFile`, not baked into the image

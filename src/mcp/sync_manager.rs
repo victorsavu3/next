@@ -6,7 +6,6 @@ use tokio::sync::{mpsc, Mutex};
 use crate::store::PullResult;
 use crate::AppContext;
 
-const DEFERRED_DELAY: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 enum DeferredSyncMsg {
@@ -54,13 +53,17 @@ pub fn do_sync(ctx: &mut AppContext) -> anyhow::Result<()> {
 
 /// Spawns the background task that manages deferred syncs.
 /// Returns a `SyncScheduler` handle that callers use to schedule or cancel.
-pub fn spawn_deferred_sync(ctx: Arc<Mutex<AppContext>>) -> SyncScheduler {
+pub fn spawn_deferred_sync(ctx: Arc<Mutex<AppContext>>, delay: Duration) -> SyncScheduler {
     let (tx, rx) = mpsc::channel(32);
-    tokio::spawn(deferred_sync_task(rx, ctx));
+    tokio::spawn(deferred_sync_task(rx, ctx, delay));
     SyncScheduler { tx }
 }
 
-async fn deferred_sync_task(mut rx: mpsc::Receiver<DeferredSyncMsg>, ctx: Arc<Mutex<AppContext>>) {
+async fn deferred_sync_task(
+    mut rx: mpsc::Receiver<DeferredSyncMsg>,
+    ctx: Arc<Mutex<AppContext>>,
+    delay: Duration,
+) {
     loop {
         // Wait for the first message.
         let msg = match rx.recv().await {
@@ -72,7 +75,7 @@ async fn deferred_sync_task(mut rx: mpsc::Receiver<DeferredSyncMsg>, ctx: Arc<Mu
             DeferredSyncMsg::Cancel => continue, // nothing pending; ignore
             DeferredSyncMsg::Schedule => {
                 // Inner loop: manage the timer, allow resets.
-                let sleep = tokio::time::sleep(DEFERRED_DELAY);
+                let sleep = tokio::time::sleep(delay);
                 tokio::pin!(sleep);
 
                 loop {
@@ -87,7 +90,7 @@ async fn deferred_sync_task(mut rx: mpsc::Receiver<DeferredSyncMsg>, ctx: Arc<Mu
                             Some(DeferredSyncMsg::Schedule) => {
                                 // Reset the timer.
                                 sleep.as_mut().reset(
-                                    tokio::time::Instant::now() + DEFERRED_DELAY,
+                                    tokio::time::Instant::now() + delay,
                                 );
                             }
                             Some(DeferredSyncMsg::Cancel) => {
