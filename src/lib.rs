@@ -4,6 +4,8 @@ pub mod config;
 pub mod domain;
 pub mod error;
 pub mod log;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod remote_storage;
 pub mod resolve;
 pub mod storage;

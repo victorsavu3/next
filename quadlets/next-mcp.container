@@ -1,0 +1,22 @@
+[Unit]
+Description=Next Task Manager MCP Server
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/next-mcp:latest
+PublishPort=3000:3000
+
+# Persistent storage: tasks repo and machine-local state (active context etc.)
+Volume=next-tasks:/data/tasks:Z
+Volume=next-state:/root/.local/state/task-manager:Z
+
+# Secrets and config — keep this file at ~/.config/next-mcp/env (chmod 600)
+EnvironmentFile=%h/.config/next-mcp/env
+
+[Service]
+Restart=always
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

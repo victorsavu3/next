@@ -10,39 +10,64 @@ This document describes the internal design of `next`. Read `REQUIREMENTS.md` fo
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                         next binary                              │
-│                                                                  │
 │  ┌──────────┐   ┌──────────────┐   ┌──────────────────────────┐ │
 │  │   CLI    │──▶│    Domain    │──▶│        Storage           │ │
 │  │ (clap)   │   │  (pure Rust) │   │  CachedStore (SQLite)    │ │
 │  └──────────┘   └──────┬───────┘   │    └── TomlStore (TOML) │ │
-│                        │           │    └── GitBackend (git2) │ │
-│  ┌──────────┐   ┌──────▼───────┐   └──────────────────────────┘ │
-│  │  Output  │◀──│   Filter /   │                                │
+│  ┌──────────┐   ┌──────▼───────┐   │    └── GitBackend (git2)│ │
+│  │  Output  │◀──│   Filter /   │   └──────────────────────────┘ │
 │  │text/JSON │   │   Scoring    │                                │
 │  └──────────┘   └──────────────┘                                │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────┐       │
-│  │                  Integrations (planned)              │       │
-│  │    Forgejo (HTTP/REST)   │   iCalendar (ical)        │       │
-│  └──────────────────────────────────────────────────────┘       │
+└──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│          next-mcp binary  (feature = "mcp")                      │
+│  ┌──────────────────┐  ┌─────────────┐  ┌──────────────────────┐│
+│  │  HTTP server     │  │ MCP tools   │  │   Sync manager       ││
+│  │  axum + JSON-RPC │─▶│ (same Store │  │ autosync / deferred  ││
+│  │  Bearer auth     │  │  & VcsBack) │  │ timer / periodic     ││
+│  └──────────────────┘  └─────────────┘  └──────────────────────┘│
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  git_init: clone from HTTPS on first start                  │ │
+│  └─────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 The domain layer is pure logic with no I/O. Storage calls into domain types but not
-vice versa. The CLI layer wires them together via `AppContext`.
+vice versa. Both the CLI and MCP layers wire them together via `AppContext`. All MCP
+modules live in `src/mcp/` and are gated by the `mcp` Cargo feature.
 
 ---
 
 ## 2. Module layout
 
-The project is a single crate named `next` with both a library (`src/lib.rs`) and a
-binary (`src/main.rs`).
+The project is a single crate named `next` with a library (`src/lib.rs`) and two
+binaries: `src/main.rs` (CLI) and `src/mcp/main.rs` (MCP server, requires `--features mcp`).
 
 ```
 next/                             # crate root (also git repo)
-  Cargo.toml                      # [package] manifest
+  Cargo.toml                      # [package] manifest; features: mcp (default = off)
+  Containerfile                   # multi-stage build for next-mcp container image
+  quadlets/
+    next-mcp.container            # Podman Quadlet systemd unit file
   src/
-    main.rs                       # binary entry point
+    main.rs                       # `next` binary entry point
+    mcp/
+      main.rs                     # `next-mcp` binary entry point (requires mcp feature)
+      mod.rs                      # library module root (pub re-exports for tests)
+      config.rs                   # McpConfig: all config from env vars
+      git_init.rs                 # clone_or_open(): HTTPS git clone on first start
+      protocol.rs                 # JSON-RPC 2.0 + MCP types
+      auth.rs                     # Bearer token middleware (MCP + webhook)
+      sync_manager.rs             # do_sync(), SyncScheduler (deferred 30s timer), periodic sync
+      server.rs                   # axum router, MCP dispatch, webhook handler
+      tools/
+        mod.rs                    # all_tools() registry + dispatch()
+        tasks.rs                  # list_tasks, get_task, add_task, update_task, delete_task
+        state.rs                  # sync, get_state, set_context, set_resource, set_user_filter
+        tags.rs                   # manage_tag
+        data.rs                   # manage_task_data
+        view.rs                   # get_forecast
     lib.rs                        # library root; public re-exports
     config.rs                     # Config, BackendConfig, BackendKind
     error.rs                      # AppError, Result
@@ -575,6 +600,9 @@ propagates the `anyhow::Error` to produce a non-zero exit code.
 | Migration | `tests/migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next::storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens |
 | File locking | `tests/locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption |
 | CLI commands | `tests/test_*.rs` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |
+| MCP unit tests | `src/mcp/tools/*.rs` | Unit tests per tool module using real `AppContext` in a `tempdir` git repo (requires `--features mcp`) |
+| MCP integration tests | `tests/test_mcp.rs` | Start a real HTTP server on `127.0.0.1:0` in `#[tokio::test]`; test all 13 tools, auth, webhook, and autosync (requires `--features mcp`) |
+| Container tests | `tests/test_container.rs` | Start the real container image via `testcontainers`; opt-in with `CONTAINER_TESTS=1` (requires `--features mcp` and a pre-built image) |
 
 ---
 
@@ -593,3 +621,11 @@ propagates the `anyhow::Error` to produce a non-zero exit code.
 | `uuid` | `Task::id` |
 | `dirs` | XDG base directory resolution |
 | `anyhow`, `thiserror` | error propagation |
+
+MCP-only dependencies (feature = `"mcp"`):
+
+| Crate | Purpose |
+|-------|---------|
+| `tokio` | async runtime for `next-mcp` |
+| `axum` | HTTP server and middleware |
+| `tower`, `tower-http` | service layers |
