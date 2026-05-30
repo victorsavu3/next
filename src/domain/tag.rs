@@ -106,6 +106,15 @@ pub fn tag_matches(filter: &str, tag: &str) -> bool {
 /// - Empty segments (e.g. trailing `/` or `//`) are rejected.
 ///
 /// Context (`@`) and resource (`#`) tags follow the same rules for their name part.
+/// Validates a tag string using an allowlist approach.
+///
+/// Allowed structure:
+/// - Optional prefix: `@` (context) or `#` (resource)
+/// - One or more segments separated by `/`
+/// - Each segment: starts with an ASCII letter; remaining characters may be
+///   letters (`a-z`, `A-Z`), digits (`0-9`), hyphen (`-`), or underscore (`_`)
+/// - `..` is explicitly rejected as a segment to prevent path traversal
+///   (tags are stored as `tags/<tag>.toml` on the filesystem)
 pub fn validate_tag(tag: &str) -> Result<(), String> {
     let name = bare_name(tag);
     if name.is_empty() {
@@ -114,6 +123,11 @@ pub fn validate_tag(tag: &str) -> Result<(), String> {
     for segment in name.split('/') {
         if segment.is_empty() {
             return Err(format!("tag {tag:?} contains an empty path segment"));
+        }
+        // Explicit guard: '..' as a segment would be a path traversal when tags
+        // are stored as files under tags/<tag>.toml.
+        if segment == ".." {
+            return Err(format!("tag {tag:?} must not contain '..' path components"));
         }
         let mut chars = segment.chars();
         let first = chars.next().unwrap();

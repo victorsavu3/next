@@ -1,34 +1,41 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, OwnedSemaphorePermit, Semaphore};
 
 use crate::store::PullResult;
 use crate::AppContext;
 
-
 #[derive(Debug)]
 enum DeferredSyncMsg {
-    /// Start (or reset) the 30-second deferred sync timer.
+    /// Start (or reset) the deferred sync timer.
     Schedule,
     /// Cancel any pending deferred timer (explicit sync was just run externally).
     Cancel,
 }
 
-/// Cloneable handle for scheduling deferred syncs.
+/// Cloneable handle for scheduling deferred syncs and acquiring the sync lock.
 #[derive(Clone)]
 pub struct SyncScheduler {
     tx: mpsc::Sender<DeferredSyncMsg>,
+    /// At most one sync (explicit or deferred) runs at a time.
+    /// Background tasks use `try_acquire`; explicit callers fail-fast if busy.
+    semaphore: Arc<Semaphore>,
 }
 
 impl SyncScheduler {
     pub fn schedule_deferred(&self) {
-        // Best-effort; if the receiver is gone we can't do anything.
         let _ = self.tx.try_send(DeferredSyncMsg::Schedule);
     }
 
     pub fn cancel(&self) {
         let _ = self.tx.try_send(DeferredSyncMsg::Cancel);
+    }
+
+    /// Try to acquire the sync lock without blocking.
+    /// Returns `None` if a sync is already in progress.
+    pub fn try_acquire(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.semaphore).try_acquire_owned().ok()
     }
 }
 
@@ -55,48 +62,41 @@ pub fn do_sync(ctx: &mut AppContext) -> anyhow::Result<()> {
 /// Returns a `SyncScheduler` handle that callers use to schedule or cancel.
 pub fn spawn_deferred_sync(ctx: Arc<Mutex<AppContext>>, delay: Duration) -> SyncScheduler {
     let (tx, rx) = mpsc::channel(32);
-    tokio::spawn(deferred_sync_task(rx, ctx, delay));
-    SyncScheduler { tx }
+    let semaphore = Arc::new(Semaphore::new(1));
+    tokio::spawn(deferred_sync_task(rx, ctx, delay, Arc::clone(&semaphore)));
+    SyncScheduler { tx, semaphore }
 }
 
 async fn deferred_sync_task(
     mut rx: mpsc::Receiver<DeferredSyncMsg>,
     ctx: Arc<Mutex<AppContext>>,
     delay: Duration,
+    semaphore: Arc<Semaphore>,
 ) {
     loop {
-        // Wait for the first message.
         let msg = match rx.recv().await {
             Some(m) => m,
             None => return, // sender dropped — server shutting down
         };
 
         match msg {
-            DeferredSyncMsg::Cancel => continue, // nothing pending; ignore
+            DeferredSyncMsg::Cancel => continue,
             DeferredSyncMsg::Schedule => {
-                // Inner loop: manage the timer, allow resets.
                 let sleep = tokio::time::sleep(delay);
                 tokio::pin!(sleep);
 
                 loop {
                     tokio::select! {
                         _ = &mut sleep => {
-                            // Timer fired — run sync.
-                            run_sync_background(&ctx).await;
+                            run_sync_background(&ctx, &semaphore).await;
                             break;
                         }
                         msg = rx.recv() => match msg {
                             None => return,
                             Some(DeferredSyncMsg::Schedule) => {
-                                // Reset the timer.
-                                sleep.as_mut().reset(
-                                    tokio::time::Instant::now() + delay,
-                                );
+                                sleep.as_mut().reset(tokio::time::Instant::now() + delay);
                             }
-                            Some(DeferredSyncMsg::Cancel) => {
-                                // Explicit sync was called externally; discard timer.
-                                break;
-                            }
+                            Some(DeferredSyncMsg::Cancel) => break,
                         }
                     }
                 }
@@ -105,11 +105,22 @@ async fn deferred_sync_task(
     }
 }
 
-async fn run_sync_background(ctx: &Arc<Mutex<AppContext>>) {
+/// Run sync in a background thread, acquiring the semaphore first.
+/// If the semaphore is already held (explicit sync in progress), skip silently.
+async fn run_sync_background(ctx: &Arc<Mutex<AppContext>>, semaphore: &Arc<Semaphore>) {
+    let permit = match Arc::clone(semaphore).try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("background sync skipped: explicit sync already in progress");
+            return;
+        }
+    };
     let ctx = ctx.clone();
     let result = tokio::task::spawn_blocking(move || {
         let mut ctx = ctx.blocking_lock();
-        do_sync(&mut ctx)
+        let r = do_sync(&mut ctx);
+        drop(permit);
+        r
     })
     .await;
 
@@ -121,14 +132,20 @@ async fn run_sync_background(ctx: &Arc<Mutex<AppContext>>) {
 }
 
 /// Spawns a periodic sync task that runs every `interval`.
-pub fn spawn_periodic_sync(ctx: Arc<Mutex<AppContext>>, interval: Duration) {
+/// Shares the scheduler's semaphore so periodic syncs don't race with explicit ones.
+pub fn spawn_periodic_sync(
+    ctx: Arc<Mutex<AppContext>>,
+    interval: Duration,
+    scheduler: &SyncScheduler,
+) {
+    let semaphore = Arc::clone(&scheduler.semaphore);
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         ticker.tick().await; // skip the immediate first tick
         loop {
             ticker.tick().await;
-            run_sync_background(&ctx).await;
+            run_sync_background(&ctx, &semaphore).await;
         }
     });
 }
@@ -138,11 +155,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn do_sync_no_remote_returns_error() {
-        // A repo with no remote configured should return an error from push.
-        // We can't easily test this without a real git repo, so just verify
-        // the function signature compiles and the function is callable.
-        // Full integration tests cover the real behaviour.
+    fn scheduler_size_check() {
         let _ = std::mem::size_of::<SyncScheduler>();
     }
 }

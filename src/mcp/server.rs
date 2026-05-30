@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::StatusCode,
     middleware,
     response::{IntoResponse, Json, Response},
@@ -43,7 +43,11 @@ pub fn build_router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), require_webhook_bearer))
         .with_state(state.clone());
 
-    Router::new().merge(mcp_route).merge(webhook_route)
+    Router::new()
+        .merge(mcp_route)
+        .merge(webhook_route)
+        // Limit request bodies to 64 KB — more than enough for any valid MCP request.
+        .layer(DefaultBodyLimit::max(65_536))
 }
 
 // ── MCP handler ───────────────────────────────────────────────────────────────
@@ -121,13 +125,22 @@ async fn handle_tools_call(
 // ── Webhook handler ───────────────────────────────────────────────────────────
 
 async fn webhook_handler(State(state): State<AppState>) -> Response {
+    // Fail fast if a sync is already running — prevent queuing.
+    let permit = match state.scheduler.try_acquire() {
+        Some(p) => p,
+        None => {
+            return Json(json!({ "status": "error", "message": "sync already in progress" }))
+                .into_response();
+        }
+    };
+
     let ctx = state.ctx.clone();
     let scheduler = state.scheduler.clone();
-
     let result = tokio::task::spawn_blocking(move || {
         let mut ctx = ctx.blocking_lock();
         let sync_result = crate::mcp::sync_manager::do_sync(&mut ctx);
         scheduler.cancel(); // clear any pending deferred timer
+        drop(permit);
         sync_result
     })
     .await;

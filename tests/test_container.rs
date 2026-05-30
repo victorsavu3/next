@@ -77,6 +77,13 @@ fn create_bare_repo() -> tempfile::TempDir {
         .args(["-t", "container_file_t", "-R", bare.path().to_str().unwrap()])
         .status();
 
+    // Make the bare repo world-writable so the non-root container user (UID 1000
+    // inside the container) can push back to it even after rootless Podman's
+    // user-namespace UID remapping.
+    let _ = std::process::Command::new("chmod")
+        .args(["-R", "a+w", bare.path().to_str().unwrap()])
+        .status();
+
     bare
 }
 

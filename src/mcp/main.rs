@@ -36,9 +36,9 @@ async fn main() -> anyhow::Result<()> {
     // Background deferred-sync task.
     let scheduler = spawn_deferred_sync(ctx.clone(), config.deferred_sync_delay);
 
-    // Background periodic-sync task (if configured).
+    // Background periodic-sync task — shares the scheduler's semaphore.
     if let Some(interval) = config.sync_interval {
-        spawn_periodic_sync(ctx.clone(), interval);
+        spawn_periodic_sync(ctx.clone(), interval, &scheduler);
     }
 
     let state = AppState {

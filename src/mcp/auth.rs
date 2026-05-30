@@ -44,12 +44,20 @@ fn check_bearer(headers: &axum::http::HeaderMap, expected: &str) -> Result<(), S
     Ok(())
 }
 
-/// Simple constant-time byte-slice comparison (no external crate needed).
+/// Constant-time byte-slice comparison that does not leak the length of `b`
+/// (the expected secret) via response-time differences.
+///
+/// Always processes every byte of `b`, using 0 for out-of-bounds positions of `a`,
+/// so timing is O(b.len()) regardless of how long `a` is.  The final length check
+/// leaks only the length of `a`, which the caller already knows they sent.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    let mismatch = b
+        .iter()
+        .enumerate()
+        .fold(0u8, |acc, (i, &expected)| {
+            acc | (a.get(i).copied().unwrap_or(0) ^ expected)
+        });
+    mismatch == 0 && a.len() == b.len()
 }
 
 #[cfg(test)]
@@ -69,5 +77,20 @@ mod tests {
     #[test]
     fn constant_time_eq_different_lengths() {
         assert!(!constant_time_eq(b"short", b"longer"));
+    }
+
+    #[test]
+    fn constant_time_eq_truncated() {
+        assert!(!constant_time_eq(b"secre", b"secret"));
+    }
+
+    #[test]
+    fn constant_time_eq_extended() {
+        assert!(!constant_time_eq(b"secretX", b"secret"));
+    }
+
+    #[test]
+    fn constant_time_eq_empty_submitted() {
+        assert!(!constant_time_eq(b"", b"secret"));
     }
 }

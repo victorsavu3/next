@@ -263,8 +263,11 @@ fn call_tool(
             Ok(result)
         }
 
-        // ── sync tool: run synchronously, cancel deferred timer ───────────────
+        // ── sync tool: acquire semaphore (fail-fast if busy), run, cancel timer ─
         "sync" => {
+            let _permit = scheduler
+                .try_acquire()
+                .ok_or_else(|| anyhow::anyhow!("sync already in progress — try again shortly"))?;
             let result = state::sync(params, ctx)?;
             scheduler.cancel();
             Ok(result)

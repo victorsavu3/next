@@ -14,6 +14,24 @@ use crate::resolve::resolve_task_id;
 use crate::storage;
 use crate::AppContext;
 
+/// Validates a user-supplied slug.
+///
+/// Allowed characters: ASCII letters (`a-z`, `A-Z`), digits (`0-9`), hyphen (`-`),
+/// and underscore (`_`).  This allowlist prevents path traversal (no `/`, `..`, or
+/// null bytes) while keeping slugs clean identifiers.  Additional characters may be
+/// permitted in future versions.
+fn validate_slug(slug: &str) -> anyhow::Result<()> {
+    if slug.is_empty() {
+        anyhow::bail!("slug must not be empty");
+    }
+    if let Some(bad) = slug.chars().find(|c| !matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_')) {
+        anyhow::bail!(
+            "slug contains invalid character {bad:?} — only letters, digits, '-' and '_' are allowed"
+        );
+    }
+    Ok(())
+}
+
 fn parse_priority(s: &str) -> anyhow::Result<Priority> {
     match s.to_lowercase().as_str() {
         "low" => Ok(Priority::Low),
@@ -111,7 +129,10 @@ pub fn add_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     if let Some(p) = str_param(params, "priority") {
         task.priority = parse_priority(p)?;
     }
-    task.slug = str_param(params, "slug").map(str::to_owned);
+    if let Some(s) = str_param(params, "slug") {
+        validate_slug(s)?;
+        task.slug = Some(s.to_owned());
+    }
     task.assignee = str_param(params, "assignee").map(str::to_owned);
     task.description = str_param(params, "description").map(str::to_owned);
     task.notes = str_param(params, "notes").map(str::to_owned);
@@ -211,6 +232,7 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
         task.priority = parse_priority(p)?;
     }
     if let Some(slug) = str_param(params, "slug") {
+        validate_slug(slug)?;
         task.slug = Some(slug.to_owned());
     }
     if bool_param(params, "clear_assignee") {

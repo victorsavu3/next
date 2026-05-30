@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "next"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1372,8 +1372,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
- "tower",
- "tower-http",
  "uuid",
 ]
 
@@ -2433,13 +2431,11 @@ version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
- "base64",
  "bitflags 2.11.1",
  "bytes",
  "futures-util",
  "http",
  "http-body",
- "mime",
  "pin-project-lite",
  "tower",
  "tower-layer",
