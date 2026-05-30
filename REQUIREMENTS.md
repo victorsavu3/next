@@ -44,16 +44,27 @@ External-reference fields (set by importers, never by the user):
 | `forgejo_issue` | URL string | Set by Forgejo importer |
 | `webcal_uid` | string | iCalendar UID; set by iCal importer |
 
-When a task recurs it MUST carry a `[recurrence]` table:
+When a task recurs it MUST carry a `[recurrence]` table. The `type` field selects the mode:
 
 ```toml
+# Schedule-based: next instance follows a fixed calendar rule
 [recurrence]
-type = "schedule"       # "schedule" | "completion"
-rule = "every Monday"   # human-readable rule for schedule-based recurrence
-interval_days = 7       # positive integer; for completion-based recurrence
+type = "schedule"
+rrule = "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"   # RFC 5545 RRULE string (no prefix)
+anchor = "2026-05-26"                          # first instance date; pins interval alignment
+
+# Completion-based: next instance is N days after completion
+[recurrence]
+type = "completion"
+interval_days = 7
+
+# Optional snap on either type: round the computed date forward to a boundary
+[recurrence.snap]
+type = "next_weekday"   # "next_weekday" | "next_workday" | "day_of_month"
+weekday = 5             # 0=Mon…6=Sun; used with next_weekday
 ```
 
-Exactly one of `rule` or `interval_days` MUST be present in a `[recurrence]` table.
+Supported RRULE fields: `FREQ` (`DAILY`, `WEEKLY`, `MONTHLY`, `YEARLY`), `INTERVAL`, `BYDAY`, `BYMONTHDAY`.
 
 ### 1.2 Projects and subtasks
 
@@ -258,28 +269,38 @@ scoring while the project is in progress.
 
 ## 7. Recurrence
 
+`next done` on a recurring task marks it done AND creates the next instance atomically in a single git commit. Cancelling a recurring task does NOT spawn a next instance.
+
 ### 7.1 Completion-based
 
-When `next done` is run on a task with `recurrence.type = "completion"`:
-
-1. The current task is marked `done`
-2. A new task MUST be created, copying all fields from the completed task except `id`,
-   `status` (`open`), `created_at`, `updated_at`, and `due`
-3. The new task's `due` MUST be set to `completed_at_date + recurrence.interval_days`
+1. Current task is marked `done`
+2. Next task is created with `start` (or `due`) = `today + interval_days`
+3. If a snap is set, the computed date is advanced to the nearest qualifying boundary
+4. If the original task has both `start` and `due`, the offset between them is preserved
 
 ### 7.2 Schedule-based
 
-A schedule-based recurrence template MUST maintain a single active instance at all times.
-When `next done` is run on the active instance:
+1. Current task is marked `done`
+2. `after = max(task.due, task.start, today)` — never re-uses a date already passed
+3. The RRULE is evaluated from `anchor` to find the first occurrence strictly after `after`
+4. If a snap is set, the resulting date is advanced further
+5. If the original task has both `start` and `due`, the same offset is applied to the new occurrence
 
-1. The current task is marked `done`
-2. A new task MUST be created immediately with `due` set to the next date produced by
-   `recurrence.rule` after the current due date
-3. The new instance MUST be visible in the default list right away and scored by its
-   due-date proximity
+The `anchor` is set once (on `next add`) to the task's `start` or `due` date, falling back to today. All future instances carry the same `anchor` so INTERVAL calculations stay aligned.
 
-The recurrence template MUST be identifiable (e.g. via a shared `recurrence_id` field on
-all instances) so `next forecast` can project future occurrences.
+### 7.3 Snap values
+
+After computing the raw next date, an optional snap advances it to a boundary:
+
+| Snap type | TOML | Description |
+|-----------|------|-------------|
+| Next weekday | `type = "next_weekday"; weekday = N` | 0=Mon…6=Sun; keep the date if already there |
+| Next workday | `type = "next_workday"` | Advance to the next Mon–Fri |
+| Day of month | `type = "day_of_month"; day = N` | Day 1–28; use current month if not yet passed, else next |
+
+### 7.4 Series identity
+
+All instances of a series share the same `recurrence_id` UUID (equal to the first instance's `id`). Slugs are not propagated to spawned instances.
 
 `next forecast` MUST accept the same filter tokens as `next list` and MUST display the
 upcoming due dates for all matching recurrence series for a configurable horizon
@@ -325,8 +346,9 @@ next add <title> [options]
 | `--description <text>` | Multi-line description providing context beyond the title |
 | `--url <url>` | URL associated with this task (must be http or https) |
 | `--notes <text>` | Free-text notes |
-| `--recur-schedule <rule>` | Creates a schedule-based recurring task |
+| `--recur-schedule <rule>` | Creates a schedule-based recurring task; `rule` is an RRULE string |
 | `--recur-completion <days>` | Creates a completion-based recurring task |
+| `--recur-snap <snap>` | Optional snap applied after the next-date computation; see §7.3 |
 | `--long-term` | Sets `long_term = true` |
 | `--adjust <float>` | Sets `score_adjustment` |
 | `--assignee <name>` | Sets `assignee` |

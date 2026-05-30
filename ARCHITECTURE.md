@@ -91,11 +91,12 @@ next/                             # crate root (also git repo)
 
 | Module | Contents |
 |--------|----------|
-| `task` | `Task`, `Status` (`Open`/`Started`/`Done`/`Cancelled`), `Priority`, `Recurrence` |
+| `task` | `Task`, `Status` (`Open`/`Started`/`Done`/`Cancelled`), `Priority`, `Recurrence`, `Snap` |
+| `recurrence` | `fn next_occurrence(rrule, anchor, after)`, `fn apply_snap(date, snap)`, `fn spawn_next(task, today)` |
 | `state` | `GlobalState` (active contexts, active users, resource availability map) |
 | `tag` | `TagKind` (Context / Resource / Freeform); tag parsing helpers |
 | `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
-| `scoring` | `ScoredTask`, `ScoringWeights`, `fn score_and_sort(tasks, all_tasks, today, weights)` |
+| `scoring` | `ScoredTask`, `ScoringWeights`, `fn score_and_sort(tasks, all_tasks, today, weights, tag_metas)` |
 | `date_parse` | `fn parse_date(expr, today) -> Result<NaiveDate>` |
 
 Key `Task` fields: `id`, `title`, `status`, `priority`, `due`, `start`, `long_term`,

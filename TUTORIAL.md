@@ -175,12 +175,43 @@ This data can be used for time-tracking analysis once tooling is built on top.
 
 ## Recurrence
 
+Two modes are available. Completing a recurring task with `next done` automatically creates the next instance.
+
+**Completion-based** — next instance is N days after you mark it done:
+
 ```sh
-next add "Water plants" --recur-completion 3    # every 3 days after completion
-next add "Weekly review" --recur-schedule "every Monday"
+next add "Water plants" --recur-completion 7         # 1 week after completion
+next add "Dentist check" --recur-completion 180       # ~6 months after completion
 ```
 
-When you complete a recurrence task, a new instance is created automatically.
+**Schedule-based** — next instance follows a fixed calendar pattern:
+
+```sh
+# Every weekday
+next add "Daily standup" --slug standup \
+  --recur-schedule "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
+
+# 1st of every month (task starts on the 1st, due on the 3rd)
+next add "Monthly review" \
+  --recur-schedule "FREQ=MONTHLY;BYMONTHDAY=1" \
+  --start 2026-06-01 --due 2026-06-03
+
+# Every 3 months on the 1st (quarterly)
+next add "Quarterly planning" \
+  --recur-schedule "FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=1" \
+  --start 2026-04-01
+```
+
+**Snap** — round the computed date to a convenient boundary:
+
+```sh
+# 1 week after completion, but always on a Saturday
+next add "Weekly chore" --recur-completion 7 --recur-snap saturday
+
+# Snap values: monday…sunday, next-workday, dom:N (day of month 1–28)
+```
+
+When a task has both `start` and `due` dates the offset is preserved — a task starting the 1st and due the 3rd will always have that 2-day window.
 
 ---
 

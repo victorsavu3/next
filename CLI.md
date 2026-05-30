@@ -94,8 +94,9 @@ next add <title> [options]
 | `--description <text>` | string | none | Multi-line description providing context beyond the title. |
 | `--url <url>` | string | none | URL associated with this task (must be http or https). |
 | `--notes <text>` | string | none | Multi-line free-text notes. |
-| `--recur-schedule <rule>` | string | none | Creates a schedule-based recurring task. Accepted rules: "every Monday", "every weekday", "1st of every month", "every 2 weeks", etc. |
-| `--recur-completion <days>` | positive integer | none | Creates a completion-based recurring task. Next instance is created `<days>` after the completion date. |
+| `--recur-schedule <rule>` | RRULE string | none | Schedule-based recurrence. The rule is an RFC 5545 RRULE string (without the `RRULE:` prefix). See [Recurrence](#recurrence) below. |
+| `--recur-completion <days>` | positive integer | none | Completion-based recurrence. The next instance is created `<days>` after the task is marked done. |
+| `--recur-snap <snap>` | snap value | none | Advance the computed next date to the nearest qualifying date. See [Snap values](#snap-values) below. Applies to both schedule and completion modes. |
 | `--long-term` | flag | false | Disables the age factor from scoring. Suitable for background or long-running tasks. |
 | `--adjust <value>` | float | 0.0 | Manual score adjustment added directly to the computed urgency score. Positive boosts, negative penalises. |
 | `--assignee <name>` | string | none | Assign the task to a user. Used by the user filter. |
@@ -116,8 +117,14 @@ next add "Launch blog" --slug launch-blog --tag project --priority high
 # Subtask under an existing project
 next add "Write first post" --parent launch-blog
 
-# Recurring task: water plants 7 days after last watering
-next add "Water plants" --slug water-plants --recur-completion 7 --tag @home
+# Recurring: water plants 7 days after last watering, snapped to Saturday
+next add "Water plants" --slug water-plants --recur-completion 7 --recur-snap saturday --tag @home
+
+# Recurring: daily standup every weekday
+next add "Daily standup" --slug standup --recur-schedule "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
+
+# Recurring: monthly task starting the 1st, due the 3rd
+next add "Monthly review" --recur-schedule "FREQ=MONTHLY;BYMONTHDAY=1" --start 2026-06-01 --due 2026-06-03
 
 # Task with description and URL
 next add "Review RFC-42" --url "https://example.com/rfc-42" --description "Pay attention to section 3"
@@ -633,6 +640,79 @@ next forecast [filters...] [--days <N>]
 
 ---
 
+## Recurrence
+
+`next` supports two recurrence modes. In both cases, marking a task done with `next done` automatically creates the next instance and commits both changes in a single git commit.
+
+### Schedule-based (`--recur-schedule`)
+
+The next instance is determined by an RFC 5545 RRULE string. The `anchor` date (the first `start` or `due` date, or today if neither is set) pins the series so that multi-interval rules stay aligned over time.
+
+**Supported RRULE fields**
+
+| Field | Example | Notes |
+|-------|---------|-------|
+| `FREQ` | `FREQ=WEEKLY` | Required. `DAILY`, `WEEKLY`, `MONTHLY`, `YEARLY`. |
+| `INTERVAL` | `INTERVAL=3` | Every Nth period. Default 1. |
+| `BYDAY` | `BYDAY=MO,TU,WE,TH,FR` | Weekday list (`MO TU WE TH FR SA SU`). Used with `FREQ=WEEKLY`. |
+| `BYMONTHDAY` | `BYMONTHDAY=1` | Day of month. Used with `FREQ=MONTHLY`. |
+
+**Common patterns**
+
+```sh
+# Every weekday (Mon–Fri)
+--recur-schedule "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
+
+# Every Monday
+--recur-schedule "FREQ=WEEKLY;BYDAY=MO"
+
+# 1st of every month
+--recur-schedule "FREQ=MONTHLY;BYMONTHDAY=1"
+
+# Every 3 months on the 1st (quarterly)
+--recur-schedule "FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=1"
+
+# Every year on Jan 1
+--recur-schedule "FREQ=YEARLY;BYMONTHDAY=1"
+```
+
+When a task has both `start` and `due` dates, the start-to-due offset is preserved on every new instance. For example, a task with start=June 1, due=June 3 will next appear as start=July 1, due=July 3.
+
+### Completion-based (`--recur-completion <days>`)
+
+The next instance is created `<days>` after the completion date (i.e., relative to when you mark it done, not a fixed calendar date).
+
+```sh
+next add "Water plants" --recur-completion 7   # once a week, whenever done
+next add "Dentist check" --recur-completion 180 # every ~6 months
+```
+
+### Snap values (`--recur-snap`)
+
+Advances the computed next date to the nearest qualifying day. Use when you want to round to a convenient boundary.
+
+| Value | Meaning |
+|-------|---------|
+| `monday` … `sunday` | Advance to that weekday (keep the day if already there). |
+| `next-workday` | Advance to the next Mon–Fri. |
+| `dom:N` | Advance to day N of the current or next month (N = 1–28). |
+
+```sh
+# Completion-based, snapped to Saturday
+next add "Weekly chore" --recur-completion 7 --recur-snap saturday
+
+# Monthly on the 1st, snapped to next workday if the 1st is a weekend
+next add "Monthly report" --recur-schedule "FREQ=MONTHLY;BYMONTHDAY=1" --recur-snap next-workday
+```
+
+### Series identity
+
+All instances of the same recurring task share a `recurrence_id` UUID. The first instance's `id` becomes the `recurrence_id` for all subsequent ones.
+
+Slugs are **not** propagated — each instance gets no slug unless you set one with `next edit`. This prevents slug-collision on recurring tasks.
+
+---
+
 ### `next sync`
 
 Synchronise with the remote git repository: pull, rebuild the local cache, then push local commits. Stops with a detailed error message if a merge conflict is detected.
@@ -720,7 +800,7 @@ All list commands (`list`, `next`, `forecast`, `export ical`) accept filter toke
 |-------|---------|---------|
 | `+<tag>` | `+python`, `+@home`, `+#printer` | Task must have this tag. |
 | `-<tag>` | `-@work`, `-reading` | Task must not have this tag. |
-| `project:<path>` | `project:work`, `project:launch-blog` | Task belongs to this project or any descendant. |
+| `parent:<slug>` | `parent:work`, `parent:launch-blog` | Task is a descendant (direct or transitive child) of the task with this slug. |
 | `context:<@tag>` | `context:@home` | Override the global active context for this query only. |
 | `user:<name>` | `user:alice` | Override the global user filter for this query only. |
 | `--future` | | Include tasks with a future `start` date. |
