@@ -107,7 +107,7 @@ fn ensure_git_identity(repo: &git2::Repository) -> anyhow::Result<()> {
         config.set_str("user.name", "next-mcp")?;
     }
     if !has_email {
-        config.set_str("user.email", "next-mcp@localhost")?;
+        config.set_str("user.email", "next-mcp@unknown")?;
     }
 
     drop(local);
