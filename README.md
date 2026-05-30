@@ -272,7 +272,8 @@ next-mcp
 ### Quadlet (Podman)
 
 Copy `quadlets/next-mcp.container` to `~/.config/containers/systemd/` and create
-`~/.config/next-mcp/env` (chmod 600):
+`~/.config/next-mcp/env` (chmod 600) — use `quadlets/next-mcp.env.example` as a
+starting point:
 
 ```
 NEXT_BEARER_TOKEN=…
