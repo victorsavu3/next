@@ -19,15 +19,19 @@ pub fn clone_or_open(config: &McpConfig) -> anyhow::Result<PathBuf> {
         return Ok(repo_path.clone());
     }
 
-    let git_url = config.git_url.as_deref().ok_or_else(|| {
+    let git_url_raw = config.git_url.as_deref().ok_or_else(|| {
         anyhow::anyhow!(
             "repository not found at {} and NEXT_GIT_URL is not set",
             repo_path.display()
         )
     })?;
 
+    // Strip credentials from the URL immediately so that every subsequent
+    // error path (logs, anyhow contexts, etc.) can only ever reference the
+    // sanitized URL — credentials never leak into error messages.
+    let (url_for_auth, user_from_url, token_from_url) = extract_credentials(git_url_raw);
+
     let mut callbacks = git2::RemoteCallbacks::new();
-    let (url_for_auth, user_from_url, token_from_url) = extract_credentials(git_url);
 
     // Log the credential-free URL only.
     eprintln!("Cloning {} → {}", url_for_auth, repo_path.display());
@@ -172,5 +176,47 @@ mod tests {
         assert!(dir.path().join("tasks").is_dir());
         let gi = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
         assert_eq!(gi.matches(".next.db").count(), 1);
+    }
+
+    /// Credentials embedded in NEXT_GIT_URL must never appear in error messages.
+    ///
+    /// We point at a non-existent host so the clone definitely fails, then
+    /// verify the secret token is absent from the full error chain.
+    #[test]
+    fn credentials_not_leaked_in_error_messages() {
+        use std::net::SocketAddr;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        // The repo_path has no `.git` folder, so clone_or_open will attempt a clone.
+        let config = crate::mcp::config::McpConfig {
+            bearer_token: "test".to_owned(),
+            webhook_token: None,
+            repo_path: dir.path().to_path_buf(),
+            bind_addr: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+            // URL contains a secret that must not appear in any error message.
+            // 127.0.0.1:1 is almost certain to refuse immediately (nothing
+            // listens on port 1), so the test is fast.
+            git_url: Some(
+                "https://user:s3cr3t_token@127.0.0.1:1/repo.git".to_owned(),
+            ),
+            git_user: None,
+            git_token: None,
+            sync_interval: None,
+            deferred_sync_delay: Duration::from_secs(30),
+            git_author_name: None,
+            git_author_email: None,
+        };
+
+        let err = clone_or_open(&config)
+            .expect_err("clone to unreachable host must fail");
+
+        // Capture the full error chain (anyhow Debug includes all causes).
+        let err_text = format!("{err:#}");
+
+        assert!(
+            !err_text.contains("s3cr3t_token"),
+            "credential leaked in error message: {err_text}"
+        );
     }
 }
