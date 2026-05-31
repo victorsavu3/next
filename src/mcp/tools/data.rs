@@ -5,6 +5,34 @@ use crate::resolve::resolve_task_id;
 use crate::storage;
 use crate::AppContext;
 
+/// Maximum allowed length for a data key.
+const KEY_MAX_LEN: usize = 256;
+
+/// Validates a data key.
+///
+/// Allowed characters: ASCII letters (`a-z`, `A-Z`), digits (`0-9`), hyphen (`-`),
+/// and underscore (`_`).  Keys must be non-empty and at most [`KEY_MAX_LEN`] characters.
+fn validate_key(key: &str) -> anyhow::Result<()> {
+    if key.is_empty() {
+        anyhow::bail!("key must not be empty");
+    }
+    if key.len() > KEY_MAX_LEN {
+        anyhow::bail!(
+            "key is too long ({} characters); maximum allowed length is {KEY_MAX_LEN}",
+            key.len()
+        );
+    }
+    if let Some(bad) = key
+        .chars()
+        .find(|c| !matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_'))
+    {
+        anyhow::bail!(
+            "key contains invalid character {bad:?} — only letters, digits, '-' and '_' are allowed"
+        );
+    }
+    Ok(())
+}
+
 /// Unified task data key-value tool.
 ///
 /// `action` values:
@@ -40,6 +68,7 @@ fn get(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         .get("key")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: key"))?;
+    validate_key(key)?;
 
     let id = resolve_task_id(&*ctx.store, id_str)?;
     let task = ctx.store.get_task(id)?;
@@ -65,6 +94,7 @@ fn set(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         .get("key")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: key"))?;
+    validate_key(key)?;
     let raw = params
         .get("value")
         .and_then(|v| v.as_str())
@@ -90,6 +120,7 @@ fn unset(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         .get("key")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: key"))?;
+    validate_key(key)?;
 
     let id = resolve_task_id(&*ctx.store, id_str)?;
     let mut task = ctx.store.get_task(id)?;
@@ -173,5 +204,66 @@ mod tests {
         let id = add_task_raw("Test", &mut ctx);
         let err = manage_task_data(&json!({ "action": "unset", "id": id, "key": "nope" }), &mut ctx).unwrap_err();
         assert!(err.to_string().contains("no data key"));
+    }
+
+    #[test]
+    fn validate_key_rejects_oversized_key() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = add_task_raw("Test", &mut ctx);
+        let long_key = "a".repeat(257);
+        let err = manage_task_data(
+            &json!({ "action": "set", "id": id, "key": long_key, "value": "1" }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("too long"), "expected 'too long' in: {err}");
+    }
+
+    #[test]
+    fn validate_key_rejects_space() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = add_task_raw("Test", &mut ctx);
+        let err = manage_task_data(
+            &json!({ "action": "set", "id": id, "key": "bad key", "value": "1" }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid character"), "expected 'invalid character' in: {err}");
+    }
+
+    #[test]
+    fn validate_key_rejects_slash() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = add_task_raw("Test", &mut ctx);
+        let err = manage_task_data(
+            &json!({ "action": "set", "id": id, "key": "path/traversal", "value": "1" }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid character"), "expected 'invalid character' in: {err}");
+    }
+
+    #[test]
+    fn validate_key_rejects_dot() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = add_task_raw("Test", &mut ctx);
+        let err = manage_task_data(
+            &json!({ "action": "set", "id": id, "key": "some.key", "value": "1" }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid character"), "expected 'invalid character' in: {err}");
+    }
+
+    #[test]
+    fn validate_key_unit_rejects_empty() {
+        assert!(validate_key("").is_err());
+    }
+
+    #[test]
+    fn validate_key_unit_accepts_valid_keys() {
+        assert!(validate_key("score").is_ok());
+        assert!(validate_key("my-key_123").is_ok());
+        assert!(validate_key(&"a".repeat(256)).is_ok());
     }
 }
