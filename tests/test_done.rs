@@ -34,7 +34,7 @@ fn done_marks_task_closed() {
     let task = env.ctx.store.list_tasks().unwrap().remove(0);
     let id = task.id.to_string();
 
-    done::run(done::Args { id, json: false }, &mut env.ctx).unwrap();
+    done::run(done::Args { id, completed_at: None, json: false }, &mut env.ctx).unwrap();
 
     let updated = env.ctx.store.list_tasks().unwrap().remove(0);
     assert_eq!(updated.status, Status::Done);
@@ -48,7 +48,7 @@ fn done_by_id_prefix() {
     let task = env.ctx.store.list_tasks().unwrap().remove(0);
     let prefix = task.id.to_string().replace('-', "")[..8].to_string();
 
-    done::run(done::Args { id: prefix, json: false }, &mut env.ctx).unwrap();
+    done::run(done::Args { id: prefix, completed_at: None, json: false }, &mut env.ctx).unwrap();
 
     let updated = env.ctx.store.list_tasks().unwrap().remove(0);
     assert_eq!(updated.status, Status::Done);
@@ -66,6 +66,7 @@ fn done_by_slug() {
     done::run(
         done::Args {
             id: "daily-standup".to_string(),
+            completed_at: None,
             json: false,
         },
         &mut env.ctx,
@@ -82,6 +83,7 @@ fn done_nonexistent_task_errors() {
     let err = done::run(
         done::Args {
             id: "00000000-0000-0000-0000-000000000000".to_string(),
+            completed_at: None,
             json: false,
         },
         &mut env.ctx,

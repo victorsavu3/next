@@ -267,6 +267,74 @@ fn negative_score_adjustment_moves_task_down() {
 }
 
 // ---------------------------------------------------------------------------
+// no_time_urgency tag flag
+// ---------------------------------------------------------------------------
+
+#[test]
+fn no_time_urgency_tag_suppresses_overdue_factor() {
+    use chrono::Duration;
+    let mut env = common::setup();
+
+    // Overdue task with no special tag.
+    let yesterday = (Local::now().date_naive() - Duration::days(3)).to_string();
+    add::run(
+        add::Args { due: Some(yesterday.clone()), ..add_args("Overdue normal") },
+        &mut env.ctx,
+    ).unwrap();
+
+    // Same overdue date, but tagged with @wishlist which has no_time_urgency.
+    add::run(
+        add::Args {
+            due: Some(yesterday),
+            tags: vec!["wishlist".into()],
+            ..add_args("Overdue wishlist")
+        },
+        &mut env.ctx,
+    ).unwrap();
+
+    let mut meta = TagMeta::default();
+    meta.no_time_urgency = true;
+    env.ctx.store.set_tag_meta("wishlist", meta).unwrap();
+
+    let ranked = score_all(&mut env);
+    let t = titles(&ranked);
+    let normal_pos = t.iter().position(|&s| s == "Overdue normal").unwrap();
+    let wishlist_pos = t.iter().position(|&s| s == "Overdue wishlist").unwrap();
+    assert!(
+        normal_pos < wishlist_pos,
+        "overdue normal task should rank above overdue wishlist (no_time_urgency)"
+    );
+}
+
+#[test]
+fn low_priority_tag_reduces_score_by_one() {
+    let mut env = common::setup();
+
+    add::run(add_args("Plain task"), &mut env.ctx).unwrap();
+    add::run(
+        add::Args { tags: vec!["wishlist".into()], ..add_args("Wishlist task") },
+        &mut env.ctx,
+    ).unwrap();
+
+    // Tag with low priority → tag_low default = -1.0; combined with priority_medium=1.0 → base 0.
+    let mut meta = TagMeta::default();
+    meta.priority = Some(Priority::Low);
+    env.ctx.store.set_tag_meta("wishlist", meta).unwrap();
+
+    let ranked = score_all(&mut env);
+    // Plain task score ≈ 1.0 (medium priority + small age).
+    // Wishlist score ≈ 0.0 (1.0 - 1.0) + tiny age ≈ small positive.
+    let plain = ranked.iter().find(|t| t.task.title == "Plain task").unwrap();
+    let wish = ranked.iter().find(|t| t.task.title == "Wishlist task").unwrap();
+    assert!(
+        plain.score > wish.score,
+        "plain task ({:.3}) should score higher than wishlist task ({:.3})",
+        plain.score,
+        wish.score
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Done task excluded from scored list
 // ---------------------------------------------------------------------------
 
@@ -276,7 +344,7 @@ fn done_task_does_not_appear_in_scored_list() {
 
     add::run(add::Args { slug: Some("open".into()), ..add_args("Open task") }, &mut env.ctx).unwrap();
     add::run(add::Args { slug: Some("finished".into()), ..add_args("Done task") }, &mut env.ctx).unwrap();
-    done::run(done::Args { id: "finished".into(), json: false }, &mut env.ctx).unwrap();
+    done::run(done::Args { id: "finished".into(), completed_at: None, json: false }, &mut env.ctx).unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);

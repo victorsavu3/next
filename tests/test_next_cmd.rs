@@ -77,7 +77,7 @@ fn next_excludes_done_tasks() {
     .unwrap();
     add::run(add_args("Open task"), &mut env.ctx).unwrap();
 
-    done::run(done::Args { id: "done-task".into(), json: false }, &mut env.ctx).unwrap();
+    done::run(done::Args { id: "done-task".into(), completed_at: None, json: false }, &mut env.ctx).unwrap();
 
     // next only shows open tasks
     next_cmd::run(next_args(None), &mut env.ctx).unwrap();

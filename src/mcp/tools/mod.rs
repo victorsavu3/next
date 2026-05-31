@@ -75,6 +75,7 @@ pub fn all_tools() -> Vec<Tool> {
                 "properties": {
                     "id": { "type": "string", "description": "UUID, UUID prefix, or slug" },
                     "action": { "type": "string", "enum": ["start", "stop", "done", "cancel", "move"], "description": "State transition or move. Omit to only edit fields." },
+                    "completed_at": { "type": "string", "description": "Completion date for recurrence scheduling (action=done only). ISO 8601 or natural language. Defaults to today." },
                     "title": { "type": "string" },
                     "due": { "type": "string" },
                     "clear_due": { "type": "boolean" },
@@ -172,12 +173,12 @@ pub fn all_tools() -> Vec<Tool> {
         },
         Tool {
             name: "manage_tag",
-            description: "Manage tag metadata. Actions: list, show, describe, clear_description, set_url, clear_url, set_priority, clear_priority.",
+            description: "Manage tag metadata. Actions: list, show, describe, clear_description, set_url, clear_url, set_priority, clear_priority, set_no_time_urgency, clear_no_time_urgency.",
             input_schema: json!({
                 "type": "object",
                 "required": ["action"],
                 "properties": {
-                    "action": { "type": "string", "enum": ["list", "show", "describe", "clear_description", "set_url", "clear_url", "set_priority", "clear_priority"] },
+                    "action": { "type": "string", "enum": ["list", "show", "describe", "clear_description", "set_url", "clear_url", "set_priority", "clear_priority", "set_no_time_urgency", "clear_no_time_urgency"] },
                     "tag": { "type": "string" },
                     "description": { "type": "string" },
                     "url": { "type": "string" },

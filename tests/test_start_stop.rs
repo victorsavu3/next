@@ -112,7 +112,7 @@ fn started_task_can_be_marked_done() {
     let task = env.ctx.store.list_tasks().unwrap().remove(0);
 
     start::run(start::Args { id: task.id.to_string(), json: false }, &mut env.ctx).unwrap();
-    done::run(done::Args { id: task.id.to_string(), json: false }, &mut env.ctx).unwrap();
+    done::run(done::Args { id: task.id.to_string(), completed_at: None, json: false }, &mut env.ctx).unwrap();
 
     let updated = env.ctx.store.get_task(task.id).unwrap();
     assert_eq!(updated.status, Status::Done);

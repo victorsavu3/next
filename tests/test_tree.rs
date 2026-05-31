@@ -93,7 +93,7 @@ fn tree_excludes_done_tasks_by_default() {
     add::run(add_args("Open task"), &mut env.ctx).unwrap();
 
     done::run(
-        done::Args { id: "done-task".into(), json: false },
+        done::Args { id: "done-task".into(), completed_at: None, json: false },
         &mut env.ctx,
     )
     .unwrap();
@@ -120,7 +120,7 @@ fn tree_all_includes_done_tasks() {
     )
     .unwrap();
     done::run(
-        done::Args { id: "done-task".into(), json: false },
+        done::Args { id: "done-task".into(), completed_at: None, json: false },
         &mut env.ctx,
     )
     .unwrap();

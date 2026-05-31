@@ -200,10 +200,14 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
 
     // ── done with recurrence ────────────────────────────────────────────────
     if action == Some("done") {
+        let completion_date = str_param(params, "completed_at")
+            .map(|expr| parse_date(expr, today))
+            .transpose()?
+            .unwrap_or(today);
         task.mark_done();
         let task_path = storage::task_path(&ctx.repo_root, &task);
         let mut paths = vec![task_path];
-        if let Some(next_task) = spawn_next(&task, today)? {
+        if let Some(next_task) = spawn_next(&task, completion_date)? {
             let next_path = storage::task_path(&ctx.repo_root, &next_task);
             ctx.store.save_task(&next_task)?;
             paths.push(next_path);

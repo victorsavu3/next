@@ -141,6 +141,7 @@ fn list_excludes_done_tasks_by_default() {
     done::run(
         done::Args {
             id: "done-task".to_string(),
+            completed_at: None,
             json: false,
         },
         &mut env.ctx,
@@ -470,7 +471,7 @@ fn default_list_shows_parent_when_all_children_done() {
     ).unwrap();
 
     use next::cli::commands::done;
-    done::run(done::Args { id: "child".into(), json: false }, &mut env.ctx).unwrap();
+    done::run(done::Args { id: "child".into(), completed_at: None, json: false }, &mut env.ctx).unwrap();
 
     let tasks = apply_filter(&mut env, vec![]);
     let titles: Vec<&str> = tasks.iter().map(|t| t.task.title.as_str()).collect();
@@ -487,7 +488,7 @@ fn parent_filter_only_returns_active_descendants_by_default() {
     add::run(add::Args { slug: Some("done-child".into()), parent: Some(proj.id.to_string()), ..add_args("Done child") }, &mut env.ctx).unwrap();
 
     use next::cli::commands::done;
-    done::run(done::Args { id: "done-child".into(), json: false }, &mut env.ctx).unwrap();
+    done::run(done::Args { id: "done-child".into(), completed_at: None, json: false }, &mut env.ctx).unwrap();
 
     // Without --all, done children are excluded even within the parent: scope.
     let today = chrono::Local::now().date_naive();

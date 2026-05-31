@@ -31,6 +31,7 @@ fn add_args(title: &str) -> add::Args {
 fn done_args(id: &str) -> done::Args {
     done::Args {
         id: id.to_string(),
+        completed_at: None,
         json: false,
     }
 }
