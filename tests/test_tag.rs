@@ -550,10 +550,10 @@ fn tag_meta_all_fields_survives_reload() {
 fn legacy_description_file_reads_as_tag_meta() {
     use std::fs;
     let env = common::setup();
-    // Write a legacy single-field TOML file directly.
+    // Write a legacy single-field TOML file directly (using encoded path).
     let tags_dir = env.ctx.repo_root.join("tags");
     fs::create_dir_all(&tags_dir).unwrap();
-    fs::write(tags_dir.join("@work.toml"), "description = \"Office tasks\"\n").unwrap();
+    fs::write(tags_dir.join("__context__work.toml"), "description = \"Office tasks\"\n").unwrap();
 
     let meta = env.ctx.store.get_tag_meta("@work").unwrap().unwrap();
     assert_eq!(meta.description.as_deref(), Some("Office tasks"));

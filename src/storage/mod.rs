@@ -8,8 +8,37 @@ pub use toml_store::TomlStore;
 
 use std::path::{Path, PathBuf};
 
-use crate::{domain::task::Task, error::Result};
+use crate::{domain::task::Task, error::{AppError, Result}};
 use crate::store::VcsBackend as _;
+
+/// Encodes a tag string to a filesystem-safe path component.
+///
+/// `@` context tags become `__context__<name>` and `#` resource tags become
+/// `__resource__<name>`.  Slashes in the name remain real directory separators.
+/// Freeform tags (no prefix) are returned unchanged.
+///
+/// Examples: `@home/kitchen` → `__context__home/kitchen`,
+///           `#laptop/personal` → `__resource__laptop/personal`.
+pub fn encode_tag_path(tag: &str) -> String {
+    if let Some(rest) = tag.strip_prefix('@') {
+        format!("__context__{rest}")
+    } else if let Some(rest) = tag.strip_prefix('#') {
+        format!("__resource__{rest}")
+    } else {
+        tag.to_owned()
+    }
+}
+
+/// Reverses [`encode_tag_path`].
+pub fn decode_tag_path(encoded: &str) -> String {
+    if let Some(rest) = encoded.strip_prefix("__context__") {
+        format!("@{rest}")
+    } else if let Some(rest) = encoded.strip_prefix("__resource__") {
+        format!("#{rest}")
+    } else {
+        encoded.to_owned()
+    }
+}
 
 /// Opens the repository at `root` and returns a cached store and a git backend.
 ///
@@ -22,10 +51,84 @@ pub fn open(root: PathBuf) -> Result<(CachedStore, GitBackend)> {
     let state_path = state_path_for_repo(&root);
     let inner = TomlStore::open(root.clone(), state_path)?;
     let vcs = GitBackend::open(&root)?;
+    migrate_tag_paths(&root, &vcs)?;
     let head_hash = vcs.head_hash()?;
     let db_path = root.join(".next.db");
     let store = CachedStore::open(inner, db_path, &head_hash)?;
     Ok((store, vcs))
+}
+
+/// Renames any top-level `tags/@*` or `tags/#*` entries to percent-encoded
+/// equivalents (`%40*` / `%23*`) and commits the rename so git history stays
+/// consistent.  Runs at most once per repository: after the first run all
+/// top-level entries already start with `%`.
+fn migrate_tag_paths(root: &Path, vcs: &GitBackend) -> Result<()> {
+    let tags_dir = root.join("tags");
+    if !tags_dir.exists() {
+        return Ok(());
+    }
+
+    let mut to_stage: Vec<PathBuf> = Vec::new();
+
+    for entry in std::fs::read_dir(&tags_dir)? {
+        let old = entry?.path();
+        let name = old.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        // Migrate both literal @/# (original format) and %40/%23 (intermediate format).
+        if !name.starts_with('@') && !name.starts_with('#')
+            && !name.starts_with("%40") && !name.starts_with("%23")
+        {
+            continue;
+        }
+        // Decode to canonical tag name, then re-encode to new format.
+        let canonical = if let Some(rest) = name.strip_prefix("%40") {
+            format!("@{rest}")
+        } else if let Some(rest) = name.strip_prefix("%23") {
+            format!("#{rest}")
+        } else {
+            name.to_owned()
+        };
+        let new_name = encode_tag_path(&canonical);
+        let new = tags_dir.join(&new_name);
+        if new.exists() {
+            continue;
+        }
+
+        if old.is_file() {
+            to_stage.push(old.clone());
+            to_stage.push(new.clone());
+            std::fs::rename(&old, &new)
+                .map_err(|e| AppError::Other(format!("migrate tag path {}: {e}", old.display())))?;
+        } else if old.is_dir() {
+            let old_files = collect_toml_files(&old);
+            for old_file in &old_files {
+                let rel = old_file.strip_prefix(&old).unwrap();
+                to_stage.push(old_file.clone());
+                to_stage.push(new.join(rel));
+            }
+            std::fs::rename(&old, &new)
+                .map_err(|e| AppError::Other(format!("migrate tag dir {}: {e}", old.display())))?;
+        }
+    }
+
+    if !to_stage.is_empty() {
+        vcs.commit(&to_stage, "next: migrate tag paths to __context__/__resource__ encoding")?;
+    }
+    Ok(())
+}
+
+fn collect_toml_files(dir: &Path) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                result.extend(collect_toml_files(&path));
+            } else if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                result.push(path);
+            }
+        }
+    }
+    result
 }
 
 /// Returns the full path where `task` is (or will be) stored under `root`.
@@ -35,11 +138,11 @@ pub fn task_path(root: &Path, task: &Task) -> PathBuf {
 
 /// Returns the path where the metadata file for `tag` is stored under `root`.
 ///
-/// The tag string maps directly to a path: `@home/kitchen` →
-/// `<root>/tags/@home/kitchen.toml`.  Slashes in the tag name become real
-/// directory separators, so hierarchical tags form a natural directory tree.
+/// `@` / `#` prefixes are replaced with `__context__` / `__resource__` so the
+/// path is safe on all platforms and renders correctly in Forgejo:
+/// `@home/kitchen` → `<root>/tags/__context__home/kitchen.toml`.
 pub fn tag_meta_path(root: &Path, tag: &str) -> PathBuf {
-    root.join("tags").join(format!("{tag}.toml"))
+    root.join("tags").join(format!("{}.toml", encode_tag_path(tag)))
 }
 
 /// Alias kept for callers that reference the description-only path.

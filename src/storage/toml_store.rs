@@ -115,10 +115,10 @@ impl TomlStore {
         self.root.join("tags")
     }
 
-    /// Absolute path for the description file of `tag`.
-    /// `@home/kitchen` → `<root>/tags/@home/kitchen.toml`
+    /// Absolute path for the metadata file of `tag`.
+    /// `@home/kitchen` → `<root>/tags/%40home/kitchen.toml`
     fn tag_file_path(&self, tag: &str) -> PathBuf {
-        self.tags_dir().join(format!("{tag}.toml"))
+        self.tags_dir().join(format!("{}.toml", crate::storage::encode_tag_path(tag)))
     }
 
     /// Acquires an exclusive repository-level lock.
@@ -270,8 +270,9 @@ fn walk_tags_dir(dir: &Path, root: &Path, result: &mut HashMap<String, TagMeta>)
                         .unwrap_or_default()
                 });
                 if let Ok(rel) = path.strip_prefix(root) {
-                    if let Some(tag) = rel.with_extension("").to_str() {
-                        result.insert(tag.to_owned(), meta);
+                    if let Some(encoded) = rel.with_extension("").to_str() {
+                        let tag = crate::storage::decode_tag_path(encoded);
+                        result.insert(tag, meta);
                     }
                 }
             }
@@ -706,9 +707,9 @@ mod tests {
         assert_eq!(descs.get("python").map(String::as_str), Some("Python work"));
         assert_eq!(descs.len(), 3);
 
-        // Per-tag files created on disk.
-        assert!(dir.path().join("tags").join("@work.toml").exists());
-        assert!(dir.path().join("tags").join("#printer.toml").exists());
+        // Per-tag files created on disk (@ → __context__, # → __resource__).
+        assert!(dir.path().join("tags").join("__context__work.toml").exists());
+        assert!(dir.path().join("tags").join("__resource__printer.toml").exists());
         assert!(dir.path().join("tags").join("python.toml").exists());
 
         // Legacy field stripped from state.toml.
@@ -736,9 +737,9 @@ mod tests {
         assert_eq!(descs.get("@home/kitchen").map(String::as_str), Some("Kitchen tasks"));
         assert_eq!(descs.get("#laptop/personal").map(String::as_str), Some("Personal laptop"));
 
-        // Hierarchical paths turn into real subdirectories.
-        assert!(dir.path().join("tags/@home/kitchen.toml").exists());
-        assert!(dir.path().join("tags/#laptop/personal.toml").exists());
+        // Hierarchical paths turn into real subdirectories (@ and # encoded).
+        assert!(dir.path().join("tags/__context__home/kitchen.toml").exists());
+        assert!(dir.path().join("tags/__resource__laptop/personal.toml").exists());
     }
 
     #[test]

@@ -116,9 +116,9 @@ fn migration_creates_per_tag_toml_files() {
 
     let _ = open(&dir);
 
-    let work_path = dir.path().join("tags").join("@work.toml");
+    let work_path = dir.path().join("tags").join("__context__work.toml");
     let python_path = dir.path().join("tags").join("python.toml");
-    assert!(work_path.exists(), "tags/@work.toml should be created");
+    assert!(work_path.exists(), "tags/__context__work.toml should be created");
     assert!(python_path.exists(), "tags/python.toml should be created");
 }
 
@@ -143,8 +143,8 @@ fn migration_handles_hierarchical_tags() {
         Some("Frontend work")
     );
 
-    let kitchen_path = dir.path().join("tags").join("@home").join("kitchen.toml");
-    assert!(kitchen_path.exists(), "tags/@home/kitchen.toml should be created");
+    let kitchen_path = dir.path().join("tags").join("__context__home").join("kitchen.toml");
+    assert!(kitchen_path.exists(), "tags/__context__home/kitchen.toml should be created");
 }
 
 #[test]
