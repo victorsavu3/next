@@ -75,7 +75,7 @@ next/                             # crate root (also git repo)
     store.rs                      # Store + VcsBackend traits
     domain/                       # pure domain types (no I/O)
       mod.rs
-      task.rs       state.rs      tag.rs
+      task.rs       state.rs      tag.rs          service.rs
       filter.rs     scoring.rs    date_parse.rs   recurrence.rs
     storage/                      # local TOML + SQLite + git backend
       mod.rs                      # open(), task_path(), tag_meta_path(), encode/decode_tag_path, state_path_for_repo()
@@ -97,7 +97,7 @@ next/                             # crate root (also git repo)
         init.rs       list.rs     mod.rs      move_cmd.rs
         next_cmd.rs   open.rs     resource.rs show.rs
         start.rs      stop.rs     sync.rs     tree.rs
-        user.rs
+        tutorial.rs   user.rs
         tag/
           mod.rs      # TagSubcommand dispatch + list()
           meta.rs     # describe, set-url, set-priority, set-no-time-urgency, show, clear-*
@@ -128,6 +128,7 @@ next/                             # crate root (also git repo)
 | `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
 | `scoring` | `ScoredTask`, `ScoringWeights`, `fn score_and_sort(tasks, all_tasks, today, weights, tag_metas)` |
 | `date_parse` | `fn parse_date(expr, today) -> Result<NaiveDate>` |
+| `service` | `CreateTaskParams`, `EditTaskParams`, `create_task()`, `complete_task()`, `apply_edits()`, `validate_slug()`, `validate_url()` — shared business logic used by both CLI and MCP handlers |
 
 Key `Task` fields: `id`, `title`, `status`, `priority`, `due`, `start`, `long_term`,
 `slug`, `parent_id`, `assignee`, `tags`, `blocked_by`, `score_adjustment`, `description`,
@@ -273,6 +274,7 @@ src/
     recurrence_parse.rs  # parse_recurrence(): shared by add.rs and edit.rs
     commands/
       init.rs       # next init — no AppContext needed; runs git init, creates tasks/
+      tutorial.rs   # next tutorial — no AppContext needed; prints embedded TUTORIAL.md
       add.rs        cancel.rs   context.rs  data.rs
       delete.rs     done.rs     edit.rs     forecast.rs
       list.rs       mod.rs      move_cmd.rs next_cmd.rs

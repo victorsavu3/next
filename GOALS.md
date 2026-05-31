@@ -109,14 +109,13 @@ All list commands accept filters that can be combined freely:
 - Offline edits accumulate as local git commits; sync merges them when connectivity returns
 - Git merge conflicts are resolved manually
 
-### Forgejo integration
-- **Import** — pull issues from a Forgejo repository in as tasks
-- **Completion sync** — marking an imported task complete closes the corresponding Forgejo issue
-- Each imported task stores its Forgejo issue URL so duplicates are avoided on re-import
+### Forgejo integration (removed from core binary)
+Built-in Forgejo import/completion-sync has been removed from `next` and will be
+provided as an external plugin. See REQUIREMENTS.md §10.
 
-### WebCal (iCalendar) support
-- **Import** — read a `.ics` / webcal feed and create or update tasks based on VTODO entries
-- **Export** — write tasks as VTODO entries
+### WebCal (iCalendar) support (removed from core binary)
+Built-in iCal/WebCal import and export has been removed from `next` and will be
+provided as an external plugin. See REQUIREMENTS.md §10.
 
 ### Pipe-friendly output
 Every list/show command supports a `--json` flag. Plain-text output is structured and

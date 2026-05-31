@@ -41,6 +41,7 @@ A task manager with automatic urgency scoring. The binary is called `next`.
 | `next user list` | List all assignees across all tasks |
 | `next tag set-no-time-urgency` | Disable age+due urgency factors for tasks with a tag |
 | `next tag clear-no-time-urgency` | Re-enable time-based urgency for tasks with a tag |
+| `next tutorial` | Print the embedded tutorial |
 
 ---
 

@@ -48,7 +48,7 @@ next edit <id> --title "New title"
 next edit <id> --priority high
 next edit <id> --due 2026-12-31
 next edit <id> --description "Details here"
-next edit <id> --tag @work --tag python     # replaces all tags
+next edit <id> --tag @work --tag python     # adds tags (use --remove-tag to remove)
 ```
 
 Arbitrary key/value data on a task:
@@ -265,7 +265,7 @@ The score shown in `next list` drives ordering. It combines:
 - **Priority factor** — low / medium / high (+0 / +1 / +2)
 - **Project factor** — parent task's priority offsets children (+0.5 / 0 / −0.5)
 - **Age factor** — tasks grow slightly more urgent over time (capped at +2)
-- **Tag factor** — each tag with explicit priority metadata adds an offset; applies to both the task's own tags and its parent's tags (`high` +1.0, `low` −0.5 by default)
+- **Tag factor** — each tag with explicit priority metadata adds an offset; applies to both the task's own tags and its parent's tags (`high` +1.0, `low` −1.0 by default)
 - **Started bonus** — +4.0 when status is `started`; moves active tasks above idle peers
 - **Manual adjustment** — `next edit <id> --adjust +2.0`
 
@@ -302,5 +302,4 @@ next tag [describe | set-url | set-priority | data | show | clear-description | 
 next context [set <@tag>... | clear]
 next resource [set <#tag> on|off]
 next user [set <name>... | clear | list]
-next import forgejo <owner/repo> [--tag TAG]
 ```
