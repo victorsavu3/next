@@ -6,8 +6,7 @@ use crate::domain::{
     filter,
     recurrence::parse_snap,
     scoring,
-    service::{apply_edits, complete_task, create_task, validate_url, CreateTaskParams, EditTaskParams},
-    tag,
+    service::{apply_edits, complete_task, create_task, CreateTaskParams, EditTaskParams},
     task::{Recurrence, Task},
 };
 use crate::resolve::resolve_task_id;

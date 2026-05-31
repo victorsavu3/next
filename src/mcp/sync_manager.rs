@@ -37,6 +37,15 @@ impl SyncScheduler {
     pub fn try_acquire(&self) -> Option<OwnedSemaphorePermit> {
         Arc::clone(&self.semaphore).try_acquire_owned().ok()
     }
+
+    #[cfg(test)]
+    pub fn new_for_test() -> Self {
+        let (tx, _rx) = mpsc::channel(1);
+        Self {
+            tx,
+            semaphore: Arc::new(Semaphore::new(1)),
+        }
+    }
 }
 
 /// Performs a pull+push using the VCS backend inside `ctx`.
@@ -118,9 +127,9 @@ async fn run_sync_background(ctx: &Arc<Mutex<AppContext>>, semaphore: &Arc<Semap
             return;
         }
     };
-    let ctx = ctx.clone();
+    let ctx_for_blocking = ctx.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let mut ctx = ctx.blocking_lock();
+        let mut ctx = ctx_for_blocking.blocking_lock();
         let r = do_sync(&mut ctx);
         drop(permit);
         r

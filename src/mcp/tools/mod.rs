@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn dispatch_internal_error_no_path_disclosure() {
         let (_dir, mut ctx) = make_ctx();
-        let scheduler = crate::mcp::sync_manager::SyncScheduler::new();
+        let scheduler = crate::mcp::sync_manager::SyncScheduler::new_for_test();
 
         // Corrupt the backing store path to force an IO error on the next write.
         // We achieve this by replacing the tasks directory with a file, then
