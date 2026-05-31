@@ -210,3 +210,57 @@ fn multiple_tasks_stored_independently() {
     assert!(titles.contains("Task B"));
     assert!(titles.contains("Task C"));
 }
+
+// ---------------------------------------------------------------------------
+// Auto-apply active context tags
+// ---------------------------------------------------------------------------
+
+#[test]
+fn add_auto_applies_active_context_when_no_context_tag() {
+    use next::domain::state::GlobalState;
+    let mut env = common::setup();
+
+    // Set @work as the active context.
+    let mut state = GlobalState::default();
+    state.active_contexts = vec!["@work".to_string()];
+    env.ctx.store.save_state(&state).unwrap();
+
+    add::run(args("No-context task"), &mut env.ctx).unwrap();
+
+    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    assert!(
+        task.tags.contains(&"@work".to_string()),
+        "active context @work should be auto-applied: {:?}",
+        task.tags
+    );
+}
+
+#[test]
+fn add_does_not_auto_apply_when_context_tag_already_present() {
+    use next::domain::state::GlobalState;
+    let mut env = common::setup();
+
+    let mut state = GlobalState::default();
+    state.active_contexts = vec!["@work".to_string()];
+    env.ctx.store.save_state(&state).unwrap();
+
+    add::run(
+        add::Args { tags: vec!["@home".to_string()], ..args("Home task") },
+        &mut env.ctx,
+    ).unwrap();
+
+    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    assert!(task.tags.contains(&"@home".to_string()), "explicit tag kept");
+    assert!(!task.tags.contains(&"@work".to_string()), "@work must not be auto-applied when user already has a context tag");
+}
+
+#[test]
+fn add_no_auto_apply_when_no_active_context() {
+    let mut env = common::setup();
+    add::run(args("Plain task"), &mut env.ctx).unwrap();
+    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    assert!(
+        task.tags.iter().all(|t| !t.starts_with('@')),
+        "no context tags should be added when no active context is set"
+    );
+}

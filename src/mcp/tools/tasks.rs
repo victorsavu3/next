@@ -179,6 +179,14 @@ pub fn add_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         task.recurrence_id = Some(task.id);
     }
 
+    // Auto-apply active context tags when the task has none of its own.
+    if !task.tags.iter().any(|t| tag::is_context(t)) {
+        let state = ctx.store.get_state()?;
+        for ctx_tag in state.active_contexts {
+            task.tags.push(ctx_tag);
+        }
+    }
+
     let task_path = storage::task_path(&ctx.repo_root, &task);
     ctx.store.save_task(&task)?;
     ctx.vcs.commit(&[task_path], &format!("next: add {}", task.title))?;

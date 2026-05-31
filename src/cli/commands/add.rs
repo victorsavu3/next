@@ -140,6 +140,14 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
             .push(resolve_task_id(&*ctx.store, blocker_ref)?);
     }
 
+    // Auto-apply active context tags when the task has none of its own.
+    if !task.tags.iter().any(|t| tag::is_context(t)) {
+        let state = ctx.store.get_state()?;
+        for ctx_tag in state.active_contexts {
+            task.tags.push(ctx_tag);
+        }
+    }
+
     let short_id = task.id.to_string().replace('-', "")[..8].to_owned();
     let task_path = crate::storage::task_path(&ctx.repo_root, &task);
 
