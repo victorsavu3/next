@@ -1,4 +1,4 @@
-use crate::{domain::{date_parse::parse_date, recurrence::spawn_next}, resolve::resolve_task_id, AppContext};
+use crate::{domain::{date_parse::parse_date, recurrence::spawn_next}, AppContext};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -23,12 +23,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         None => today,
     };
 
-    let id = resolve_task_id(&*ctx.store, &args.id)?;
-    let mut task = ctx.store.get_task(id)?;
-    task.mark_done();
-    ctx.store.save_task(&task)?;
-
-    let task_path = crate::storage::task_path(&ctx.repo_root, &task);
+    let (task, task_path) = super::change_status(ctx, &args.id, |t| t.mark_done())?;
     let mut paths = vec![task_path];
 
     if let Some(next) = spawn_next(&task, completion_date)? {
@@ -37,14 +32,12 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         paths.push(next_path);
     }
 
-    ctx.vcs
-        .commit(&paths, &format!("next: done {}", task.title))?;
+    ctx.vcs.commit(&paths, &format!("next: done {}", task.title))?;
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);
     } else {
-        ctx.log
-            .info("done", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+        ctx.log.info("done", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
     }
     Ok(())
 }
