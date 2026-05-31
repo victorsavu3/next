@@ -2,11 +2,10 @@ use chrono::Local;
 use crate::cli::recurrence_parse::parse_recurrence;
 use crate::domain::{
     date_parse::parse_date,
-    tag,
-    task::Task,
+    service::{create_task, CreateTaskParams},
 };
 
-use crate::{resolve::resolve_task_id, AppContext};
+use crate::AppContext;
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -86,72 +85,44 @@ pub struct Args {
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
 
-    let mut task = Task::new(args.title);
+    let due = args.due.map(|expr| parse_date(&expr, today)).transpose()?;
+    let start = args.start.map(|expr| parse_date(&expr, today)).transpose()?;
 
-    if let Some(expr) = args.due {
-        task.due = Some(parse_date(&expr, today)?);
-    }
-    if let Some(expr) = args.start {
-        task.start = Some(parse_date(&expr, today)?);
-    }
-
-    if let Some(p) = args.priority {
-        task.priority = p.parse()?;
-    }
-
-    task.slug = args.slug;
-    task.assignee = args.assignee;
-    for t in &args.tags {
-        tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
-    }
-    task.tags = args.tags;
-    task.description = args.description;
-    if let Some(ref u) = args.url {
-        validate_url(u)?;
-    }
-    task.url = args.url;
-    task.notes = args.notes;
-    task.long_term = args.long_term;
-
-    if let Some(adj) = args.adjust {
-        task.score_adjustment = adj;
-    }
-
-    let anchor = task.start.or(task.due).unwrap_or(today);
-    if let Some(recurrence) = parse_recurrence(
+    let anchor = start.or(due).unwrap_or(today);
+    let recurrence = parse_recurrence(
         args.recur_schedule,
         args.recur_completion,
         args.recur_snap.as_deref(),
         anchor,
-    )? {
-        task.recurrence = Some(recurrence);
-        task.recurrence_id = Some(task.id);
-    }
+    )?;
 
-    if let Some(ref parent_ref) = args.parent {
-        task.parent_id = Some(resolve_task_id(&*ctx.store, parent_ref)?);
-    }
+    let params = CreateTaskParams {
+        due,
+        start,
+        priority: args.priority,
+        slug: args.slug,
+        assignee: args.assignee,
+        tags: args.tags,
+        parent: args.parent,
+        blocked_by: args.blocked_by,
+        description: args.description,
+        url: args.url,
+        notes: args.notes,
+        long_term: args.long_term,
+        score_adjustment: args.adjust,
+        recurrence,
+    };
 
-    for blocker_ref in &args.blocked_by {
-        task.blocked_by
-            .push(resolve_task_id(&*ctx.store, blocker_ref)?);
-    }
-
-    // Auto-apply active context tags when the task has none of its own.
-    if !task.tags.iter().any(|t| tag::is_context(t)) {
-        let state = ctx.store.get_state()?;
-        for ctx_tag in state.active_contexts {
-            task.tags.push(ctx_tag);
-        }
-    }
+    let task = create_task(
+        args.title,
+        params,
+        today,
+        &ctx.repo_root.clone(),
+        &mut *ctx.store,
+        &*ctx.vcs,
+    )?;
 
     let short_id = task.id.to_string().replace('-', "")[..8].to_owned();
-    let task_path = crate::storage::task_path(&ctx.repo_root, &task);
-
-    ctx.store.save_task(&task)?;
-    ctx.vcs
-        .commit(&[task_path], &format!("next: add {}", task.title))?;
-
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);
     } else {
@@ -160,12 +131,3 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 
     Ok(())
 }
-
-pub fn validate_url(u: &str) -> anyhow::Result<()> {
-    if u.starts_with("http://") || u.starts_with("https://") {
-        Ok(())
-    } else {
-        anyhow::bail!("url must start with http:// or https://")
-    }
-}
-

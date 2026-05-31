@@ -1,9 +1,9 @@
 use chrono::Local;
-use super::add::validate_url;
 use crate::cli::recurrence_parse::parse_recurrence;
 use crate::domain::{
     date_parse::parse_date,
     recurrence::parse_snap,
+    service::{apply_edits, validate_url, EditTaskParams},
     tag,
     task::Recurrence,
 };
@@ -132,140 +132,117 @@ pub struct Args {
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
     let id = resolve_task_id(&*ctx.store, &args.id)?;
-    let mut task = ctx.store.get_task(id)?;
 
-    if let Some(title) = args.title {
-        task.title = title;
-    }
+    // Resolve dates.
+    let due = if args.clear_due {
+        None
+    } else {
+        args.due.map(|expr| parse_date(&expr, today)).transpose()?
+    };
+    let start = if args.clear_start {
+        None
+    } else {
+        args.start.map(|expr| parse_date(&expr, today)).transpose()?
+    };
 
-    if args.clear_due {
-        task.due = None;
-    } else if let Some(expr) = args.due {
-        task.due = Some(parse_date(&expr, today)?);
-    }
-
-    if args.clear_start {
-        task.start = None;
-    } else if let Some(expr) = args.start {
-        task.start = Some(parse_date(&expr, today)?);
-    }
-
-    if let Some(p) = args.priority {
-        task.priority = p.parse()?;
-    }
-
-    if let Some(slug) = args.slug {
-        task.slug = Some(slug);
-    }
-
-    if args.clear_assignee {
-        task.assignee = None;
-    } else if let Some(assignee) = args.assignee {
-        task.assignee = Some(assignee);
-    }
-
-    // Validate and add tags from --tag flags (deduplicate).
-    for t in &args.tags {
-        tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
-        if !task.tags.contains(t) {
-            task.tags.push(t.clone());
+    // Validate URL before building params (so we can report errors early).
+    if let Some(ref u) = args.url {
+        if !args.clear_url {
+            validate_url(u)?;
         }
     }
-    // Remove tags from --remove-tag flags.
-    for t in &args.remove_tags {
-        task.tags.retain(|existing| existing != t);
+
+    // Validate tags from --tag.
+    for t in &args.tags {
+        tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
     }
+
     // Process trailing +tag / -tag tokens.
+    let mut add_tags = args.tags.clone();
+    let mut remove_tags = args.remove_tags.clone();
     for token in &args.tag_tokens {
         if let Some(t) = token.strip_prefix('+') {
             tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
-            if !task.tags.contains(&t.to_owned()) {
-                task.tags.push(t.to_owned());
-            }
+            add_tags.push(t.to_owned());
         } else if let Some(t) = token.strip_prefix('-') {
-            task.tags.retain(|existing| existing != t);
+            remove_tags.push(t.to_owned());
         } else {
             anyhow::bail!("unrecognised trailing argument {token:?} — use +tag to add or -tag to remove");
         }
     }
 
-    if args.clear_parent {
-        task.parent_id = None;
-    } else if let Some(ref parent_ref) = args.parent {
-        task.parent_id = Some(resolve_task_id(&*ctx.store, parent_ref)?);
-    }
-
-    if args.clear_blocked_by {
-        task.blocked_by.clear();
-    } else {
-        for blocker_ref in &args.blocked_by {
-            let bid = resolve_task_id(&*ctx.store, blocker_ref)?;
-            if !task.blocked_by.contains(&bid) {
-                task.blocked_by.push(bid);
-            }
-        }
-    }
-
-    if args.clear_description {
-        task.description = None;
-    } else if let Some(d) = args.description {
-        task.description = Some(d);
-    }
-
-    if args.clear_url {
-        task.url = None;
-    } else if let Some(ref u) = args.url {
-        validate_url(u)?;
-        task.url = args.url;
-    }
-
-    if let Some(notes) = args.notes {
-        task.notes = Some(notes);
-    }
-
-    if args.clear_recurrence {
-        task.recurrence = None;
-        task.recurrence_id = None;
+    // Build the recurrence update if any recurrence flags are set.
+    //
+    // We need the current task's anchor to preserve it when editing an existing
+    // Schedule rule — so load the task here just for that.
+    let recurrence: Option<Recurrence> = if args.clear_recurrence {
+        None // handled via clear_recurrence flag
     } else if args.recur_schedule.is_some() || args.recur_completion.is_some() {
-        // Keep existing anchor if the task already has a Schedule rule; otherwise
-        // derive anchor from start/due or fall back to today.
-        let anchor = match &task.recurrence {
+        let existing = ctx.store.get_task(id)?;
+        let anchor = match &existing.recurrence {
             Some(Recurrence::Schedule { anchor, .. }) => *anchor,
-            _ => task.start.or(task.due).unwrap_or(today),
+            _ => existing.start.or(existing.due).unwrap_or(today),
         };
-        if let Some(recurrence) = parse_recurrence(
+        parse_recurrence(
             args.recur_schedule,
             args.recur_completion,
             args.recur_snap.as_deref(),
             anchor,
-        )? {
-            task.recurrence = Some(recurrence);
-            task.recurrence_id.get_or_insert(task.id);
-        }
-    } else if let Some(snap_str) = args.recur_snap {
+        )?
+    } else if let Some(ref snap_str) = args.recur_snap {
         // Standalone --recur-snap: update the snap on an existing recurrence rule.
-        let snap = Some(parse_snap(&snap_str)?);
-        match &mut task.recurrence {
-            Some(Recurrence::Schedule { snap: s, .. }) => *s = snap,
-            Some(Recurrence::Completion { snap: s, .. }) => *s = snap,
-            None => anyhow::bail!("--recur-snap requires an existing recurrence rule; use --recur-schedule or --recur-completion first"),
+        let snap = Some(parse_snap(snap_str)?);
+        let existing = ctx.store.get_task(id)?;
+        match existing.recurrence {
+            Some(Recurrence::Schedule { rrule, anchor, .. }) => {
+                Some(Recurrence::Schedule { rrule, anchor, snap })
+            }
+            Some(Recurrence::Completion { interval_days, .. }) => {
+                Some(Recurrence::Completion { interval_days, snap })
+            }
+            None => anyhow::bail!(
+                "--recur-snap requires an existing recurrence rule; use --recur-schedule or --recur-completion first"
+            ),
         }
-    }
+    } else {
+        None
+    };
 
-    if args.long_term {
-        task.long_term = true;
-    }
+    let edits = EditTaskParams {
+        title: args.title,
+        due,
+        clear_due: args.clear_due,
+        start,
+        clear_start: args.clear_start,
+        priority: args.priority,
+        slug: args.slug,
+        assignee: args.assignee,
+        clear_assignee: args.clear_assignee,
+        add_tags,
+        remove_tags,
+        parent: args.parent,
+        clear_parent: args.clear_parent,
+        blocked_by: args.blocked_by,
+        clear_blocked_by: args.clear_blocked_by,
+        description: args.description,
+        clear_description: args.clear_description,
+        url: args.url,
+        clear_url: args.clear_url,
+        notes: args.notes,
+        recurrence,
+        clear_recurrence: args.clear_recurrence,
+        long_term: if args.long_term { Some(true) } else { None },
+        score_adjustment: args.adjust,
+    };
 
-    if let Some(adj) = args.adjust {
-        task.score_adjustment = adj;
-    }
-
-    task.touch();
-    ctx.store.save_task(&task)?;
-
-    let task_path = crate::storage::task_path(&ctx.repo_root, &task);
-    ctx.vcs
-        .commit(&[task_path], &format!("next: edit {}", task.title))?;
+    let task = apply_edits(
+        id,
+        edits,
+        today,
+        &ctx.repo_root.clone(),
+        &mut *ctx.store,
+        &*ctx.vcs,
+    )?;
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);
@@ -275,4 +252,3 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     }
     Ok(())
 }
-

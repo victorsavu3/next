@@ -1,37 +1,18 @@
 use chrono::Local;
 use serde_json::{json, Value};
 
-use crate::cli::commands::add::validate_url;
 use crate::domain::{
     date_parse::parse_date,
     filter,
-    recurrence::{parse_snap, spawn_next},
+    recurrence::parse_snap,
     scoring,
+    service::{apply_edits, complete_task, create_task, validate_url, CreateTaskParams, EditTaskParams},
     tag,
     task::{Recurrence, Task},
 };
 use crate::resolve::resolve_task_id;
 use crate::storage;
 use crate::AppContext;
-
-/// Validates a user-supplied slug.
-///
-/// Allowed characters: ASCII letters (`a-z`, `A-Z`), digits (`0-9`), hyphen (`-`),
-/// and underscore (`_`).  This allowlist prevents path traversal (no `/`, `..`, or
-/// null bytes) while keeping slugs clean identifiers.  Additional characters may be
-/// permitted in future versions.
-fn validate_slug(slug: &str) -> anyhow::Result<()> {
-    if slug.is_empty() {
-        anyhow::bail!("slug must not be empty");
-    }
-    if let Some(bad) = slug.chars().find(|c| !matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_')) {
-        anyhow::bail!(
-            "slug contains invalid character {bad:?} — only letters, digits, '-' and '_' are allowed"
-        );
-    }
-    Ok(())
-}
-
 
 fn str_param<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
     params.get(key).and_then(|v| v.as_str())
@@ -121,67 +102,50 @@ pub fn add_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: title"))?
         .to_owned();
 
-    let mut task = Task::new(title);
+    let due = str_param(params, "due")
+        .map(|expr| parse_date(expr, today))
+        .transpose()?;
+    let start = str_param(params, "start")
+        .map(|expr| parse_date(expr, today))
+        .transpose()?;
 
-    if let Some(expr) = str_param(params, "due") {
-        task.due = Some(parse_date(expr, today)?);
-    }
-    if let Some(expr) = str_param(params, "start") {
-        task.start = Some(parse_date(expr, today)?);
-    }
-    if let Some(p) = str_param(params, "priority") {
-        task.priority = p.parse()?;
-    }
-    if let Some(s) = str_param(params, "slug") {
-        validate_slug(s)?;
-        task.slug = Some(s.to_owned());
-    }
-    task.assignee = str_param(params, "assignee").map(str::to_owned);
-    task.description = str_param(params, "description").map(str::to_owned);
-    task.notes = str_param(params, "notes").map(str::to_owned);
-    task.long_term = bool_param(params, "long_term");
-
-    if let Some(u) = str_param(params, "url") {
-        validate_url(u)?;
-        task.url = Some(u.to_owned());
-    }
-    if let Some(adj) = params.get("score_adjustment").and_then(|v| v.as_f64()) {
-        task.score_adjustment = adj;
-    }
-
-    for t in strings_param(params, "tags") {
-        tag::validate_tag(&t).map_err(|e| anyhow::anyhow!(e))?;
-        task.tags.push(t);
-    }
-    if let Some(parent_ref) = str_param(params, "parent") {
-        task.parent_id = Some(resolve_task_id(&*ctx.store, parent_ref)?);
-    }
-    for blocker_ref in strings_param(params, "blocked_by") {
-        task.blocked_by.push(resolve_task_id(&*ctx.store, &blocker_ref)?);
-    }
-
-    if let Some(rule) = str_param(params, "recur_schedule") {
-        let anchor = task.start.or(task.due).unwrap_or(today);
+    let recurrence = if let Some(rule) = str_param(params, "recur_schedule") {
+        let anchor = start.or(due).unwrap_or(today);
         let snap = str_param(params, "recur_snap").map(parse_snap).transpose()?;
-        task.recurrence = Some(Recurrence::Schedule { rrule: rule.to_owned(), anchor, snap });
-        task.recurrence_id = Some(task.id);
+        Some(Recurrence::Schedule { rrule: rule.to_owned(), anchor, snap })
     } else if let Some(days) = params.get("recur_completion").and_then(|v| v.as_u64()) {
         let snap = str_param(params, "recur_snap").map(parse_snap).transpose()?;
-        task.recurrence = Some(Recurrence::Completion { interval_days: days as u32, snap });
-        task.recurrence_id = Some(task.id);
-    }
+        Some(Recurrence::Completion { interval_days: days as u32, snap })
+    } else {
+        None
+    };
 
-    // Auto-apply active context tags when the task has none of its own.
-    if !task.tags.iter().any(|t| tag::is_context(t)) {
-        let state = ctx.store.get_state()?;
-        for ctx_tag in state.active_contexts {
-            task.tags.push(ctx_tag);
-        }
-    }
+    let service_params = CreateTaskParams {
+        due,
+        start,
+        priority: str_param(params, "priority").map(str::to_owned),
+        slug: str_param(params, "slug").map(str::to_owned),
+        assignee: str_param(params, "assignee").map(str::to_owned),
+        description: str_param(params, "description").map(str::to_owned),
+        notes: str_param(params, "notes").map(str::to_owned),
+        long_term: bool_param(params, "long_term"),
+        url: str_param(params, "url").map(str::to_owned),
+        score_adjustment: params.get("score_adjustment").and_then(|v| v.as_f64()),
+        tags: strings_param(params, "tags"),
+        parent: str_param(params, "parent").map(str::to_owned),
+        blocked_by: strings_param(params, "blocked_by"),
+        recurrence,
+    };
 
-    let task_path = storage::task_path(&ctx.repo_root, &task);
-    ctx.store.save_task(&task)?;
-    ctx.vcs.commit(&[task_path], &format!("next: add {}", task.title))?;
+    let task = create_task(
+        title,
+        service_params,
+        today,
+        &ctx.repo_root.clone(),
+        &mut *ctx.store,
+        &*ctx.vcs,
+    )?;
+
     ctx.log.info("mcp/add", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
 
     Ok(serde_json::to_value(&task)?)
@@ -197,135 +161,132 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: id"))?;
 
     let id = resolve_task_id(&*ctx.store, id_str)?;
-    let mut task = ctx.store.get_task(id)?;
 
-    // ── State transition ────────────────────────────────────────────────────
+    // ── State transitions that are NOT field edits ──────────────────────────
     let action = str_param(params, "action");
     match action {
-        Some("start")  => task.mark_started(),
-        Some("stop")   => task.mark_stopped(),
-        Some("cancel") => task.mark_cancelled(),
-        Some("done") | Some("move") | None => {} // handled below
+        Some("start") => {
+            let mut task = ctx.store.get_task(id)?;
+            task.mark_started();
+            let task_path = storage::task_path(&ctx.repo_root, &task);
+            ctx.store.save_task(&task)?;
+            ctx.vcs.commit(&[task_path], &format!("next: start {}", task.title))?;
+            ctx.log.info("mcp/start", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+            return Ok(serde_json::to_value(&task)?);
+        }
+        Some("stop") => {
+            let mut task = ctx.store.get_task(id)?;
+            task.mark_stopped();
+            let task_path = storage::task_path(&ctx.repo_root, &task);
+            ctx.store.save_task(&task)?;
+            ctx.vcs.commit(&[task_path], &format!("next: stop {}", task.title))?;
+            ctx.log.info("mcp/stop", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+            return Ok(serde_json::to_value(&task)?);
+        }
+        Some("cancel") => {
+            let mut task = ctx.store.get_task(id)?;
+            task.mark_cancelled();
+            let task_path = storage::task_path(&ctx.repo_root, &task);
+            ctx.store.save_task(&task)?;
+            ctx.vcs.commit(&[task_path], &format!("next: cancel {}", task.title))?;
+            ctx.log.info("mcp/cancel", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+            return Ok(serde_json::to_value(&task)?);
+        }
+        Some("done") => {
+            let completion_date = str_param(params, "completed_at")
+                .map(|expr| parse_date(expr, today))
+                .transpose()?
+                .unwrap_or(today);
+            let task = complete_task(
+                id,
+                completion_date,
+                &ctx.repo_root.clone(),
+                &mut *ctx.store,
+                &*ctx.vcs,
+            )?;
+            ctx.log.info("mcp/done", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+            return Ok(serde_json::to_value(&task)?);
+        }
+        Some("move") | None => {} // fall through to field-edit path
         Some(other) => anyhow::bail!("unknown action {other:?}: expected start, stop, done, cancel, move"),
     }
 
-    // ── done with recurrence ────────────────────────────────────────────────
-    if action == Some("done") {
-        let completion_date = str_param(params, "completed_at")
-            .map(|expr| parse_date(expr, today))
-            .transpose()?
-            .unwrap_or(today);
-        task.mark_done();
-        let task_path = storage::task_path(&ctx.repo_root, &task);
-        let mut paths = vec![task_path];
-        if let Some(next_task) = spawn_next(&task, completion_date)? {
-            let next_path = storage::task_path(&ctx.repo_root, &next_task);
-            ctx.store.save_task(&next_task)?;
-            paths.push(next_path);
-        }
-        ctx.store.save_task(&task)?;
-        ctx.vcs.commit(&paths, &format!("next: done {}", task.title))?;
-        ctx.log.info("mcp/done", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
-        return Ok(serde_json::to_value(&task)?);
-    }
+    // ── Field edits (including optional move/parent update) ─────────────────
 
-    // ── Field edits ─────────────────────────────────────────────────────────
-    if let Some(title) = str_param(params, "title") {
-        task.title = title.to_owned();
-    }
-    if bool_param(params, "clear_due") {
-        task.due = None;
-    } else if let Some(expr) = str_param(params, "due") {
-        task.due = Some(parse_date(expr, today)?);
-    }
-    if bool_param(params, "clear_start") {
-        task.start = None;
-    } else if let Some(expr) = str_param(params, "start") {
-        task.start = Some(parse_date(expr, today)?);
-    }
-    if let Some(p) = str_param(params, "priority") {
-        task.priority = p.parse()?;
-    }
-    if let Some(slug) = str_param(params, "slug") {
-        validate_slug(slug)?;
-        task.slug = Some(slug.to_owned());
-    }
-    if bool_param(params, "clear_assignee") {
-        task.assignee = None;
-    } else if let Some(a) = str_param(params, "assignee") {
-        task.assignee = Some(a.to_owned());
-    }
-    if bool_param(params, "clear_description") {
-        task.description = None;
-    } else if let Some(d) = str_param(params, "description") {
-        task.description = Some(d.to_owned());
-    }
-    if bool_param(params, "clear_url") {
-        task.url = None;
-    } else if let Some(u) = str_param(params, "url") {
-        validate_url(u)?;
-        task.url = Some(u.to_owned());
-    }
-    if let Some(notes) = str_param(params, "notes") {
-        task.notes = Some(notes.to_owned());
-    }
-    if let Some(adj) = params.get("score_adjustment").and_then(|v| v.as_f64()) {
-        task.score_adjustment = adj;
-    }
-    if params.get("long_term").and_then(|v| v.as_bool()).unwrap_or(false) {
-        task.long_term = true;
-    }
-
-    // ── Tags ─────────────────────────────────────────────────────────────────
-    for t in strings_param(params, "add_tags") {
-        tag::validate_tag(&t).map_err(|e| anyhow::anyhow!(e))?;
-        if !task.tags.contains(&t) { task.tags.push(t); }
-    }
-    for t in strings_param(params, "remove_tags") {
-        task.tags.retain(|existing| existing != &t);
-    }
-
-    // ── Parent / move ────────────────────────────────────────────────────────
-    if bool_param(params, "clear_parent") {
-        task.parent_id = None;
-    } else if let Some(parent_ref) = str_param(params, "parent") {
-        task.parent_id = Some(resolve_task_id(&*ctx.store, parent_ref)?);
-    }
-
-    // ── Blocked-by ───────────────────────────────────────────────────────────
-    if bool_param(params, "clear_blocked_by") {
-        task.blocked_by.clear();
-    } else {
-        for b in strings_param(params, "blocked_by") {
-            let bid = resolve_task_id(&*ctx.store, &b)?;
-            if !task.blocked_by.contains(&bid) { task.blocked_by.push(bid); }
-        }
-    }
-
-    // ── Recurrence ───────────────────────────────────────────────────────────
-    if bool_param(params, "clear_recurrence") {
-        task.recurrence = None;
-        task.recurrence_id = None;
+    // Build recurrence update from params.
+    let recurrence: Option<Recurrence> = if bool_param(params, "clear_recurrence") {
+        None // handled via clear_recurrence flag
     } else if let Some(rule) = str_param(params, "recur_schedule") {
-        let anchor = match &task.recurrence {
+        let existing = ctx.store.get_task(id)?;
+        let anchor = match &existing.recurrence {
             Some(Recurrence::Schedule { anchor, .. }) => *anchor,
-            _ => task.start.or(task.due).unwrap_or(today),
+            _ => existing.start.or(existing.due).unwrap_or(today),
         };
         let snap = str_param(params, "recur_snap").map(parse_snap).transpose()?;
-        task.recurrence = Some(Recurrence::Schedule { rrule: rule.to_owned(), anchor, snap });
-        task.recurrence_id.get_or_insert(task.id);
+        Some(Recurrence::Schedule { rrule: rule.to_owned(), anchor, snap })
     } else if let Some(days) = params.get("recur_completion").and_then(|v| v.as_u64()) {
         let snap = str_param(params, "recur_snap").map(parse_snap).transpose()?;
-        task.recurrence = Some(Recurrence::Completion { interval_days: days as u32, snap });
-        task.recurrence_id.get_or_insert(task.id);
-    }
+        Some(Recurrence::Completion { interval_days: days as u32, snap })
+    } else {
+        None
+    };
 
-    task.touch();
-    let task_path = storage::task_path(&ctx.repo_root, &task);
-    ctx.store.save_task(&task)?;
+    let due = if bool_param(params, "clear_due") {
+        None
+    } else {
+        str_param(params, "due")
+            .map(|expr| parse_date(expr, today))
+            .transpose()?
+    };
+    let start = if bool_param(params, "clear_start") {
+        None
+    } else {
+        str_param(params, "start")
+            .map(|expr| parse_date(expr, today))
+            .transpose()?
+    };
+
+    let edits = EditTaskParams {
+        title: str_param(params, "title").map(str::to_owned),
+        due,
+        clear_due: bool_param(params, "clear_due"),
+        start,
+        clear_start: bool_param(params, "clear_start"),
+        priority: str_param(params, "priority").map(str::to_owned),
+        slug: str_param(params, "slug").map(str::to_owned),
+        assignee: str_param(params, "assignee").map(str::to_owned),
+        clear_assignee: bool_param(params, "clear_assignee"),
+        add_tags: strings_param(params, "add_tags"),
+        remove_tags: strings_param(params, "remove_tags"),
+        parent: str_param(params, "parent").map(str::to_owned),
+        clear_parent: bool_param(params, "clear_parent"),
+        blocked_by: strings_param(params, "blocked_by"),
+        clear_blocked_by: bool_param(params, "clear_blocked_by"),
+        description: str_param(params, "description").map(str::to_owned),
+        clear_description: bool_param(params, "clear_description"),
+        url: str_param(params, "url").map(str::to_owned),
+        clear_url: bool_param(params, "clear_url"),
+        notes: str_param(params, "notes").map(str::to_owned),
+        recurrence,
+        clear_recurrence: bool_param(params, "clear_recurrence"),
+        long_term: if params.get("long_term").and_then(|v| v.as_bool()).unwrap_or(false) {
+            Some(true)
+        } else {
+            None
+        },
+        score_adjustment: params.get("score_adjustment").and_then(|v| v.as_f64()),
+    };
+
+    let task = apply_edits(
+        id,
+        edits,
+        today,
+        &ctx.repo_root.clone(),
+        &mut *ctx.store,
+        &*ctx.vcs,
+    )?;
 
     let verb = action.unwrap_or("edit");
-    ctx.vcs.commit(&[task_path], &format!("next: {verb} {}", task.title))?;
     ctx.log.info(&format!("mcp/{verb}"), &format!("[{}] {}", &task.id.to_string()[..8], task.title));
 
     Ok(serde_json::to_value(&task)?)
@@ -454,5 +415,15 @@ mod tests {
         let id = task["id"].as_str().unwrap();
         let err = update_task(&json!({ "id": id, "action": "fly" }), &mut ctx).unwrap_err();
         assert!(err.to_string().contains("unknown action"));
+    }
+
+    #[test]
+    fn update_task_cancel() {
+        let (_dir, mut ctx) = make_ctx();
+        let task = add_task(&json!({ "title": "Cancel me" }), &mut ctx).unwrap();
+        let id = task["id"].as_str().unwrap().to_owned();
+
+        let cancelled = update_task(&json!({ "id": id, "action": "cancel" }), &mut ctx).unwrap();
+        assert_eq!(cancelled["status"], "cancelled");
     }
 }
