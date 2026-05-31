@@ -374,6 +374,11 @@ impl Store for TomlStore {
     }
 
     fn get_state(&self) -> Result<GlobalState> {
+        // Acquire a shared (read) lock before reading so that a concurrent
+        // `save_state` call (which holds an exclusive lock) cannot be
+        // mid-write when we open the file.  Multiple concurrent readers are
+        // allowed; only a writer is mutually exclusive.  The lock is released
+        // automatically when `_lock` is dropped at the end of this scope.
         let _lock = self.acquire_state_read_lock()?;
         let path = self.state_path();
         if !path.exists() {
@@ -385,6 +390,9 @@ impl Store for TomlStore {
     }
 
     fn save_state(&mut self, state: &GlobalState) -> Result<()> {
+        // Acquire an exclusive (write) lock before writing so that concurrent
+        // readers (`get_state`) and writers are kept out until the atomic
+        // rename is complete.  The lock is released when `_lock` is dropped.
         let _lock = self.acquire_state_write_lock()?;
         let content = toml::to_string_pretty(state)
             .map_err(|e| AppError::Other(format!("TOML serialization error: {e}")))?;
