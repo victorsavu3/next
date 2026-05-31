@@ -19,7 +19,7 @@ fn default_project_medium() -> f64 { 0.0 }
 fn default_project_high() -> f64 { 0.5 }
 fn default_age_per_day() -> f64 { 0.01 }
 fn default_age_max() -> f64 { 2.0 }
-fn default_tag_low() -> f64 { -0.5 }
+fn default_tag_low() -> f64 { -1.0 }
 fn default_tag_medium() -> f64 { 0.0 }
 fn default_tag_high() -> f64 { 1.0 }
 fn default_started_bonus() -> f64 { 4.0 }

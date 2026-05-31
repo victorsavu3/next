@@ -88,6 +88,13 @@ pub fn started_factor(status: &Status, w: &ScoringConfig) -> f64 {
     if *status == Status::Started { w.started_bonus } else { 0.0 }
 }
 
+/// Returns `true` if any of `tags` has `no_time_urgency = true` in its metadata.
+pub fn tag_no_time_urgency(tags: &[String], tag_metas: &HashMap<String, TagMeta>) -> bool {
+    tags.iter()
+        .filter_map(|t| tag_metas.get(t))
+        .any(|meta| meta.no_time_urgency)
+}
+
 /// Computes the total urgency score for `task`.
 ///
 /// `parent` is the parent task (if any); its priority and tags both contribute.
@@ -99,13 +106,14 @@ pub fn score(
     w: &ScoringConfig,
     tag_metas: &HashMap<String, TagMeta>,
 ) -> f64 {
+    let no_time = tag_no_time_urgency(&task.tags, tag_metas);
     let own_tags = tag_factor(&task.tags, tag_metas, w);
     let parent_tags = parent.map_or(0.0, |p| tag_factor(&p.tags, tag_metas, w));
 
-    due_factor(task.due, today, w)
+    (if no_time { 0.0 } else { due_factor(task.due, today, w) })
         + priority_factor(&task.priority, w)
         + project_factor(parent.map(|p| &p.priority), w)
-        + age_factor(task, today, w)
+        + (if no_time { 0.0 } else { age_factor(task, today, w) })
         + own_tags
         + parent_tags
         + started_factor(&task.status, w)
@@ -317,7 +325,7 @@ mod tests {
         let mut metas = HashMap::new();
         metas.insert("someday".to_string(), meta_with_priority(Priority::Low));
         let tags = vec!["someday".to_string()];
-        assert_eq!(tag_factor(&tags, &metas, &weights()), -0.5); // tag_low default
+        assert_eq!(tag_factor(&tags, &metas, &weights()), -1.0); // tag_low default
     }
 
     #[test]
@@ -441,6 +449,40 @@ mod tests {
         let child_score = scored.iter().find(|s| s.task.title == "child task").unwrap().score;
         let orphan_score = scored.iter().find(|s| s.task.title == "no parent").unwrap().score;
         assert!(child_score > orphan_score);
+    }
+
+    // --- tag_no_time_urgency ---
+
+    #[test]
+    fn no_time_urgency_suppresses_due_and_age() {
+        let mut task = Task::new("wishlist item");
+        task.tags = vec!["wishlist".to_string()];
+        task.due = Some(today() - chrono::Duration::days(5)); // overdue
+        let old_ts = chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        task.created_at = old_ts; // old task → age capped
+
+        let mut metas = HashMap::new();
+        let mut meta = TagMeta { no_time_urgency: true, ..Default::default() };
+        meta.no_time_urgency = true;
+        metas.insert("wishlist".to_string(), meta);
+
+        let s = score(&task, None, today(), &weights(), &metas);
+        // Only priority_factor(medium)=1.0 contributes; due and age are zeroed.
+        assert!((s - 1.0).abs() < 0.01, "expected ~1.0, got {s}");
+    }
+
+    #[test]
+    fn no_time_urgency_false_still_scores_normally() {
+        let mut task = Task::new("normal");
+        task.tags = vec!["freeform".to_string()];
+        task.due = Some(today()); // due today
+        let mut metas = HashMap::new();
+        metas.insert("freeform".to_string(), TagMeta::default()); // no_time_urgency = false
+        let s = score(&task, None, today(), &weights(), &metas);
+        // due_factor(due today) = 12.0, priority = 1.0 → > 12.0
+        assert!(s > 12.0);
     }
 
     #[test]

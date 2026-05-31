@@ -23,6 +23,10 @@ pub struct TagMeta {
     /// Default priority applied to tasks that carry this tag.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<Priority>,
+    /// When `true`, age and due-date proximity factors are zeroed out for
+    /// tasks carrying this tag, preventing them from gaining urgency over time.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_time_urgency: bool,
 }
 
 /// Classifies a tag string by its prefix convention.
@@ -128,6 +132,12 @@ pub fn validate_tag(tag: &str) -> Result<(), String> {
         // are stored as files under tags/<tag>.toml.
         if segment == ".." {
             return Err(format!("tag {tag:?} must not contain '..' path components"));
+        }
+        // '__' prefix is reserved for internal filesystem encoding.
+        if segment.starts_with("__") {
+            return Err(format!(
+                "tag {tag:?}: segments must not start with '__' (reserved for internal use)"
+            ));
         }
         let mut chars = segment.chars();
         let first = chars.next().unwrap();
@@ -318,5 +328,13 @@ mod tests {
     fn empty_path_segment_rejected() {
         assert!(validate_tag("work//backend").is_err());
         assert!(validate_tag("work/").is_err());
+    }
+
+    #[test]
+    fn double_underscore_prefix_rejected() {
+        assert!(validate_tag("__reserved").is_err());
+        assert!(validate_tag("@__reserved").is_err());
+        assert!(validate_tag("#__reserved").is_err());
+        assert!(validate_tag("work/__internal").is_err());
     }
 }

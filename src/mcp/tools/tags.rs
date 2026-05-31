@@ -21,7 +21,8 @@ fn parse_priority(s: &str) -> anyhow::Result<Priority> {
 /// `action` values:
 ///   read:  "list", "show"
 ///   write: "describe", "clear_description", "set_url", "clear_url",
-///          "set_priority", "clear_priority"
+///          "set_priority", "clear_priority",
+///          "set_no_time_urgency", "clear_no_time_urgency"
 pub fn manage_tag(params: &Value, ctx: &mut AppContext) -> anyhow::Result<(Value, bool)> {
     let action = params
         .get("action")
@@ -37,6 +38,8 @@ pub fn manage_tag(params: &Value, ctx: &mut AppContext) -> anyhow::Result<(Value
         "clear_url" => Ok((clear_url(params, ctx)?, true)),
         "set_priority" => Ok((set_priority(params, ctx)?, true)),
         "clear_priority" => Ok((clear_priority(params, ctx)?, true)),
+        "set_no_time_urgency" => Ok((set_no_time_urgency(params, ctx)?, true)),
+        "clear_no_time_urgency" => Ok((clear_no_time_urgency(params, ctx)?, true)),
         other => anyhow::bail!("unknown action {other:?}"),
     }
 }
@@ -168,6 +171,35 @@ fn clear_priority(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value>
     }
     ctx.vcs.commit(&[tag_path], &format!("next: tag clear-priority {t}"))?;
     Ok(json!({ "tag": t, "cleared": "priority" }))
+}
+
+fn set_no_time_urgency(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+    let t = require_tag(params)?;
+    tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut meta = ctx.store.get_tag_meta(t)?.unwrap_or_default();
+    meta.no_time_urgency = true;
+    ctx.store.set_tag_meta(t, meta)?;
+    let tag_path = storage::tag_meta_path(&ctx.repo_root, t);
+    ctx.vcs.commit(&[tag_path], &format!("next: tag set-no-time-urgency {t}"))?;
+    Ok(json!({ "tag": t, "no_time_urgency": true }))
+}
+
+fn clear_no_time_urgency(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+    let t = require_tag(params)?;
+    tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut meta = ctx
+        .store
+        .get_tag_meta(t)?
+        .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {t:?}"))?;
+    meta.no_time_urgency = false;
+    let tag_path = storage::tag_meta_path(&ctx.repo_root, t);
+    if meta == TagMeta::default() {
+        ctx.store.delete_tag_meta(t)?;
+    } else {
+        ctx.store.set_tag_meta(t, meta)?;
+    }
+    ctx.vcs.commit(&[tag_path], &format!("next: tag clear-no-time-urgency {t}"))?;
+    Ok(json!({ "tag": t, "no_time_urgency": false }))
 }
 
 #[cfg(test)]

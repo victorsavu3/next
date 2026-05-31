@@ -32,6 +32,12 @@ pub enum TagSubcommand {
     /// Remove the priority override for a tag.
     #[command(name = "clear-priority")]
     ClearPriority(ClearPriorityArgs),
+    /// Disable time-based urgency (age + due-date factors) for tasks with this tag.
+    #[command(name = "set-no-time-urgency")]
+    SetNoTimeUrgency(NoTimeUrgencyArgs),
+    /// Re-enable time-based urgency for tasks with this tag.
+    #[command(name = "clear-no-time-urgency")]
+    ClearNoTimeUrgency(NoTimeUrgencyArgs),
     /// Manage arbitrary key/value data for a tag.
     Data(DataArgs),
 }
@@ -84,6 +90,12 @@ pub struct SetPriorityArgs {
 #[derive(clap::Args, Debug)]
 pub struct ClearPriorityArgs {
     /// Tag whose priority override should be removed.
+    pub tag: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct NoTimeUrgencyArgs {
+    /// Tag to update (e.g. @wishlist, someday).
     pub tag: String,
 }
 
@@ -150,6 +162,8 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         Some(TagSubcommand::ClearUrl(a)) => clear_url(ctx, a),
         Some(TagSubcommand::SetPriority(a)) => set_priority(ctx, a),
         Some(TagSubcommand::ClearPriority(a)) => clear_priority(ctx, a),
+        Some(TagSubcommand::SetNoTimeUrgency(a)) => set_no_time_urgency(ctx, a),
+        Some(TagSubcommand::ClearNoTimeUrgency(a)) => clear_no_time_urgency(ctx, a),
         Some(TagSubcommand::Data(a)) => data(ctx, a),
     }
 }
@@ -224,6 +238,9 @@ fn show(ctx: &mut AppContext, args: ShowArgs) -> anyhow::Result<()> {
     }
     if let Some(ref p) = meta.priority {
         println!("  priority:    {}", priority_display(p));
+    }
+    if meta.no_time_urgency {
+        println!("  no-time-urgency: true");
     }
     if !meta.data.is_empty() {
         println!("  data:");
@@ -325,6 +342,35 @@ fn clear_priority(ctx: &mut AppContext, args: ClearPriorityArgs) -> anyhow::Resu
         .commit(&[tag_path], &format!("next: tag clear-priority {}", args.tag))?;
     ctx.log
         .info("tag", &format!("cleared priority for {}", args.tag));
+    Ok(())
+}
+
+fn set_no_time_urgency(ctx: &mut AppContext, args: NoTimeUrgencyArgs) -> anyhow::Result<()> {
+    tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut meta = ctx.store.get_tag_meta(&args.tag)?.unwrap_or_default();
+    meta.no_time_urgency = true;
+    ctx.store.set_tag_meta(&args.tag, meta)?;
+    let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
+    ctx.vcs.commit(&[tag_path], &format!("next: tag set-no-time-urgency {}", args.tag))?;
+    ctx.log.info("tag", &format!("set no-time-urgency for {}", args.tag));
+    Ok(())
+}
+
+fn clear_no_time_urgency(ctx: &mut AppContext, args: NoTimeUrgencyArgs) -> anyhow::Result<()> {
+    tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut meta = ctx
+        .store
+        .get_tag_meta(&args.tag)?
+        .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {:?}", args.tag))?;
+    meta.no_time_urgency = false;
+    let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
+    if meta == TagMeta::default() {
+        ctx.store.delete_tag_meta(&args.tag)?;
+    } else {
+        ctx.store.set_tag_meta(&args.tag, meta)?;
+    }
+    ctx.vcs.commit(&[tag_path], &format!("next: tag clear-no-time-urgency {}", args.tag))?;
+    ctx.log.info("tag", &format!("cleared no-time-urgency for {}", args.tag));
     Ok(())
 }
 
