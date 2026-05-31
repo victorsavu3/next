@@ -82,7 +82,7 @@ next/                             # crate root (also git repo)
       toml_store.rs               # TomlStore: source-of-truth TOML file I/O
       cached_store.rs             # CachedStore: wraps TomlStore with SQLite read cache
       git_backend.rs              # GitBackend: implements VcsBackend via git2
-    remote_storage/               # stub HTTP backend
+    remote_storage/               # HTTP backend (calls next-mcp server)
       mod.rs                      # re-exports RemoteStore, RemoteVcs
       remote_store.rs             # stub Store (all methods return "not yet implemented")
       remote_vcs.rs               # no-op VcsBackend
@@ -267,10 +267,13 @@ Both migrations are idempotent (subsequent opens are no-ops).
 **`GitBackend`** wraps `Mutex<git2::Repository>` to satisfy `Send + Sync`. Commit
 messages follow the pattern `next: <verb> "<task title>"`.
 
-### `next::remote_storage` — stub HTTP backend
+### `next::remote_storage` — HTTP backend (next-mcp client)
 
-`RemoteStore { url, token }` — construction never fails; errors are returned lazily when
-any method is called. `RemoteVcs` — all VCS operations are no-ops.
+`RemoteStore { url, token }` implements `Store` by calling the corresponding MCP tools
+on a `next-mcp` server (`POST /mcp`, Bearer auth). Currently each method returns an
+"not yet implemented" error; the intent is to replace each stub with an HTTP call to
+the matching tool (see §9.2 of REQUIREMENTS.md for the full mapping table).
+`RemoteVcs` — all VCS operations are deliberate no-ops (the server owns persistence).
 
 ### `next::cli` — command handlers
 

@@ -1,8 +1,8 @@
-//! [`RemoteStore`] — stub implementation of [`Store`] backed by a remote server.
+//! [`RemoteStore`] — [`Store`] implementation that calls a hosted `next-mcp` server.
 //!
-//! Every method currently returns [`AppError::Other`] with a "not yet
-//! implemented" message. When the server protocol is finalised the stubs will
-//! be replaced with HTTP calls.
+//! Every method is currently a stub returning "not yet implemented". Each stub
+//! should be replaced with a `POST /mcp` call to the matching MCP tool using
+//! Bearer authentication (see REQUIREMENTS.md §9.2 for the mapping table).
 
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -13,7 +13,7 @@ use crate::{
     store::Store,
 };
 
-/// Stub [`Store`] that will talk to a hosted `next-server` over HTTP.
+/// [`Store`] backed by a hosted `next-mcp` server.
 ///
 /// Construction never fails; errors are returned lazily when any method is
 /// called, so the binary starts up cleanly even before the server is reachable.
@@ -34,7 +34,8 @@ impl RemoteStore {
 
     fn not_implemented(&self) -> AppError {
         AppError::Other(format!(
-            "remote store ({}) not yet implemented",
+            "remote backend ({}) not yet implemented — \
+             each method should call the matching MCP tool on the next-mcp server",
             self.url
         ))
     }

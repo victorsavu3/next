@@ -494,19 +494,42 @@ kind = "local"
 
 ### 9.2 Remote backend
 
-Tasks are stored on a hosted server over HTTP. A git repository is not required locally.
+Tasks are stored on a hosted `next-mcp` server over HTTP. A local git repository is
+not required; the server owns the repository and its own persistence.
 
 ```toml
 [backend]
 kind = "remote"
 
 [backend.remote]
-url   = "https://tasks.example.com"
-token = "my-bearer-token"   # optional bearer token
+url   = "https://next-mcp.example.com"
+token = "my-bearer-token"
 ```
 
-The remote backend is currently a stub — all operations return "not yet implemented"
-errors. The VCS operations are no-ops (the server handles its own persistence).
+The remote backend MUST implement the `Store` trait by calling the corresponding MCP
+tools on the `next-mcp` server via its Streamable HTTP transport
+(`POST /mcp`, `Authorization: Bearer <token>`).
+
+| `Store` method | MCP tool | Notes |
+|----------------|----------|-------|
+| `list_tasks` | `list_tasks` | pass `include_all: true` |
+| `get_task` | `get_task` | extract `task` field from response |
+| `get_task_by_slug` | `get_task` | pass slug as `id` |
+| `find_tasks_by_prefix` | `get_task` | pass prefix as `id` |
+| `save_task` | `update_task` (edit) or `add_task` | use `add_task` when task does not exist yet |
+| `delete_task` | `delete_task` | |
+| `get_state` | `get_state` | |
+| `save_state` | `set_context` + `set_resource` + `set_user_filter` | decompose state into tool calls |
+| `get_tag_meta` / `set_tag_meta` / etc. | `manage_tag` | |
+
+VCS operations (`commit`, `pull`, `push`) MUST be no-ops — the server handles its own
+git persistence. `next sync` MUST be a no-op for the remote backend.
+
+`autosync` MUST be silently ignored for the remote backend; the server manages
+synchronisation independently.
+
+The `token` field is required for the remote backend; the CLI MUST error on startup
+if it is absent.
 
 ### 9.3 Sync configuration
 
