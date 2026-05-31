@@ -168,17 +168,6 @@ impl TomlStore {
         Ok(file)
     }
 
-    /// Canonical filename for a task (no directory prefix).
-    pub(crate) fn task_filename(task: &Task) -> String {
-        if let Some(ref slug) = task.slug {
-            format!("{slug}.toml")
-        } else {
-            let title_part = title_to_slug(&task.title);
-            let uuid_hex = task.id.to_string().replace('-', "");
-            format!("{title_part}-{}.toml", &uuid_hex[..8])
-        }
-    }
-
     /// Finds the current on-disk path for `id`, or `None` if not found.
     ///
     /// Checks files whose names contain the UUID prefix first (fast path for
@@ -281,23 +270,6 @@ fn walk_tags_dir(dir: &Path, root: &Path, result: &mut HashMap<String, TagMeta>)
     Ok(())
 }
 
-/// Converts a task title to a URL-safe slug component:
-/// lowercase, runs of non-alphanumeric chars collapsed to a single `-`.
-fn title_to_slug(title: &str) -> String {
-    let mut slug = String::new();
-    let mut prev_dash = true;
-    for c in title.chars() {
-        if c.is_alphanumeric() {
-            slug.push(c.to_ascii_lowercase());
-            prev_dash = false;
-        } else if !prev_dash {
-            slug.push('-');
-            prev_dash = true;
-        }
-    }
-    slug.trim_end_matches('-').to_owned()
-}
-
 impl Store for TomlStore {
     fn get_task(&self, id: Uuid) -> Result<Task> {
         match self.find_task_file(id)? {
@@ -350,7 +322,7 @@ impl Store for TomlStore {
             }
         }
 
-        let new_filename = Self::task_filename(task);
+        let new_filename = crate::storage::filenames::generate_filename(task);
         let new_path = self.tasks_dir().join(&new_filename);
 
         if let Some(old_path) = self.find_task_file(task.id)? {
@@ -775,15 +747,6 @@ mod tests {
         let descs = store.list_tag_descriptions().unwrap();
         assert_eq!(descs.len(), 1);
         assert_eq!(descs.get("@work").map(String::as_str), Some("Work tasks"));
-    }
-
-    #[test]
-    fn title_to_slug_basic() {
-        assert_eq!(title_to_slug("Buy milk"), "buy-milk");
-        assert_eq!(title_to_slug("  leading spaces"), "leading-spaces");
-        assert_eq!(title_to_slug("Hello, World!"), "hello-world");
-        assert_eq!(title_to_slug("abc123"), "abc123");
-        assert_eq!(title_to_slug("a--b"), "a-b");
     }
 
     #[test]

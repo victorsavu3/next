@@ -1,4 +1,5 @@
 pub mod cached_store;
+pub mod filenames;
 pub mod git_backend;
 pub mod toml_store;
 
@@ -133,7 +134,7 @@ fn collect_toml_files(dir: &Path) -> Vec<PathBuf> {
 
 /// Returns the full path where `task` is (or will be) stored under `root`.
 pub fn task_path(root: &Path, task: &Task) -> PathBuf {
-    root.join("tasks").join(TomlStore::task_filename(task))
+    filenames::task_path(root, task)
 }
 
 /// Returns the path where the metadata file for `tag` is stored under `root`.
