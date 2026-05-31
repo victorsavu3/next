@@ -1,9 +1,9 @@
 use chrono::Local;
+use crate::cli::recurrence_parse::parse_recurrence;
 use crate::domain::{
     date_parse::parse_date,
-    recurrence::parse_snap,
     tag,
-    task::{Recurrence, Task},
+    task::Task,
 };
 
 use crate::{resolve::resolve_task_id, AppContext};
@@ -117,17 +117,14 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         task.score_adjustment = adj;
     }
 
-    if let Some(rule) = args.recur_schedule {
-        let anchor = task.start.or(task.due).unwrap_or(today);
-        let snap = args.recur_snap.as_deref().map(parse_snap).transpose()?;
-        task.recurrence = Some(Recurrence::Schedule { rrule: rule, anchor, snap });
-        task.recurrence_id = Some(task.id);
-    } else if let Some(interval) = args.recur_completion {
-        let snap = args.recur_snap.as_deref().map(parse_snap).transpose()?;
-        task.recurrence = Some(Recurrence::Completion {
-            interval_days: interval,
-            snap,
-        });
+    let anchor = task.start.or(task.due).unwrap_or(today);
+    if let Some(recurrence) = parse_recurrence(
+        args.recur_schedule,
+        args.recur_completion,
+        args.recur_snap.as_deref(),
+        anchor,
+    )? {
+        task.recurrence = Some(recurrence);
         task.recurrence_id = Some(task.id);
     }
 

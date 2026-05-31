@@ -1,5 +1,6 @@
 use chrono::Local;
 use super::add::validate_url;
+use crate::cli::recurrence_parse::parse_recurrence;
 use crate::domain::{
     date_parse::parse_date,
     recurrence::parse_snap,
@@ -225,23 +226,22 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     if args.clear_recurrence {
         task.recurrence = None;
         task.recurrence_id = None;
-    } else if let Some(rule) = args.recur_schedule {
+    } else if args.recur_schedule.is_some() || args.recur_completion.is_some() {
         // Keep existing anchor if the task already has a Schedule rule; otherwise
         // derive anchor from start/due or fall back to today.
         let anchor = match &task.recurrence {
             Some(Recurrence::Schedule { anchor, .. }) => *anchor,
             _ => task.start.or(task.due).unwrap_or(today),
         };
-        let snap = args.recur_snap.as_deref().map(parse_snap).transpose()?;
-        task.recurrence = Some(Recurrence::Schedule { rrule: rule, anchor, snap });
-        task.recurrence_id.get_or_insert(task.id);
-    } else if let Some(interval) = args.recur_completion {
-        let snap = args.recur_snap.as_deref().map(parse_snap).transpose()?;
-        task.recurrence = Some(Recurrence::Completion {
-            interval_days: interval,
-            snap,
-        });
-        task.recurrence_id.get_or_insert(task.id);
+        if let Some(recurrence) = parse_recurrence(
+            args.recur_schedule,
+            args.recur_completion,
+            args.recur_snap.as_deref(),
+            anchor,
+        )? {
+            task.recurrence = Some(recurrence);
+            task.recurrence_id.get_or_insert(task.id);
+        }
     } else if let Some(snap_str) = args.recur_snap {
         // Standalone --recur-snap: update the snap on an existing recurrence rule.
         let snap = Some(parse_snap(&snap_str)?);

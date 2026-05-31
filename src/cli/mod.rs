@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod filter;
+pub mod recurrence_parse;
 pub mod render;
 
 #[cfg(test)]
