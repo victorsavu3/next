@@ -58,8 +58,6 @@ fn main() -> anyhow::Result<()> {
         Command::User(_) => "user",
         Command::Forecast(_) => "forecast",
         Command::Sync(_) => "sync",
-        Command::Import(_) => "import",
-        Command::Export(_) => "export",
         Command::Tag(_) => "tag",
         Command::Tree(_) => "tree",
         Command::Tutorial(_) => unreachable!("handled above"),
@@ -67,7 +65,7 @@ fn main() -> anyhow::Result<()> {
 
     let is_mutation = matches!(
         cmd_name,
-        "add" | "start" | "stop" | "done" | "cancel" | "edit" | "delete" | "move" | "import" | "tag"
+        "add" | "start" | "stop" | "done" | "cancel" | "edit" | "delete" | "move" | "tag"
     );
 
     let result = match command {
@@ -90,8 +88,6 @@ fn main() -> anyhow::Result<()> {
         Command::User(args) => commands::user::run(args, &mut ctx),
         Command::Forecast(args) => commands::forecast::run(args, &mut ctx),
         Command::Sync(args) => commands::sync::run(args, &mut ctx),
-        Command::Import(args) => commands::import::run(args, &mut ctx),
-        Command::Export(args) => commands::export::run(args, &mut ctx),
         Command::Tag(args) => commands::tag::run(args, &mut ctx),
         Command::Tree(args) => commands::tree::run(args, &mut ctx),
         Command::Tutorial(_) => unreachable!("handled above"),

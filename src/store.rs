@@ -50,14 +50,6 @@ pub trait Store: Send + Sync {
 
     fn delete_task(&mut self, id: Uuid) -> Result<()>;
 
-    /// Returns the task linked to this Forgejo issue URL, if any.
-    /// Used for deduplication on re-import.
-    fn get_task_by_forgejo_issue(&self, url: &str) -> Result<Option<Task>>;
-
-    /// Returns the task linked to this iCalendar UID, if any.
-    /// Used for deduplication on re-import.
-    fn get_task_by_webcal_uid(&self, uid: &str) -> Result<Option<Task>>;
-
     // --- Global state ---
 
     fn get_state(&self) -> Result<GlobalState>;

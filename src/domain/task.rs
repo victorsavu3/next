@@ -131,14 +131,6 @@ pub struct Task {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
 
-    /// Forgejo issue URL set by the importer; used for deduplication and write-back.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub forgejo_issue: Option<String>,
-
-    /// iCalendar UID set by the importer; used for deduplication.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub webcal_uid: Option<String>,
-
     /// Recurrence rule; present only on recurring tasks.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recurrence: Option<Recurrence>,
@@ -210,8 +202,6 @@ impl Task {
             description: None,
             url: None,
             notes: None,
-            forgejo_issue: None,
-            webcal_uid: None,
             recurrence: None,
             recurrence_id: None,
             created_at: now,

@@ -117,12 +117,6 @@ pub enum Command {
     /// Sync with the remote VCS backend.
     Sync(commands::sync::Args),
 
-    /// Import tasks from an external source.
-    Import(commands::import::Args),
-
-    /// Export tasks to an external format.
-    Export(commands::export::Args),
-
     /// Manage tag descriptions.
     Tag(commands::tag::Args),
 

@@ -373,20 +373,6 @@ impl Store for TomlStore {
         }
     }
 
-    fn get_task_by_forgejo_issue(&self, url: &str) -> Result<Option<Task>> {
-        Ok(self
-            .read_all_tasks()?
-            .into_iter()
-            .find(|t| t.forgejo_issue.as_deref() == Some(url)))
-    }
-
-    fn get_task_by_webcal_uid(&self, uid: &str) -> Result<Option<Task>> {
-        Ok(self
-            .read_all_tasks()?
-            .into_iter()
-            .find(|t| t.webcal_uid.as_deref() == Some(uid)))
-    }
-
     fn get_state(&self) -> Result<GlobalState> {
         let _lock = self.acquire_state_read_lock()?;
         let path = self.state_path();

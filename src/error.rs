@@ -23,9 +23,6 @@ pub enum AppError {
     #[error("git conflict in files: {0:?}")]
     GitConflict(Vec<PathBuf>),
 
-    #[error("forgejo API error: {0}")]
-    ForgejoApi(String),
-
     #[error(transparent)]
     Io(#[from] std::io::Error),
 

@@ -161,20 +161,6 @@ pub struct BackendConfig {
     pub remote: Option<RemoteBackendConfig>,
 }
 
-// ── ForgejoConfig ─────────────────────────────────────────────────────────────
-
-/// Connection settings for the Forgejo integration.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ForgejoConfig {
-    /// Base URL of the Forgejo instance, e.g. `https://forgejo.example.com`.
-    #[serde(default)]
-    pub base_url: String,
-
-    /// Personal access token with read/write access to issues.
-    #[serde(default)]
-    pub token: String,
-}
-
 // ── Config ────────────────────────────────────────────────────────────────────
 
 /// Application-wide configuration.
@@ -188,10 +174,6 @@ pub struct ForgejoConfig {
 /// repository = "/home/alice/tasks"   # use next from any directory
 /// forecast_horizon_days = 60
 /// next_count = 5
-///
-/// [forgejo]
-/// base_url = "https://forgejo.example.com"
-/// token    = "my-secret-token"
 ///
 /// [scoring]
 /// priority_high = 3.0          # only override what you want to change
@@ -216,10 +198,6 @@ pub struct Config {
     /// Urgency scoring weights.
     #[serde(default)]
     pub scoring: ScoringConfig,
-
-    /// Forgejo integration settings.
-    #[serde(default)]
-    pub forgejo: ForgejoConfig,
 
     /// Number of days ahead shown by `next forecast`.
     #[serde(default = "default_forecast_horizon_days")]
@@ -257,7 +235,6 @@ impl Default for Config {
         Self {
             backend: BackendConfig::default(),
             scoring: ScoringConfig::default(),
-            forgejo: ForgejoConfig::default(),
             forecast_horizon_days: default_forecast_horizon_days(),
             next_count: default_next_count(),
             list_limit: None,

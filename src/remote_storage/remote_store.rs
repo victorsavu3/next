@@ -66,14 +66,6 @@ impl Store for RemoteStore {
         Err(self.not_implemented())
     }
 
-    fn get_task_by_forgejo_issue(&self, _url: &str) -> Result<Option<Task>> {
-        Err(self.not_implemented())
-    }
-
-    fn get_task_by_webcal_uid(&self, _uid: &str) -> Result<Option<Task>> {
-        Err(self.not_implemented())
-    }
-
     fn get_state(&self) -> Result<GlobalState> {
         Err(self.not_implemented())
     }

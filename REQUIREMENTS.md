@@ -37,13 +37,6 @@ A task MAY carry the following optional fields:
 | `notes` | string | Multi-line free text |
 | `data` | map of string → JSON value | Arbitrary key-value pairs for tool integrations or AI-provided metadata; values may be any JSON type except null |
 
-External-reference fields (set by importers, never by the user):
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `forgejo_issue` | URL string | Set by Forgejo importer |
-| `webcal_uid` | string | iCalendar UID; set by iCal importer |
-
 When a task recurs it MUST carry a `[recurrence]` table. The `type` field selects the mode:
 
 ```toml
@@ -138,7 +131,7 @@ Example: `"Water plants"` with no slug and UUID `a1b2c3d4-…` → `water-plants
 2. If merge conflicts exist, print an actionable error message and exit with code 2
 3. `git push` local commits to the remote
 
-All mutations (add, edit, done, import) MUST produce a git commit automatically. The
+All mutations (add, edit, done) MUST produce a git commit automatically. The
 commit message MUST identify the operation and the task title.
 
 ---
@@ -551,42 +544,8 @@ this setting.
 
 ## 10. Integrations
 
-### 10.1 Forgejo
-
-```
-next import forgejo <owner/repo> [--tag <tag>]
-```
-
-- MUST fetch all issues (open and closed) from the Forgejo API
-- MUST create a task for each issue not already present (matched by `forgejo_issue` URL)
-- MUST update `status` of previously imported issues to reflect current Forgejo state
-- MUST map issue labels to freeform tags on the task
-- MUST store the issue URL in `forgejo_issue`
-- MUST NOT overwrite user edits to other fields on re-import
-
-When `next done` is called on a task with a `forgejo_issue` field, the tool MUST close
-the corresponding issue via the Forgejo API. No other field is written back to Forgejo.
-
-### 10.2 iCalendar (WebCal)
-
-```
-next import ical <file-or-url>
-next export ical [filters...] [--output <file>]
-```
-
-**Import:**
-- MUST parse VTODO components from the provided `.ics` file or URL
-- MUST create or update tasks matched by `webcal_uid`
-- MUST only import the `STATUS` field: `NEEDS-ACTION` / `IN-PROCESS` → `open`;
-  `COMPLETED` / `CANCELLED` → `done` / `cancelled`
-- MUST NOT import any other VTODO fields
-
-**Export:**
-- MUST emit a valid iCalendar file with one VTODO per matching task
-- MUST map: `title` → `SUMMARY`, `due` → `DUE`, `priority` → `PRIORITY`,
-  `status` → `STATUS`
-- MUST emit `UID` using the task's UUID
-- Fields with no iCalendar equivalent MUST be omitted silently
+Integrations (Forgejo, iCalendar/WebCal) have been removed from the core binary and
+will be provided as plugins. See the plugin system requirements when available.
 
 ---
 

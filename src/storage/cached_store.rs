@@ -150,34 +150,6 @@ impl Store for CachedStore {
         })
     }
 
-    fn get_task_by_forgejo_issue(&self, url: &str) -> Result<Option<Task>> {
-        self.with_conn(|conn| {
-            conn.query_row(
-                "SELECT data FROM tasks WHERE forgejo_issue = ?1",
-                params![url],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|e| AppError::Other(format!("sqlite get by forgejo: {e}")))?
-            .map(deserialize_task)
-            .transpose()
-        })
-    }
-
-    fn get_task_by_webcal_uid(&self, uid: &str) -> Result<Option<Task>> {
-        self.with_conn(|conn| {
-            conn.query_row(
-                "SELECT data FROM tasks WHERE webcal_uid = ?1",
-                params![uid],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|e| AppError::Other(format!("sqlite get by webcal: {e}")))?
-            .map(deserialize_task)
-            .transpose()
-        })
-    }
-
     fn get_state(&self) -> Result<GlobalState> {
         self.with_conn(|conn| match get_meta(conn, "state")? {
             Some(json) => serde_json::from_str(&json)
@@ -222,15 +194,11 @@ fn setup_schema(conn: &Connection) -> Result<()> {
             value TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS tasks (
-            id            TEXT PRIMARY KEY,
-            slug          TEXT,
-            forgejo_issue TEXT,
-            webcal_uid    TEXT,
-            data          TEXT NOT NULL
+            id   TEXT PRIMARY KEY,
+            slug TEXT,
+            data TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_tasks_slug    ON tasks(slug);
-        CREATE INDEX IF NOT EXISTS idx_tasks_forgejo ON tasks(forgejo_issue);
-        CREATE INDEX IF NOT EXISTS idx_tasks_webcal  ON tasks(webcal_uid);
+        CREATE INDEX IF NOT EXISTS idx_tasks_slug ON tasks(slug);
         ",
     )
     .map_err(|e| AppError::Other(format!("sqlite schema setup: {e}")))
@@ -259,15 +227,8 @@ fn upsert_task(conn: &Connection, task: &Task) -> Result<()> {
     let data = serde_json::to_string(task)
         .map_err(|e| AppError::Other(format!("serialize task {}: {e}", task.id)))?;
     conn.execute(
-        "INSERT OR REPLACE INTO tasks(id, slug, forgejo_issue, webcal_uid, data)
-         VALUES(?1, ?2, ?3, ?4, ?5)",
-        params![
-            task.id.to_string(),
-            task.slug.as_deref(),
-            task.forgejo_issue.as_deref(),
-            task.webcal_uid.as_deref(),
-            data,
-        ],
+        "INSERT OR REPLACE INTO tasks(id, slug, data) VALUES(?1, ?2, ?3)",
+        params![task.id.to_string(), task.slug.as_deref(), data],
     )
     .map_err(|e| AppError::Other(format!("sqlite upsert task {}: {e}", task.id)))?;
     Ok(())
@@ -489,25 +450,6 @@ mod tests {
             assert_eq!(all.len(), 1);
             assert_eq!(all[0].title, "Persisted");
         }
-    }
-
-    #[test]
-    fn get_by_forgejo_issue() {
-        let (_dir, mut store, _vcs) = setup();
-        let mut task = Task::new("Linked task");
-        task.forgejo_issue = Some("https://forgejo.example.com/org/repo/issues/42".into());
-        store.save_task(&task).unwrap();
-
-        let found = store
-            .get_task_by_forgejo_issue("https://forgejo.example.com/org/repo/issues/42")
-            .unwrap();
-        assert!(found.is_some());
-        assert_eq!(found.unwrap().id, task.id);
-
-        let miss = store
-            .get_task_by_forgejo_issue("https://forgejo.example.com/other/99")
-            .unwrap();
-        assert!(miss.is_none());
     }
 
     #[test]

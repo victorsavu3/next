@@ -95,11 +95,11 @@ next/                             # crate root (also git repo)
       render.rs                   # text column / --json rendering
       commands/
         add.rs        cancel.rs   context.rs  data.rs
-        delete.rs     done.rs     edit.rs     export.rs
-        forecast.rs   import.rs   init.rs     list.rs
-        mod.rs        move_cmd.rs next_cmd.rs open.rs
-        resource.rs   show.rs     start.rs    stop.rs
-        sync.rs       tag.rs      tree.rs     user.rs
+        delete.rs     done.rs     edit.rs     forecast.rs
+        init.rs       list.rs     mod.rs      move_cmd.rs
+        next_cmd.rs   open.rs     resource.rs show.rs
+        start.rs      stop.rs     sync.rs     tag.rs
+        tree.rs       user.rs
   tests/
     common/mod.rs                 # shared test helpers (TestEnv, setup())
     test_add.rs   test_data.rs    test_done.rs   test_edit.rs
@@ -145,8 +145,6 @@ pub trait Store: Send + Sync {
     fn list_tasks(&self) -> Result<Vec<Task>>;
     fn save_task(&mut self, task: &Task) -> Result<()>;
     fn delete_task(&mut self, id: Uuid) -> Result<()>;
-    fn get_task_by_forgejo_issue(&self, url: &str) -> Result<Option<Task>>;
-    fn get_task_by_webcal_uid(&self, uid: &str) -> Result<Option<Task>>;
     fn get_state(&self) -> Result<GlobalState>;
     fn save_state(&mut self, state: &GlobalState) -> Result<()>;
     // Core tag metadata (stored in tags/<tag>.toml; committed to git)
@@ -176,7 +174,6 @@ pub trait VcsBackend: Send + Sync {
 pub struct Config {
     pub backend: BackendConfig,
     pub scoring: ScoringConfig,
-    pub forgejo: ForgejoConfig,
     pub sync: SyncConfig,              // git_subprocess: use shell git for push/pull
     pub forecast_horizon_days: u32,    // default 90
     pub next_count: usize,             // default 10
@@ -213,8 +210,8 @@ pub enum AppError {
 **`CachedStore`** is the `Store` implementation returned by `open()`. It wraps
 `TomlStore` and maintains an SQLite database at `<repo>/.next.db`:
 
-- **Reads** (`list_tasks`, `get_task`, `get_task_by_slug`, prefix/forgejo/webcal
-  lookups) query SQLite directly — no per-task TOML file reads.
+- **Reads** (`list_tasks`, `get_task`, `get_task_by_slug`, prefix lookups) query SQLite
+  directly — no per-task TOML file reads.
 - **Writes** (`save_task`, `delete_task`, `save_state`) write to TOML first
   (authoritative), then update the SQLite cache in-place.
 - **Cache invalidation**: on `open()`, `CachedStore` compares the stored git HEAD hash
@@ -227,15 +224,11 @@ SQLite schema:
 ```sql
 CREATE TABLE meta  (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE tasks (
-    id            TEXT PRIMARY KEY,
-    slug          TEXT,
-    forgejo_issue TEXT,
-    webcal_uid    TEXT,
-    data          TEXT NOT NULL   -- full Task serialised as JSON
+    id   TEXT PRIMARY KEY,
+    slug TEXT,
+    data TEXT NOT NULL   -- full Task serialised as JSON
 );
-CREATE INDEX idx_tasks_slug    ON tasks(slug);
-CREATE INDEX idx_tasks_forgejo ON tasks(forgejo_issue);
-CREATE INDEX idx_tasks_webcal  ON tasks(webcal_uid);
+CREATE INDEX idx_tasks_slug ON tasks(slug);
 ```
 
 **`TomlStore`** reads and writes one `.toml` file per task in `tasks/`.  Tag metadata
@@ -291,10 +284,10 @@ src/
       init.rs       # next init — no AppContext needed; runs git init, creates tasks/
       add.rs        cancel.rs   context.rs  data.rs
       delete.rs     done.rs     edit.rs     export.rs
-      forecast.rs   import.rs   list.rs     mod.rs
-      move_cmd.rs   next_cmd.rs open.rs     resource.rs
-      show.rs       start.rs    stop.rs     sync.rs
-      tag.rs        tree.rs     user.rs
+      forecast.rs   list.rs     mod.rs      move_cmd.rs
+      next_cmd.rs   open.rs     resource.rs show.rs
+      start.rs      stop.rs     sync.rs     tag.rs
+      tree.rs       user.rs
 ```
 
 ---
@@ -332,7 +325,7 @@ pub struct AppContext {
    If command is Tutorial → print embedded TUTORIAL.md; exit
 3. AppContext::new(): locate repository root, select backend, open CachedStore
 4. Execute command logic (reads from store; writes to store + vcs)
-5. Task mutations (add/edit/start/stop/done/cancel/delete/move/import/tag describe): vcs.commit(changed_paths, message)
+5. Task mutations (add/edit/start/stop/done/cancel/delete/move/tag describe): vcs.commit(changed_paths, message)
    State mutations (context/resource/user): write to XDG state file only; no commit
 6. Render output (text or JSON to stdout)
 7. If autosync enabled and command succeeded and is a mutation: run sync (pull + push)
@@ -538,10 +531,6 @@ kind = "local"   # "local" | "remote"
 [backend.remote]
 url   = "https://tasks.example.com"
 token = "my-bearer-token"
-
-[forgejo]
-base_url = "https://forgejo.example.com"
-token    = "my-secret-token"
 
 [scoring]
 due_overdue_base    = 12.0
