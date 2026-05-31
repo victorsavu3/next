@@ -382,14 +382,16 @@ async fn webhook_mcp_token_not_accepted_on_webhook_route() {
 }
 
 #[tokio::test]
-async fn webhook_route_absent_without_token() {
+async fn webhook_unconfigured_returns_401_not_404() {
+    // When NEXT_WEBHOOK_TOKEN is unset the endpoint must still return 401 so
+    // that an attacker cannot distinguish "no webhook" from "wrong token".
     let dir = tempfile::tempdir().unwrap();
     let addr = start_test_server("mcp-tok", None, dir.path()).await;
     let status = Client::new()
         .post(format!("http://{addr}/webhook/sync"))
         .bearer_auth("anything")
         .send().await.unwrap().status();
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 // ── Autosync behaviour ────────────────────────────────────────────────────────

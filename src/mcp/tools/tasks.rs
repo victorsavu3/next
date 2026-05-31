@@ -8,7 +8,7 @@ use crate::domain::{
     recurrence::{parse_snap, spawn_next},
     scoring,
     tag,
-    task::{Priority, Recurrence, Task},
+    task::{Recurrence, Task},
 };
 use crate::resolve::resolve_task_id;
 use crate::storage;

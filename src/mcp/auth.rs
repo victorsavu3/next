@@ -24,7 +24,7 @@ pub async fn require_webhook_bearer(
     req: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let token = state.webhook_token.as_deref().ok_or(StatusCode::NOT_FOUND)?;
+    let token = state.webhook_token.as_deref().ok_or(StatusCode::UNAUTHORIZED)?;
     check_bearer(req.headers(), token)?;
     Ok(next.run(req).await)
 }
