@@ -67,7 +67,7 @@ next/                             # crate root (also git repo)
         tasks.rs                  # list_tasks, get_task, add_task, update_task, delete_task; validate_slug (allowlist: a-zA-Z0-9-_)
         state.rs                  # sync, get_state, set_context, set_resource, set_user_filter
         tags.rs                   # manage_tag
-        data.rs                   # manage_task_data
+        data.rs                   # manage_task_data; validate_key (allowlist: a-zA-Z0-9-_, max 256 chars)
         view.rs                   # get_forecast
     lib.rs                        # library root; public re-exports
     config.rs                     # Config, BackendConfig, BackendKind
@@ -76,9 +76,10 @@ next/                             # crate root (also git repo)
     domain/                       # pure domain types (no I/O)
       mod.rs
       task.rs       state.rs      tag.rs
-      filter.rs     scoring.rs    date_parse.rs
+      filter.rs     scoring.rs    date_parse.rs   recurrence.rs
     storage/                      # local TOML + SQLite + git backend
-      mod.rs                      # open(), task_path(), tag_description_path()
+      mod.rs                      # open(), task_path(), tag_meta_path(), encode/decode_tag_path, state_path_for_repo()
+      filenames.rs                # generate_filename(), task_path(), title_to_slug()
       toml_store.rs               # TomlStore: source-of-truth TOML file I/O
       cached_store.rs             # CachedStore: wraps TomlStore with SQLite read cache
       git_backend.rs              # GitBackend: implements VcsBackend via git2
@@ -89,13 +90,18 @@ next/                             # crate root (also git repo)
       mod.rs                      # top-level Cli struct + Command enum (clap derive)
       filter.rs                   # FilterArgs -> FilterSet
       render.rs                   # text column / --json rendering
+      recurrence_parse.rs         # parse_recurrence(): --recur-schedule/completion/snap → Recurrence
       commands/
         add.rs        cancel.rs   context.rs  data.rs
         delete.rs     done.rs     edit.rs     forecast.rs
         init.rs       list.rs     mod.rs      move_cmd.rs
         next_cmd.rs   open.rs     resource.rs show.rs
-        start.rs      stop.rs     sync.rs     tag.rs
-        tree.rs       user.rs
+        start.rs      stop.rs     sync.rs     tree.rs
+        user.rs
+        tag/
+          mod.rs      # TagSubcommand dispatch + list()
+          meta.rs     # describe, set-url, set-priority, set-no-time-urgency, show, clear-*
+          data.rs     # tag data set/get/unset/list
   tests/
     common/mod.rs                 # shared test helpers (TestEnv, setup())
     test_add.rs   test_data.rs    test_done.rs   test_edit.rs
@@ -118,7 +124,7 @@ next/                             # crate root (also git repo)
 | `task` | `Task`, `Status` (`Open`/`Started`/`Done`/`Cancelled`), `Priority`, `Recurrence`, `Snap` |
 | `recurrence` | `fn next_occurrence(rrule, anchor, after)`, `fn apply_snap(date, snap)`, `fn spawn_next(task, today)` |
 | `state` | `GlobalState` (active contexts, excluded contexts, active users, resource availability map) |
-| `tag` | `TagKind` (Context / Resource / Freeform); `validate_tag` (allowlist: segments start with letter, contain `a-zA-Z0-9-_`, `/` separator allowed, `..` explicitly rejected) |
+| `tag` | `TagKind` (Context / Resource / Freeform); `validate_tag` (allowlist: segments start with letter, contain `a-zA-Z0-9-_`, `/` separator allowed, `..` explicitly rejected); `validate_context_tag` (enforces `@` prefix); `validate_resource_tag` (enforces `#` prefix) |
 | `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
 | `scoring` | `ScoredTask`, `ScoringWeights`, `fn score_and_sort(tasks, all_tasks, today, weights, tag_metas)` |
 | `date_parse` | `fn parse_date(expr, today) -> Result<NaiveDate>` |
@@ -179,7 +185,7 @@ pub struct Config {
 }
 
 pub struct BackendConfig {
-    pub kind: BackendKind,             // only Local is supported
+    pub kind: BackendKind,             // Local (default and only supported value)
 }
 ```
 
@@ -264,21 +270,25 @@ src/
     mod.rs          # top-level Cli + Command enum (clap derive)
     filter.rs       # FilterArgs -> FilterSet conversion
     render.rs       # task list and detail rendering (text and --json)
+    recurrence_parse.rs  # parse_recurrence(): shared by add.rs and edit.rs
     commands/
       init.rs       # next init — no AppContext needed; runs git init, creates tasks/
       add.rs        cancel.rs   context.rs  data.rs
-      delete.rs     done.rs     edit.rs     export.rs
-      forecast.rs   list.rs     mod.rs      move_cmd.rs
-      next_cmd.rs   open.rs     resource.rs show.rs
-      start.rs      stop.rs     sync.rs     tag.rs
-      tree.rs       user.rs
+      delete.rs     done.rs     edit.rs     forecast.rs
+      list.rs       mod.rs      move_cmd.rs next_cmd.rs
+      open.rs       resource.rs show.rs     start.rs
+      stop.rs       sync.rs     tree.rs     user.rs
+      tag/
+        mod.rs      # TagSubcommand dispatch + list()
+        meta.rs     # describe, set-url, set-priority, set-no-time-urgency, show, clear-*
+        data.rs     # tag data set/get/unset/list
 ```
 
 ---
 
 ## 4. Application context
 
-Every command handler receives `&mut AppContext`:
+Mutation command handlers receive `&mut AppContext`; read-only commands take `&AppContext`:
 
 ```rust
 pub struct AppContext {
@@ -287,6 +297,11 @@ pub struct AppContext {
     pub vcs: Box<dyn VcsBackend>,
     pub repo_root: PathBuf,     // absolute path; used for log placement and task paths
     pub log: Logger,
+}
+
+impl AppContext {
+    pub fn store(&self) -> &dyn Store { … }
+    pub fn store_mut(&mut self) -> &mut dyn Store { … }
 }
 ```
 
@@ -309,14 +324,14 @@ Remote access is provided via MCP — connect with `claude mcp add --transport h
    If command is Tutorial → print embedded TUTORIAL.md; exit
 3. AppContext::new(): locate repository root, select backend, open CachedStore
 4. Execute command logic (reads from store; writes to store + vcs)
-5. Task mutations (add/edit/start/stop/done/cancel/delete/move/tag describe): vcs.commit(changed_paths, message)
+5. Task mutations (add/edit/start/stop/done/cancel/delete/move/tag/data): vcs.commit(changed_paths, message)
    State mutations (context/resource/user): write to XDG state file only; no commit
 6. Render output (text or JSON to stdout)
-7. If autosync enabled and command succeeded and is a mutation: run sync (pull + push)
+7. If autosync enabled and command succeeded and is a mutation (`add`/`start`/`stop`/`done`/`cancel`/`edit`/`delete`/`move`/`tag`/`data`): run sync (pull + push)
 8. On error: ctx.log.error(cmd_name, message); propagate to main
 ```
 
-Read-only commands (list, show, forecast, tree) skip steps 5 and 7.
+Read-only commands (list, show, forecast, tree) skip steps 5 and 7 and take `&AppContext` rather than `&mut AppContext`.
 
 ---
 

@@ -41,8 +41,6 @@ A task manager with automatic urgency scoring. The binary is called `next`.
 | `next user list` | List all assignees across all tasks |
 | `next tag set-no-time-urgency` | Disable age+due urgency factors for tasks with a tag |
 | `next tag clear-no-time-urgency` | Re-enable time-based urgency for tasks with a tag |
-| `next context exclude` | Set the excluded context list |
-| `next context clear-excluded` | Clear all excluded contexts |
 
 ---
 
@@ -418,6 +416,10 @@ are stored as their native types; anything else is stored as a string.
 ```
 next data set <id> <key> <value>
 ```
+
+Keys must be non-empty, at most 256 characters, and contain only ASCII letters (`a-z`,
+`A-Z`), digits (`0-9`), hyphens (`-`), and underscores (`_`). Dots, slashes, and spaces
+are not allowed.
 
 **Examples**
 
@@ -884,7 +886,8 @@ file and the table is removed from `state.toml`.
 ### `data` field
 
 The `data` map stores arbitrary key-value pairs (strings, numbers, booleans — null is
-not allowed). Intended for AI-provided metadata and tool integrations.
+not allowed). Intended for AI-provided metadata and tool integrations. Keys are validated:
+non-empty, at most 256 characters, and may only contain `a-zA-Z0-9_-`.
 
 ### Exit codes
 

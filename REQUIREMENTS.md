@@ -489,6 +489,10 @@ next data get <id-or-slug> <key>             # print value for one key
 String values that are valid JSON numbers or booleans are coerced automatically
 (e.g. `"42"` becomes the number `42`, `"true"` becomes boolean `true`).
 
+**Key validation**: keys MUST be non-empty, at most 256 characters, and contain only
+ASCII letters (`a-z`, `A-Z`), digits (`0-9`), hyphens (`-`), and underscores (`_`).
+Dots, slashes, and spaces are not permitted.
+
 ### 8.9 Sync
 
 ```
@@ -521,46 +525,7 @@ by walking up from the current working directory until a `.git` directory is fou
 kind = "local"
 ```
 
-### 9.2 Remote backend
-
-Tasks are stored on a hosted `next-mcp` server over HTTP. A local git repository is
-not required; the server owns the repository and its own persistence.
-
-```toml
-[backend]
-kind = "remote"
-
-[backend.remote]
-url   = "https://next-mcp.example.com"
-token = "my-bearer-token"
-```
-
-The remote backend MUST implement the `Store` trait by calling the corresponding MCP
-tools on the `next-mcp` server via its Streamable HTTP transport
-(`POST /mcp`, `Authorization: Bearer <token>`).
-
-| `Store` method | MCP tool | Notes |
-|----------------|----------|-------|
-| `list_tasks` | `list_tasks` | pass `include_all: true` |
-| `get_task` | `get_task` | extract `task` field from response |
-| `get_task_by_slug` | `get_task` | pass slug as `id` |
-| `find_tasks_by_prefix` | `get_task` | pass prefix as `id` |
-| `save_task` | `update_task` (edit) or `add_task` | use `add_task` when task does not exist yet |
-| `delete_task` | `delete_task` | |
-| `get_state` | `get_state` | |
-| `save_state` | `set_context` + `set_resource` + `set_user_filter` | decompose state into tool calls |
-| `get_tag_meta` / `set_tag_meta` / etc. | `manage_tag` | |
-
-VCS operations (`commit`, `pull`, `push`) MUST be no-ops — the server handles its own
-git persistence. `next sync` MUST be a no-op for the remote backend.
-
-`autosync` MUST be silently ignored for the remote backend; the server manages
-synchronisation independently.
-
-The `token` field is required for the remote backend; the CLI MUST error on startup
-if it is absent.
-
-### 9.3 Sync configuration
+### 9.2 Sync configuration
 
 The `[sync]` section controls how `next sync` (and autosync) performs push/pull:
 
@@ -657,7 +622,9 @@ The `sync` tool MUST cancel any pending deferred timer and run sync immediately,
 
 **Input validation (slug):** The `slug` field accepted by `add_task` and `update_task` MUST be validated using an allowlist: letters (`a-z`, `A-Z`), digits (`0-9`), hyphen (`-`), and underscore (`_`). No other characters are permitted. This prevents path traversal when the slug is used as the task's TOML filename (`tasks/<slug>.toml`).
 
-**Input validation (tags):** Tags are validated by `domain::tag::validate_tag` using an allowlist per path segment: starts with an ASCII letter, then letters / digits / `-` / `_`. The `/` separator is allowed for hierarchical tags (e.g. `@home/kitchen`). The `..` component MUST be explicitly rejected. The `@` and `#` prefixes are permitted.
+**Input validation (tags):** Tags are validated by `domain::tag::validate_tag` using an allowlist per path segment: starts with an ASCII letter, then letters / digits / `-` / `_`. The `/` separator is allowed for hierarchical tags (e.g. `@home/kitchen`). The `..` component MUST be explicitly rejected. The `@` and `#` prefixes are permitted. Context tags (`@`) MUST be validated with `validate_context_tag` and resource tags (`#`) with `validate_resource_tag` to enforce the correct prefix.
+
+**Input validation (data keys):** The `key` field in `manage_task_data` MUST be validated: non-empty, at most 256 characters, and contain only ASCII letters (`a-z`, `A-Z`), digits (`0-9`), hyphens (`-`), and underscores (`_`). Dots, slashes, and spaces MUST be rejected.
 
 ### 12.6 Sync mechanisms
 
