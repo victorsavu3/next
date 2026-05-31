@@ -82,10 +82,6 @@ next/                             # crate root (also git repo)
       toml_store.rs               # TomlStore: source-of-truth TOML file I/O
       cached_store.rs             # CachedStore: wraps TomlStore with SQLite read cache
       git_backend.rs              # GitBackend: implements VcsBackend via git2
-    remote_storage/               # HTTP backend (calls next-mcp server)
-      mod.rs                      # re-exports RemoteStore, RemoteVcs
-      remote_store.rs             # stub Store (all methods return "not yet implemented")
-      remote_vcs.rs               # no-op VcsBackend
     app_context.rs                # AppContext struct + ::new()
     log.rs                        # Logger: append-only next.log with rotation
     resolve.rs                    # fn resolve_task_id(store, id_str) -> Result<Uuid>
@@ -183,13 +179,7 @@ pub struct Config {
 }
 
 pub struct BackendConfig {
-    pub kind: BackendKind,             // Local (default) | Remote
-    pub remote: Option<RemoteBackendConfig>,
-}
-
-pub struct RemoteBackendConfig {
-    pub url: String,
-    pub token: Option<String>,
+    pub kind: BackendKind,             // only Local is supported
 }
 ```
 
@@ -262,14 +252,6 @@ Both migrations are idempotent (subsequent opens are no-ops).
 **`GitBackend`** wraps `Mutex<git2::Repository>` to satisfy `Send + Sync`. Commit
 messages follow the pattern `next: <verb> "<task title>"`.
 
-### `next::remote_storage` — HTTP backend (next-mcp client)
-
-`RemoteStore { url, token }` implements `Store` by calling the corresponding MCP tools
-on a `next-mcp` server (`POST /mcp`, Bearer auth). Currently each method returns an
-"not yet implemented" error; the intent is to replace each stub with an HTTP call to
-the matching tool (see §9.2 of REQUIREMENTS.md for the full mapping table).
-`RemoteVcs` — all VCS operations are deliberate no-ops (the server owns persistence).
-
 ### `next::cli` — command handlers
 
 ```
@@ -308,12 +290,12 @@ pub struct AppContext {
 }
 ```
 
-`AppContext::new()` selects the backend based on `config.backend.kind`:
+`AppContext::new()` opens the local backend:
 
-- **Local**: walk up from CWD for `.git`; call `next::storage::open(root)` to get
+- Walk up from CWD for `.git`; call `next::storage::open(root)` to get
   `(CachedStore, GitBackend)`; fail if no git repo is found.
-- **Remote**: use CWD as `repo_root`; construct `RemoteStore` + `RemoteVcs` from
-  the configured URL and token.
+
+Remote access is provided via MCP — connect with `claude mcp add --transport http https://next-mcp.victorsavu.eu`.
 
 ---
 
@@ -533,11 +515,7 @@ forecast_horizon_days = 90
 next_count            = 10                   # tasks shown by `next next`
 
 [backend]
-kind = "local"   # "local" | "remote"
-
-[backend.remote]
-url   = "https://tasks.example.com"
-token = "my-bearer-token"
+kind = "local"
 
 [scoring]
 due_overdue_base    = 12.0

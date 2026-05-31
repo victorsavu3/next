@@ -203,9 +203,9 @@ runs `next sync` after every mutation command.
 
 ---
 
-## Backend configuration
+## Configuration
 
-By default `next` stores tasks locally. The config file lives at
+`next` stores tasks locally as TOML files in a git repository. The config file lives at
 `$XDG_CONFIG_HOME/task-manager/config.toml`:
 
 ```toml
@@ -213,17 +213,9 @@ repository = "/home/alice/tasks"  # use next from any directory
 
 autosync   = true                 # sync automatically after each mutation
 list_limit = 20                   # cap `next list` output (same as -n 20)
-
-[backend]
-kind = "remote"
-
-[backend.remote]
-url   = "https://tasks.example.com"
-token = "my-bearer-token"   # optional
 ```
 
-The remote backend calls a hosted `next-mcp` server over HTTP (MCP Streamable HTTP, Bearer
-auth). The local backend is the default. See `REQUIREMENTS.md §9.2` for the full mapping.
+Remote access is provided via MCP — see the MCP server section below.
 
 ---
 

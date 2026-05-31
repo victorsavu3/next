@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
-use crate::{BackendKind, Config, Store, VcsBackend};
+use crate::{Config, Store, VcsBackend};
 
 use crate::log::Logger;
 
@@ -23,41 +23,22 @@ impl AppContext {
     pub fn new(config_path: Option<&Path>, repo: Option<&Path>) -> anyhow::Result<Self> {
         let config = load_config(config_path);
 
-        let (store, vcs, repo_root): (Box<dyn Store>, Box<dyn VcsBackend>, PathBuf) =
-            match config.backend.kind {
-                BackendKind::Local => {
-                    let root = if let Some(p) = repo {
-                        p.to_path_buf()
-                    } else if let Some(ref p) = config.repository {
-                        p.clone()
-                    } else {
-                        find_repo_root().context(
-                            "not inside a task repository — run `next init` to set one up, \
-                             or set `repository` in the config file",
-                        )?
-                    };
-                    let (s, v) = crate::storage::open(root.clone())
-                        .context("failed to open local task store")?;
-                    let v = v.with_subprocess(config.sync.git_subprocess);
-                    (Box::new(s), Box::new(v), root)
-                }
-                BackendKind::Remote => {
-                    let remote = config.backend.remote.as_ref().context(
-                        "backend.kind = \"remote\" but no [backend.remote] section in config",
-                    )?;
-                    let root = std::env::current_dir()
-                        .context("cannot determine current directory")?;
-                    let store = crate::remote_storage::RemoteStore::new(
-                        &remote.url,
-                        remote.token.as_deref(),
-                    );
-                    let vcs = crate::remote_storage::RemoteVcs::new(
-                        &remote.url,
-                        remote.token.as_deref(),
-                    );
-                    (Box::new(store), Box::new(vcs), root)
-                }
-            };
+        let root = if let Some(p) = repo {
+            p.to_path_buf()
+        } else if let Some(ref p) = config.repository {
+            p.clone()
+        } else {
+            find_repo_root().context(
+                "not inside a task repository — run `next init` to set one up, \
+                 or set `repository` in the config file",
+            )?
+        };
+        let (s, v) = crate::storage::open(root.clone())
+            .context("failed to open local task store")?;
+        let v = v.with_subprocess(config.sync.git_subprocess);
+        let store: Box<dyn Store> = Box::new(s);
+        let vcs: Box<dyn VcsBackend> = Box::new(v);
+        let repo_root = root;
 
         let log = Logger::new(&repo_root);
         Ok(Self {
