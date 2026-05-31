@@ -26,9 +26,11 @@ A task manager with automatic urgency scoring. The binary is called `next`.
 | `next tag` | List all tags with descriptions, grouped by kind |
 | `next tag describe` | Set a description for any tag |
 | `next tag clear-description` | Remove a tag description |
-| `next context` | Show active contexts |
+| `next context` | Show active and excluded contexts |
 | `next context set` | Set the global active context filter |
 | `next context clear` | Clear all active contexts |
+| `next context exclude` | Set the excluded context list (always-hidden contexts) |
+| `next context clear-excluded` | Clear all excluded contexts |
 | `next resource` | List resources and their availability |
 | `next resource set` | Toggle a resource available or unavailable |
 | `next forecast` | Show upcoming recurrence dates |
@@ -37,9 +39,10 @@ A task manager with automatic urgency scoring. The binary is called `next`.
 | `next user set` | Set the global active user filter |
 | `next user clear` | Clear the user filter |
 | `next user list` | List all assignees across all tasks |
-| `next import forgejo` | Import issues from a Forgejo repository |
-| `next import ical` | Import VTODO entries from an iCalendar file or URL |
-| `next export ical` | Export tasks as an iCalendar VTODO file |
+| `next tag set-no-time-urgency` | Disable age+due urgency factors for tasks with a tag |
+| `next tag clear-no-time-urgency` | Re-enable time-based urgency for tasks with a tag |
+| `next context exclude` | Set the excluded context list |
+| `next context clear-excluded` | Clear all excluded contexts |
 
 ---
 
@@ -206,7 +209,7 @@ next next --json
 
 ### `next show`
 
-Display the full details of a single task, including its description, URL, data, notes, all tags, subtask list, blockers, and recurrence configuration.
+Display the full details of a single task, including its description, URL, data, notes, all tags, subtask list, blockers, recurrence configuration, and urgency score breakdown (due, priority, age, tag, and other factors shown inline).
 
 **Usage**
 
@@ -273,7 +276,12 @@ next done <id>
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
+| `--completed-at <date>` | date expression | today | Date to use as the completion date for recurrence scheduling. ISO 8601 or natural language. |
 | `--json` | flag | false | Emit the completed task (and the new recurrence instance, if any) as JSON. |
+
+**Notes**
+
+`--completed-at` affects only recurrence scheduling — it does not change the task's `updated_at` timestamp. Useful when you forgot to mark a recurring task done on the day it was actually completed.
 
 ---
 
@@ -493,6 +501,32 @@ next tag clear-description <tag>
 
 ---
 
+### `next tag set-no-time-urgency`
+
+Disable the age and due-date proximity urgency factors for all tasks tagged with `<tag>`.
+Useful for "wishlist" or "someday" tags where tasks should not become more urgent simply
+because they are old or have a set due date.
+
+**Usage**
+
+```
+next tag set-no-time-urgency <tag>
+```
+
+---
+
+### `next tag clear-no-time-urgency`
+
+Re-enable time-based urgency for tasks with this tag.
+
+**Usage**
+
+```
+next tag clear-no-time-urgency <tag>
+```
+
+---
+
 ### `next context`
 
 Show the currently active context filters and their descriptions (if any).
@@ -532,6 +566,39 @@ Clear all active contexts. After this, tasks are shown regardless of their `@` t
 
 ```
 next context clear
+```
+
+---
+
+### `next context exclude`
+
+Set the excluded context list. Tasks whose `@context` tags match any excluded context are
+always hidden, even when they would otherwise pass the active-context filter. Context-neutral
+tasks (no `@` tags) are never excluded. Replaces the entire excluded list.
+
+**Usage**
+
+```
+next context exclude <@tag>...
+```
+
+**Examples**
+
+```sh
+next context exclude @work           # always hide @work tasks
+next context exclude @work @errands  # hide multiple contexts
+```
+
+---
+
+### `next context clear-excluded`
+
+Clear all excluded contexts.
+
+**Usage**
+
+```
+next context clear-excluded
 ```
 
 ---

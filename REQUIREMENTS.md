@@ -80,8 +80,9 @@ at `$XDG_STATE_HOME/task-manager/<fnv1a-hash-of-repo-path>/state.toml`.  This pa
 never inside the repository and MUST NOT be committed to git.
 
 ```toml
-active_contexts = ["@home"]   # active @ tags (empty = no filter)
-active_users    = ["alice"]   # active user filter (empty = no filter)
+active_contexts   = ["@home"]       # active @ tags (empty = no filter)
+excluded_contexts = ["@work"]       # always hide tasks with these contexts
+active_users      = ["alice"]       # active user filter (empty = no filter)
 [resources]
 printer  = true
 vacation = false
@@ -89,8 +90,9 @@ vacation = false
 
 Tag descriptions are human-readable notes attached to any tag (context, resource, or
 freeform). They are stored as individual TOML files under `tags/` in the repository
-(e.g. `tags/@work.toml`, `tags/@home/kitchen.toml`) and ARE committed to git so that all
-machines share the same descriptions. The `next tag describe` command writes these files.
+(e.g. `tags/__context__work.toml`, `tags/__context__home/kitchen.toml`) using the
+`__context__`/`__resource__` encoding, and ARE committed to git so that all machines
+share the same descriptions. The `next tag describe` command writes these files.
 
 ---
 
@@ -105,9 +107,10 @@ machines share the same descriptions. The `next tag describe` command writes the
     work-infra.toml              # project task with slug "work-infra"
     deploy-db-e5f6a7b8.toml
   tags/
-    @work.toml                   # tag description for @work
-    @home/
+    __context__work.toml         # tag description for @work  (@ → __context__)
+    __context__home/
       kitchen.toml               # tag description for @home/kitchen
+    __resource__printer.toml     # tag description for #printer  (# → __resource__)
   .gitignore                     # MUST contain ".next.db"
   .next.db                       # SQLite read cache; MUST NOT be committed to git
 
@@ -158,6 +161,19 @@ When **no** context is active, all tasks MUST be shown regardless of their `@` t
 A query-time `context:@name` filter MUST override the global active-context set for that
 single invocation.
 
+### 3.1.1 Excluded contexts
+
+`state.toml` MAY contain an `excluded_contexts` list. Tasks whose `@context` tags match
+any excluded context MUST be hidden, even when they would otherwise pass the active-context
+filter. Context-neutral tasks (no `@` tags) are never excluded.
+
+Exclusion matching is one-directional: excluding `@home` hides tasks tagged `@home` or any
+descendant (e.g. `@home/kitchen`), but excluding `@home/kitchen` does NOT hide tasks tagged
+only with `@home`.
+
+CLI: `next context exclude <@tag>...` / `next context clear-excluded`
+MCP: `set_context` accepts an optional `excluded_contexts` array.
+
 ### 3.2 Resource filtering
 
 A resource `#<name>` is available when `resources.<name> = true` in `state.toml` (absent
@@ -190,10 +206,10 @@ The score MUST be the sum of the following weighted factors:
 
 | Factor | Condition |
 |--------|-----------|
-| **Due proximity** | Always; rises as due date approaches; highest value when overdue |
+| **Due proximity** | Zeroed when any tag has `no_time_urgency = true`; otherwise rises as due date approaches |
 | **Priority** | Always; `low` / `medium` / `high` map to fixed additive weights |
 | **Project factor** | When `parent_id` is set; parent task's priority contributes an offset |
-| **Age** | Only when `long_term = false` AND (`start` is unset OR `start` ≤ today) |
+| **Age** | Zeroed when any tag has `no_time_urgency = true`, or when `long_term = true`, or when `start > today` |
 | **Tag factor** | Sum of priority offsets for each of the task's tags that carry explicit `priority` metadata; tags with no priority metadata contribute `0.0` |
 | **Parent tag factor** | Same as tag factor, but applied to the parent task's tags (when a parent exists) |
 | **Started bonus** | Flat additive bonus when `status == started` |
@@ -346,6 +362,10 @@ next add <title> [options]
 | `--adjust <float>` | Sets `score_adjustment` |
 | `--assignee <name>` | Sets `assignee` |
 
+When `active_contexts` is non-empty and the new task carries no `@context` tags,
+the active contexts MUST be automatically appended to the task's `tags` array.
+If the user supplies any `@` tag, auto-apply is skipped.
+
 ### 8.2 `next list` and `next next`
 
 ```
@@ -360,10 +380,10 @@ filter.
 ### 8.3 Task actions
 
 ```
-next show <id-or-slug>             # full task details including subtasks and blockers
+next show <id-or-slug>             # full task details including subtasks, blockers, and score breakdown
 next start <id-or-slug>            # mark as started (in-progress); logs a time entry
 next stop <id-or-slug>             # stop a started task (returns to open); logs a time entry
-next done <id-or-slug>             # mark done; triggers recurrence if applicable
+next done <id-or-slug> [--completed-at <date>]  # mark done; triggers recurrence if applicable
 next cancel <id-or-slug>           # mark cancelled
 next edit <id-or-slug> [options]   # modify fields (same options as add, plus --clear-* flags)
 next delete <id-or-slug>           # permanently remove (prompts for confirmation; --yes to skip)
@@ -381,14 +401,20 @@ alongside `open` tasks and count as active for blocking and parent-child visibil
 All `<id-or-slug>` arguments MUST accept a full UUID, an unambiguous UUID prefix
 (minimum 4 hex characters), or a task's slug.
 
+`next done --completed-at <date>` MUST use the provided date instead of today as the
+base date for recurrence scheduling (completion-based: `today + interval_days`; schedule-based:
+`max(task.due, task.start, completed_at)`). Accepts ISO 8601 or natural-language dates.
+
 `next open` MUST fail with an error when the task has no `url` field set.
 
 ### 8.4 Context and resource management
 
 ```
-next context                             # show active contexts (with descriptions)
+next context                             # show active and excluded contexts (with descriptions)
 next context set <@tag>...               # replace active context set
 next context clear                       # clear all active contexts
+next context exclude <@tag>...           # replace excluded context set (see §3.1.1)
+next context clear-excluded              # clear all excluded contexts
 
 next resource                            # list resources and availability (with descriptions)
 next resource set <#tag> on|off          # toggle a resource
@@ -404,6 +430,8 @@ next tag set-url <tag> <url>                      # attach a reference URL
 next tag clear-url <tag>
 next tag set-priority <tag> low|medium|high       # default priority hint for tasks with this tag
 next tag clear-priority <tag>
+next tag set-no-time-urgency <tag>                # disable age+due factors for tasks with this tag
+next tag clear-no-time-urgency <tag>
 next tag data set <tag> <key> <value>             # store arbitrary JSON value
 next tag data get <tag> <key>
 next tag data unset <tag> <key>
@@ -412,10 +440,18 @@ next tag show <tag>                               # display all metadata for a t
 ```
 
 Contexts (`@`), resources (`#`), and freeform tags are all stored identically under
-`tags/<tag>.toml` and committed to git. `next tag` is the unified command for all tag
-metadata — there are no separate describe/clear commands on `next context` or
-`next resource`. Descriptions appear in `next context`, `next resource`, and `next tag`
-output.
+`tags/` and committed to git. `next tag` is the unified command for all tag metadata —
+there are no separate describe/clear commands on `next context` or `next resource`.
+Descriptions appear in `next context`, `next resource`, and `next tag` output.
+
+**Tag filesystem encoding**: `@` and `#` prefixes are not safe on all platforms and
+cause rendering issues in Forgejo. They are encoded on disk as `__context__` and
+`__resource__` respectively: `@work` → `tags/__context__work.toml`,
+`#printer` → `tags/__resource__printer.toml`. The encoding/decoding is transparent to
+the user; all CLI and MCP interfaces continue to use `@` and `#` notation.
+
+Tag name segments MUST NOT start with `__` (double underscore); this prefix is reserved
+for internal filesystem encoding and is rejected by `validate_tag`.
 
 ### 8.6 Tree view
 

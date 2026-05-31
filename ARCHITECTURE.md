@@ -121,7 +121,7 @@ next/                             # crate root (also git repo)
 |--------|----------|
 | `task` | `Task`, `Status` (`Open`/`Started`/`Done`/`Cancelled`), `Priority`, `Recurrence`, `Snap` |
 | `recurrence` | `fn next_occurrence(rrule, anchor, after)`, `fn apply_snap(date, snap)`, `fn spawn_next(task, today)` |
-| `state` | `GlobalState` (active contexts, active users, resource availability map) |
+| `state` | `GlobalState` (active contexts, excluded contexts, active users, resource availability map) |
 | `tag` | `TagKind` (Context / Resource / Freeform); `validate_tag` (allowlist: segments start with letter, contain `a-zA-Z0-9-_`, `/` separator allowed, `..` explicitly rejected) |
 | `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
 | `scoring` | `ScoredTask`, `ScoringWeights`, `fn score_and_sort(tasks, all_tasks, today, weights, tag_metas)` |
@@ -232,9 +232,11 @@ CREATE INDEX idx_tasks_slug ON tasks(slug);
 ```
 
 **`TomlStore`** reads and writes one `.toml` file per task in `tasks/`.  Tag metadata
-(`TagMeta`: description, URL, priority, arbitrary data) is stored as individual TOML files
-under `tags/`: the tag string maps directly to a path (`@work` → `tags/@work.toml`,
-`@home/kitchen` → `tags/@home/kitchen.toml`).
+(`TagMeta`: description, URL, priority, `no_time_urgency`, arbitrary data) is stored as
+individual TOML files under `tags/`. Tag names are encoded on disk: `@` → `__context__`,
+`#` → `__resource__` (e.g. `@work` → `tags/__context__work.toml`,
+`@home/kitchen` → `tags/__context__home/kitchen.toml`).
+A one-time startup migration in `storage::open()` renames any existing unencoded paths.
 
 **Contexts and resources are just tags.** `@context` and `#resource` tags are classified
 by their prefix (`@` or `#`) but share the same `tags/` storage as freeform tags. There
@@ -486,13 +488,18 @@ score(task) =
 
 **`project_factor`** (parent task priority): `low` → −0.5, `medium` → 0.0, `high` → +0.5
 
-**`age_factor`**: `min(age_days × 0.01, 2.0)` — returns `0.0` when `long_term = true`
-or `start > today`.
+**`age_factor`**: `min(age_days × 0.01, 2.0)` — returns `0.0` when `long_term = true`,
+`start > today`, or any of the task's tags has `no_time_urgency = true`.
 
 **`tag_factor`**: sum of the priority offset for each tag that has an explicit `priority`
 set in its `TagMeta`. Tags with no metadata or no priority set contribute `0.0`.
 Applied once for the task's own tags and once for the parent's tags (if any).
-Default offsets: `tag_low = −0.5`, `tag_medium = 0.0`, `tag_high = +1.0`.
+Default offsets: `tag_low = −1.0`, `tag_medium = 0.0`, `tag_high = +1.0`.
+A low-priority tag exactly cancels a medium-priority task's base score (−1.0 + 1.0 = 0).
+
+**`no_time_urgency`**: when any of the task's tags has `TagMeta::no_time_urgency = true`,
+both `due_factor` and `age_factor` are forced to `0.0`. Set with
+`next tag set-no-time-urgency <tag>`.
 
 **`started_factor`**: `+4.0` (configurable) when `status == Started`; `0.0` otherwise.
 
@@ -547,7 +554,7 @@ project_medium      = 0.0
 project_high        = 0.5
 age_per_day         = 0.01
 age_max             = 2.0
-tag_low             = -0.5   # offset when a task (or its parent) has a low-priority tag
+tag_low             = -1.0   # offset when a task (or its parent) has a low-priority tag
 tag_medium          =  0.0   # neutral — tags without explicit priority contribute nothing
 tag_high            =  1.0   # offset when a task (or its parent) has a high-priority tag
 started_bonus       =  4.0   # flat bonus added when status == started

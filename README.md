@@ -52,8 +52,8 @@ my-tasks/
     call-dentist-a1b2c3d4.toml
     water-plants.toml          # task with slug "water-plants"
   tags/
-    @work.toml                 # tag description for @work
-    @home/
+    __context__work.toml       # tag description for @work  (@ → __context__)
+    __context__home/
       kitchen.toml             # tag description for @home/kitchen
   next.log                     # append-only command log (rotated at 1 MB)
   .next.db                     # SQLite read cache — not committed
@@ -96,6 +96,8 @@ Tasks with no `@` tag are always shown regardless of the active context.
 ```sh
 next context set @home          # global context filter
 next context clear              # show all contexts
+next context exclude @work      # always hide @work tasks
+next context clear-excluded     # remove exclusions
 
 next resource set #printer off  # hide printer tasks
 next resource set #printer on   # show them again
@@ -140,13 +142,15 @@ Every visible task receives a numeric score used for ranking:
 score = due_factor + priority_factor + project_factor + age_factor + score_adjustment
 ```
 
-- **Due factor** — rises sharply as the deadline approaches; peaks when overdue
+- **Due factor** — rises sharply as the deadline approaches; peaks when overdue (zeroed by `no_time_urgency`)
 - **Priority** — `high` (+2), `medium` (+1), `low` (0)
 - **Project factor** — parent task's priority offsets the score (+0.5 / 0.0 / −0.5)
-- **Age** — older tasks float up; capped at +2; zeroed when `long_term = true`
-- **Tag factor** — each tag with explicit `priority` metadata adds an offset (`high` +1.0, `low` −0.5); applied to both the task's own tags and the parent's tags
+- **Age** — older tasks float up; capped at +2; zeroed when `long_term = true` or `no_time_urgency`
+- **Tag factor** — each tag with explicit `priority` metadata adds an offset (`high` +1.0, `low` −1.0); applied to both the task's own tags and the parent's tags
 - **Started bonus** — flat +4.0 when `status = started`; moves in-progress tasks above open peers
 - **Adjustment** — manual boost/penalty via `--adjust`
+
+Tags can suppress time-based urgency entirely with `next tag set-no-time-urgency <tag>` — useful for wishlist or someday tags where age and deadlines should not drive priority.
 
 ---
 
@@ -178,23 +182,19 @@ All list commands accept filter tokens in any order:
 | `next tree` | Show all tasks in a parent-child tree |
 | `next start <id>` | Mark as started (in-progress); logs a time entry |
 | `next stop <id>` | Stop a started task (returns to open); logs a time entry |
-| `next done <id>` | Mark done; triggers recurrence if applicable |
+| `next done <id> [--completed-at <date>]` | Mark done; triggers recurrence if applicable |
 | `next cancel <id>` | Mark cancelled |
 | `next edit <id>` | Modify fields on an existing task |
 | `next delete <id>` | Permanently remove a task |
 | `next move <id>` | Change parent task |
 | `next open <id>` | Open the task's URL in the browser |
 | `next data set/unset/get` | Manage arbitrary key-value data on a task |
-| `next tag [describe/clear-description]` | List tags with descriptions; set/remove a tag description |
-| `next context [set/clear/describe/clear-description]` | Manage global context filter and descriptions |
-| `next resource [set/describe/clear-description]` | Manage resource availability and descriptions |
+| `next tag [describe/set-priority/set-no-time-urgency/…]` | List tags; manage tag metadata |
+| `next context [set/clear/exclude/clear-excluded]` | Manage global context filter (include and exclude lists) |
+| `next resource [set]` | Manage resource availability |
 | `next user [set/clear/list]` | Manage user filter |
 | `next forecast` | Show upcoming due dates grouped by time |
 | `next sync` | Pull from remote, push local commits |
-| `next import forgejo` | Import issues from Forgejo (not yet implemented) |
-| `next import ical` | Import VTODO from iCalendar (not yet implemented) |
-| `next export ical` | Export tasks as iCalendar (not yet implemented) |
-
 Task IDs accept a full UUID, a slug, or any unambiguous 4+ character hex prefix.
 All commands support `--json` for pipe-friendly output.
 
@@ -222,8 +222,8 @@ url   = "https://tasks.example.com"
 token = "my-bearer-token"   # optional
 ```
 
-The remote backend is a stub — it returns "not yet implemented" errors. The local backend
-is the production-ready path.
+The remote backend calls a hosted `next-mcp` server over HTTP (MCP Streamable HTTP, Bearer
+auth). The local backend is the default. See `REQUIREMENTS.md §9.2` for the full mapping.
 
 ---
 
@@ -302,19 +302,19 @@ systemctl --user start next-mcp
 
 | Tool | R/M | Description |
 |------|-----|-------------|
-| `list_tasks` | R | List scored tasks; accepts filter tokens |
-| `get_task` | R | Full details of one task + direct children |
-| `add_task` | M | Create a task |
-| `update_task` | M | Edit fields or transition state (start/stop/done/cancel/move) |
+| `list_tasks` | R | List scored tasks; accepts filter tokens + `context` override |
+| `get_task` | R | Full details of one task + direct children + score breakdown |
+| `add_task` | M | Create a task (auto-applies active context if task has none) |
+| `update_task` | M | Edit fields or transition state (start/stop/done/cancel/move); `done` accepts `completed_at` |
 | `delete_task` | M | Permanently remove a task |
 | `sync` | M | Pull then push; fails fast if sync already in progress |
-| `get_state` | R | Active contexts, users, resource availability |
-| `set_context` | M | Replace active context filter |
+| `get_state` | R | Active contexts, excluded contexts, users, resource availability |
+| `set_context` | M | Replace active and/or excluded context filters |
 | `set_resource` | M | Toggle resource availability |
 | `set_user_filter` | M | Replace active user filter |
-| `manage_tag` | R/M | Tag metadata CRUD (list/show/describe/set_priority/set_url/…) |
+| `manage_tag` | R/M | Tag metadata CRUD (list/show/describe/set_priority/set_no_time_urgency/…) |
 | `manage_task_data` | R/M | Task data key-value pairs (get/list/set/unset) |
-| `get_forecast` | R | Upcoming due dates within a configurable horizon |
+| `get_forecast` | R | Upcoming due dates within a configurable horizon; accepts `context` override |
 
 All mutation tools (M) accept an `autosync: bool` parameter (default `true`):
 
