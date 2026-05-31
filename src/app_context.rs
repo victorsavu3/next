@@ -15,6 +15,16 @@ pub struct AppContext {
 }
 
 impl AppContext {
+    /// Returns a shared reference to the task store.
+    pub fn store(&self) -> &dyn Store {
+        &*self.store
+    }
+
+    /// Returns an exclusive reference to the task store.
+    pub fn store_mut(&mut self) -> &mut dyn Store {
+        &mut *self.store
+    }
+
     /// Construct an application context.
     ///
     /// * `config_path` — use this config file instead of the XDG default.

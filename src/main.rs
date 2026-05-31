@@ -71,10 +71,10 @@ fn main() -> anyhow::Result<()> {
     let result = match command {
         Command::Init(_) => unreachable!("handled above"),
         Command::Add(args) => commands::add::run(args, &mut ctx),
-        Command::List(args) => commands::list::run(args, &mut ctx),
-        Command::Next(args) => commands::next_cmd::run(args, &mut ctx),
-        Command::Show(args) => commands::show::run(args, &mut ctx),
-        Command::Open(args) => commands::open::run(args, &mut ctx),
+        Command::List(args) => commands::list::run(args, &ctx),
+        Command::Next(args) => commands::next_cmd::run(args, &ctx),
+        Command::Show(args) => commands::show::run(args, &ctx),
+        Command::Open(args) => commands::open::run(args, &ctx),
         Command::Data(args) => commands::data::run(args, &mut ctx),
         Command::Start(args) => commands::start::run(args, &mut ctx),
         Command::Stop(args) => commands::stop::run(args, &mut ctx),
@@ -86,10 +86,10 @@ fn main() -> anyhow::Result<()> {
         Command::Context(args) => commands::context::run(args, &mut ctx),
         Command::Resource(args) => commands::resource::run(args, &mut ctx),
         Command::User(args) => commands::user::run(args, &mut ctx),
-        Command::Forecast(args) => commands::forecast::run(args, &mut ctx),
+        Command::Forecast(args) => commands::forecast::run(args, &ctx),
         Command::Sync(args) => commands::sync::run(args, &mut ctx),
         Command::Tag(args) => commands::tag::run(args, &mut ctx),
-        Command::Tree(args) => commands::tree::run(args, &mut ctx),
+        Command::Tree(args) => commands::tree::run(args, &ctx),
         Command::Tutorial(_) => unreachable!("handled above"),
     };
 

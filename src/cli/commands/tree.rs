@@ -17,8 +17,8 @@ pub struct Args {
     pub json: bool,
 }
 
-pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
-    let all_tasks = ctx.store.list_tasks()?;
+pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
+    let all_tasks = ctx.store().list_tasks()?;
 
     if args.json {
         let tasks: Vec<&Task> = if args.all {

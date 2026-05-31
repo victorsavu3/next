@@ -6,9 +6,9 @@ pub struct Args {
     pub id: String,
 }
 
-pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
-    let id = resolve_task_id(&*ctx.store, &args.id)?;
-    let task = ctx.store.get_task(id)?;
+pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
+    let id = resolve_task_id(ctx.store(), &args.id)?;
+    let task = ctx.store().get_task(id)?;
 
     let url = task
         .url

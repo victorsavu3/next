@@ -31,7 +31,7 @@ pub struct Args {
     pub tokens: Vec<String>,
 }
 
-pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
+pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
     let count = args.count.unwrap_or(ctx.config.next_count);
 
@@ -42,9 +42,9 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     filter_args.json = args.json;
 
     let filter_set = filter_args.to_filter_set()?;
-    let state = ctx.store.get_state()?;
-    let all_tasks = ctx.store.list_tasks()?;
-    let tag_metas = ctx.store.list_tag_metas()?;
+    let state = ctx.store().get_state()?;
+    let all_tasks = ctx.store().list_tasks()?;
+    let tag_metas = ctx.store().list_tag_metas()?;
 
     let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
     let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.config.scoring, &tag_metas);
