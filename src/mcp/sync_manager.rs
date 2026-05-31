@@ -111,7 +111,10 @@ async fn run_sync_background(ctx: &Arc<Mutex<AppContext>>, semaphore: &Arc<Semap
     let permit = match Arc::clone(semaphore).try_acquire_owned() {
         Ok(p) => p,
         Err(_) => {
-            eprintln!("background sync skipped: explicit sync already in progress");
+            ctx.lock()
+                .await
+                .log
+                .info("sync", "background sync skipped: explicit sync already in progress");
             return;
         }
     };
@@ -126,8 +129,18 @@ async fn run_sync_background(ctx: &Arc<Mutex<AppContext>>, semaphore: &Arc<Semap
 
     match result {
         Ok(Ok(())) => {}
-        Ok(Err(e)) => eprintln!("background sync error: {e}"),
-        Err(e) => eprintln!("background sync task panic: {e}"),
+        Ok(Err(e)) => {
+            ctx.lock()
+                .await
+                .log
+                .error("sync", &format!("background sync error: {e}"));
+        }
+        Err(e) => {
+            ctx.lock()
+                .await
+                .log
+                .error("sync", &format!("background sync task panic: {e}"));
+        }
     }
 }
 
