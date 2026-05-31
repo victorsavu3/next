@@ -22,7 +22,17 @@ pub fn get_forecast(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Valu
         .unwrap_or_default();
 
     let filter_args = FilterArgs::parse(tokens);
-    let filter_set = filter_args.to_filter_set()?;
+    let mut filter_set = filter_args.to_filter_set()?;
+
+    // `context` param overrides the active context from state for this call.
+    if params.get("context").is_some() {
+        let ctx_tags: Vec<String> = params
+            .get("context")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+            .unwrap_or_default();
+        filter_set.context_override = Some(ctx_tags);
+    }
 
     let state = ctx.store.get_state()?;
     let all_tasks = ctx.store.list_tasks()?;

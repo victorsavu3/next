@@ -47,7 +47,7 @@ fn context_set_saves_active_contexts() {
     let mut env = common::setup();
     context::run(
         context::Args {
-            subcommand: Some(context::ContextSubcommand::Set(context::SetArgs {
+            subcommand: Some(context::ContextSubcommand::Set(context::ContextTagArgs {
                 tags: vec!["@work".into()],
             })),
         },
@@ -64,7 +64,7 @@ fn context_set_validates_at_prefix() {
     let mut env = common::setup();
     let err = context::run(
         context::Args {
-            subcommand: Some(context::ContextSubcommand::Set(context::SetArgs {
+            subcommand: Some(context::ContextSubcommand::Set(context::ContextTagArgs {
                 tags: vec!["work".into()],
             })),
         },
@@ -79,7 +79,7 @@ fn context_clear_removes_active_contexts() {
     let mut env = common::setup();
     context::run(
         context::Args {
-            subcommand: Some(context::ContextSubcommand::Set(context::SetArgs {
+            subcommand: Some(context::ContextSubcommand::Set(context::ContextTagArgs {
                 tags: vec!["@work".into()],
             })),
         },
@@ -122,7 +122,7 @@ fn context_filter_hides_wrong_context_tasks() {
 
     context::run(
         context::Args {
-            subcommand: Some(context::ContextSubcommand::Set(context::SetArgs {
+            subcommand: Some(context::ContextSubcommand::Set(context::ContextTagArgs {
                 tags: vec!["@work".into()],
             })),
         },
@@ -147,7 +147,7 @@ fn context_filter_keeps_context_neutral_tasks() {
 
     context::run(
         context::Args {
-            subcommand: Some(context::ContextSubcommand::Set(context::SetArgs {
+            subcommand: Some(context::ContextSubcommand::Set(context::ContextTagArgs {
                 tags: vec!["@work".into()],
             })),
         },
@@ -186,7 +186,7 @@ fn context_state_survives_store_reload() {
     let mut env = common::setup();
     context::run(
         context::Args {
-            subcommand: Some(context::ContextSubcommand::Set(context::SetArgs {
+            subcommand: Some(context::ContextSubcommand::Set(context::ContextTagArgs {
                 tags: vec!["@home".into()],
             })),
         },

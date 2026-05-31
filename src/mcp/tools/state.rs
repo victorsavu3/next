@@ -55,8 +55,20 @@ pub fn set_context(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
     }
     let mut state = ctx.store.get_state()?;
     state.active_contexts = contexts;
+
+    // Optional: also replace excluded_contexts if provided.
+    if params.get("excluded_contexts").is_some() {
+        let excluded = strings_param(params, "excluded_contexts");
+        for c in &excluded {
+            if !c.starts_with('@') {
+                anyhow::bail!("excluded context tags must start with '@', got: {c}");
+            }
+        }
+        state.excluded_contexts = excluded;
+    }
+
     ctx.store.save_state(&state)?;
-    ctx.log.info("mcp/context", &format!("set {:?}", state.active_contexts));
+    ctx.log.info("mcp/context", &format!("active={:?} excluded={:?}", state.active_contexts, state.excluded_contexts));
     Ok(serde_json::to_value(&state)?)
 }
 

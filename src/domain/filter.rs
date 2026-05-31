@@ -123,6 +123,11 @@ pub fn apply(
                 if !active_contexts.is_empty() && !task_matches_contexts(task, active_contexts) {
                     return false;
                 }
+                if !state.excluded_contexts.is_empty()
+                    && task_excluded_by_contexts(task, &state.excluded_contexts)
+                {
+                    return false;
+                }
                 // User filter: unassigned tasks are always visible; assigned tasks
                 // must match one of the active users.
                 if !active_users.is_empty() {
@@ -179,6 +184,30 @@ fn task_matches_contexts(task: &Task, active_contexts: &[String]) -> bool {
         task_contexts.iter().any(|&tc| {
             tag::tag_matches(active, tc) || tag::tag_matches(tc, active)
         })
+    })
+}
+
+/// Returns `true` if `task` should be hidden because one of its `@context`
+/// tags matches an excluded context.
+///
+/// Matching is one-directional: `excluded` is an ancestor of (or equal to)
+/// the task's context tag.  This means excluding `@home` also hides
+/// `@home/kitchen`, but excluding `@home/kitchen` does NOT hide tasks tagged
+/// only with `@home`.  Tasks with no `@` tags are never excluded.
+fn task_excluded_by_contexts(task: &Task, excluded_contexts: &[String]) -> bool {
+    let task_contexts: Vec<&str> = task
+        .tags
+        .iter()
+        .filter(|t| tag::is_context(t))
+        .map(|t| t.as_str())
+        .collect();
+
+    if task_contexts.is_empty() {
+        return false;
+    }
+
+    excluded_contexts.iter().any(|exc| {
+        task_contexts.iter().any(|&tc| tag::tag_matches(exc, tc))
     })
 }
 
@@ -453,6 +482,71 @@ mod tests {
         };
         let result = apply(vec![task], &filter, &state, today());
         assert_eq!(result.len(), 1);
+    }
+
+    // ── Excluded contexts ─────────────────────────────────────────────────────
+
+    #[test]
+    fn excluded_context_hides_matching_task() {
+        let state = GlobalState { excluded_contexts: vec!["@home".into()], ..Default::default() };
+
+        let mut home_task = Task::new("Home task");
+        home_task.tags = vec!["@home".into()];
+        let neutral = Task::new("No context");
+
+        let result = apply(vec![home_task, neutral], &FilterSet::default(), &state, today());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "No context");
+    }
+
+    #[test]
+    fn excluded_context_hides_descendant_contexts() {
+        let state = GlobalState { excluded_contexts: vec!["@home".into()], ..Default::default() };
+
+        let mut kitchen = Task::new("Kitchen task");
+        kitchen.tags = vec!["@home/kitchen".into()];
+
+        let result = apply(vec![kitchen], &FilterSet::default(), &state, today());
+        assert!(result.is_empty(), "@home excluded should hide @home/kitchen");
+    }
+
+    #[test]
+    fn excluded_sub_context_does_not_hide_parent_context_task() {
+        let state = GlobalState { excluded_contexts: vec!["@home/kitchen".into()], ..Default::default() };
+
+        let mut home_task = Task::new("General home task");
+        home_task.tags = vec!["@home".into()];
+
+        let result = apply(vec![home_task], &FilterSet::default(), &state, today());
+        assert_eq!(result.len(), 1, "@home/kitchen excluded should not hide @home task");
+    }
+
+    #[test]
+    fn context_neutral_task_not_hidden_by_exclusion() {
+        let state = GlobalState { excluded_contexts: vec!["@home".into()], ..Default::default() };
+
+        let neutral = Task::new("No context task");
+
+        let result = apply(vec![neutral], &FilterSet::default(), &state, today());
+        assert_eq!(result.len(), 1, "context-neutral task must not be excluded");
+    }
+
+    #[test]
+    fn excluded_context_applies_alongside_active_context() {
+        let state = GlobalState {
+            active_contexts: vec!["@home".into()],
+            excluded_contexts: vec!["@home/kitchen".into()],
+            ..Default::default()
+        };
+
+        let mut living_room = Task::new("Living room task");
+        living_room.tags = vec!["@home/living".into()];
+        let mut kitchen = Task::new("Kitchen task");
+        kitchen.tags = vec!["@home/kitchen".into()];
+
+        let result = apply(vec![living_room, kitchen], &FilterSet::default(), &state, today());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Living room task");
     }
 
     // ── Explicit filters ─────────────────────────────────────────────────────

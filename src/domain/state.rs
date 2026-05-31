@@ -7,9 +7,16 @@ use crate::domain::tag;
 /// Global runtime state persisted in `state.toml` at the repository root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct GlobalState {
-    /// Active `@context` tags. When non-empty, tasks are filtered by these contexts.
+    /// Active `@context` tags. When non-empty, tasks are filtered to only those
+    /// matching at least one active context (plus context-neutral tasks).
     #[serde(default)]
     pub active_contexts: Vec<String>,
+
+    /// Excluded `@context` tags. Tasks whose context tags match any entry here
+    /// are hidden, even if they would otherwise pass the active-context filter.
+    /// Context-neutral tasks (no `@` tags) are never excluded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded_contexts: Vec<String>,
 
     /// Resource availability map. Key is the bare resource name (without `#`),
     /// optionally with `/`-separated path segments (e.g. `"office/printer"`).

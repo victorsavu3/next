@@ -22,6 +22,7 @@ pub fn all_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "filter_tokens": { "type": "array", "items": { "type": "string" }, "description": "Filter tokens e.g. [\"+@work\", \"-done\", \"parent:infra\"]" },
+                    "context": { "type": "array", "items": { "type": "string" }, "description": "Override active context for this call (e.g. [\"@work\"]). Pass [] to disable context filtering. Overrides state." },
                     "limit": { "type": "integer", "description": "Maximum number of tasks to return" },
                     "include_all": { "type": "boolean", "description": "Disable implicit filters (blocked, future start, done/cancelled)" }
                 }
@@ -136,12 +137,13 @@ pub fn all_tools() -> Vec<Tool> {
         },
         Tool {
             name: "set_context",
-            description: "Set the active context filter. Pass an empty array to clear.",
+            description: "Set the active and/or excluded context filters. Pass an empty array to clear.",
             input_schema: json!({
                 "type": "object",
                 "required": ["contexts"],
                 "properties": {
-                    "contexts": { "type": "array", "items": { "type": "string" }, "description": "@-prefixed context tags" },
+                    "contexts": { "type": "array", "items": { "type": "string" }, "description": "@-prefixed active context tags. Pass [] to clear." },
+                    "excluded_contexts": { "type": "array", "items": { "type": "string" }, "description": "@-prefixed context tags to always hide. Omit to leave unchanged." },
                     "autosync": { "type": "boolean", "default": true }
                 }
             }),
@@ -209,7 +211,8 @@ pub fn all_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "horizon_days": { "type": "integer", "description": "Days to look ahead (default: 90)" },
-                    "filter_tokens": { "type": "array", "items": { "type": "string" } }
+                    "filter_tokens": { "type": "array", "items": { "type": "string" } },
+                    "context": { "type": "array", "items": { "type": "string" }, "description": "Override active context for this call. Overrides state." }
                 }
             }),
         },

@@ -10,14 +10,19 @@ pub struct Args {
 #[derive(clap::Subcommand, Debug)]
 pub enum ContextSubcommand {
     /// Set the active context tags (replaces any previously active contexts).
-    Set(SetArgs),
+    Set(ContextTagArgs),
     /// Clear all active context tags (return to context-agnostic mode).
     Clear,
+    /// Set excluded context tags — tasks with these contexts are always hidden.
+    Exclude(ContextTagArgs),
+    /// Clear all excluded context tags.
+    #[command(name = "clear-excluded")]
+    ClearExcluded,
 }
 
 #[derive(clap::Args, Debug)]
-pub struct SetArgs {
-    /// One or more @-prefixed context tags to activate (e.g. @work @work/frontend).
+pub struct ContextTagArgs {
+    /// One or more @-prefixed context tags (e.g. @work @home/kitchen).
     #[arg(num_args(1..))]
     pub tags: Vec<String>,
 }
@@ -27,13 +32,15 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         None => show(ctx),
         Some(ContextSubcommand::Set(a)) => set(ctx, a.tags),
         Some(ContextSubcommand::Clear) => clear(ctx),
+        Some(ContextSubcommand::Exclude(a)) => exclude(ctx, a.tags),
+        Some(ContextSubcommand::ClearExcluded) => clear_excluded(ctx),
     }
 }
 
 fn show(ctx: &mut AppContext) -> anyhow::Result<()> {
     let state = ctx.store.get_state()?;
     if state.active_contexts.is_empty() {
-        println!("No active context (all tasks visible).");
+        println!("Active context: (none — all tasks visible)");
     } else {
         println!("Active contexts:");
         for c in &state.active_contexts {
@@ -43,15 +50,29 @@ fn show(ctx: &mut AppContext) -> anyhow::Result<()> {
             }
         }
     }
+    if !state.excluded_contexts.is_empty() {
+        println!("Excluded contexts:");
+        for c in &state.excluded_contexts {
+            match ctx.store.get_tag_description(c)? {
+                Some(desc) => println!("  {c:<28}  {desc}"),
+                None => println!("  {c}"),
+            }
+        }
+    }
     Ok(())
 }
 
-fn set(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
-    for tag in &tags {
+fn validate_context_tags(tags: &[String]) -> anyhow::Result<()> {
+    for tag in tags {
         if !tag.starts_with('@') {
             anyhow::bail!("context tags must start with '@', got: {tag}");
         }
     }
+    Ok(())
+}
+
+fn set(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
+    validate_context_tags(&tags)?;
     let mut state = ctx.store.get_state()?;
     state.active_contexts = tags.clone();
     ctx.store.save_state(&state)?;
@@ -64,5 +85,22 @@ fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
     state.active_contexts.clear();
     ctx.store.save_state(&state)?;
     ctx.log.info("context", "cleared");
+    Ok(())
+}
+
+fn exclude(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
+    validate_context_tags(&tags)?;
+    let mut state = ctx.store.get_state()?;
+    state.excluded_contexts = tags.clone();
+    ctx.store.save_state(&state)?;
+    ctx.log.info("context", &format!("exclude {}", tags.join(" ")));
+    Ok(())
+}
+
+fn clear_excluded(ctx: &mut AppContext) -> anyhow::Result<()> {
+    let mut state = ctx.store.get_state()?;
+    state.excluded_contexts.clear();
+    ctx.store.save_state(&state)?;
+    ctx.log.info("context", "cleared excluded");
     Ok(())
 }

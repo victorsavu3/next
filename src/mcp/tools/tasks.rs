@@ -70,7 +70,12 @@ pub fn list_tasks(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value>
 
     let mut filter_args = crate::cli::filter::FilterArgs::parse(tokens);
     filter_args.all = include_all;
-    let filter_set = filter_args.to_filter_set()?;
+    let mut filter_set = filter_args.to_filter_set()?;
+
+    // `context` param overrides the active context from state for this call.
+    if params.get("context").is_some() {
+        filter_set.context_override = Some(strings_param(params, "context"));
+    }
 
     let state = ctx.store.get_state()?;
     let all_tasks = ctx.store.list_tasks()?;
