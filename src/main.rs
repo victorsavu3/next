@@ -65,7 +65,7 @@ fn main() -> anyhow::Result<()> {
 
     let is_mutation = matches!(
         cmd_name,
-        "add" | "start" | "stop" | "done" | "cancel" | "edit" | "delete" | "move" | "tag"
+        "add" | "start" | "stop" | "done" | "cancel" | "edit" | "delete" | "move" | "tag" | "data"
     );
 
     let result = match command {
