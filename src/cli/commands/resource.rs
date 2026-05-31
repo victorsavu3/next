@@ -1,3 +1,4 @@
+use crate::domain::tag;
 use crate::AppContext;
 
 /// Availability toggle for `next resource set`.
@@ -69,11 +70,7 @@ fn show(ctx: &mut AppContext, json: bool) -> anyhow::Result<()> {
 }
 
 fn set(ctx: &mut AppContext, resource: String, availability: Availability) -> anyhow::Result<()> {
-    let resource = if resource.starts_with('#') {
-        resource
-    } else {
-        anyhow::bail!("resource tags must start with '#', got: {resource}");
-    };
+    tag::validate_resource_tag(&resource).map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let available = matches!(availability, Availability::On);
     let bare = resource.trim_start_matches('#');

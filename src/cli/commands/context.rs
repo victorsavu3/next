@@ -1,3 +1,4 @@
+use crate::domain::tag;
 use crate::AppContext;
 
 /// Top-level `next context` subcommand.
@@ -63,10 +64,8 @@ fn show(ctx: &mut AppContext) -> anyhow::Result<()> {
 }
 
 fn validate_context_tags(tags: &[String]) -> anyhow::Result<()> {
-    for tag in tags {
-        if !tag.starts_with('@') {
-            anyhow::bail!("context tags must start with '@', got: {tag}");
-        }
+    for t in tags {
+        tag::validate_context_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
     }
     Ok(())
 }

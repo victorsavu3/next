@@ -157,6 +157,32 @@ pub fn validate_tag(tag: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validates that `tag` is a well-formed context tag (must start with `@`).
+///
+/// Enforces the `@` prefix requirement and then applies the same segment rules
+/// as [`validate_tag`].
+pub fn validate_context_tag(tag: &str) -> Result<(), String> {
+    if !tag.starts_with('@') {
+        return Err(format!(
+            "context tags must start with '@', got: {tag:?}"
+        ));
+    }
+    validate_tag(tag)
+}
+
+/// Validates that `tag` is a well-formed resource tag (must start with `#`).
+///
+/// Enforces the `#` prefix requirement and then applies the same segment rules
+/// as [`validate_tag`].
+pub fn validate_resource_tag(tag: &str) -> Result<(), String> {
+    if !tag.starts_with('#') {
+        return Err(format!(
+            "resource tags must start with '#', got: {tag:?}"
+        ));
+    }
+    validate_tag(tag)
+}
+
 /// Returns all ancestor tag strings for `tag`, from outermost to `tag` itself.
 ///
 /// For `#a/b/c` returns `["#a", "#a/b", "#a/b/c"]`. The prefix character is
@@ -336,5 +362,55 @@ mod tests {
         assert!(validate_tag("@__reserved").is_err());
         assert!(validate_tag("#__reserved").is_err());
         assert!(validate_tag("work/__internal").is_err());
+    }
+
+    // --- validate_context_tag ---
+
+    #[test]
+    fn context_tag_valid() {
+        assert!(validate_context_tag("@home").is_ok());
+        assert!(validate_context_tag("@work").is_ok());
+        assert!(validate_context_tag("@work/frontend").is_ok());
+        assert!(validate_context_tag("@work/front-end").is_ok());
+    }
+
+    #[test]
+    fn context_tag_missing_prefix_rejected() {
+        assert!(validate_context_tag("home").is_err());
+        assert!(validate_context_tag("#home").is_err());
+        assert!(validate_context_tag("").is_err());
+    }
+
+    #[test]
+    fn context_tag_segment_rules_enforced() {
+        assert!(validate_context_tag("@").is_err());
+        assert!(validate_context_tag("@1task").is_err());
+        assert!(validate_context_tag("@work//backend").is_err());
+        assert!(validate_context_tag("@__reserved").is_err());
+    }
+
+    // --- validate_resource_tag ---
+
+    #[test]
+    fn resource_tag_valid() {
+        assert!(validate_resource_tag("#printer").is_ok());
+        assert!(validate_resource_tag("#office").is_ok());
+        assert!(validate_resource_tag("#office/printer").is_ok());
+        assert!(validate_resource_tag("#office/color-printer").is_ok());
+    }
+
+    #[test]
+    fn resource_tag_missing_prefix_rejected() {
+        assert!(validate_resource_tag("printer").is_err());
+        assert!(validate_resource_tag("@printer").is_err());
+        assert!(validate_resource_tag("").is_err());
+    }
+
+    #[test]
+    fn resource_tag_segment_rules_enforced() {
+        assert!(validate_resource_tag("#").is_err());
+        assert!(validate_resource_tag("#1printer").is_err());
+        assert!(validate_resource_tag("#office//desk").is_err());
+        assert!(validate_resource_tag("#__reserved").is_err());
     }
 }
