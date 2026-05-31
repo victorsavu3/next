@@ -7,14 +7,6 @@ use crate::domain::task::Priority;
 use crate::storage;
 use crate::AppContext;
 
-fn parse_priority(s: &str) -> anyhow::Result<Priority> {
-    match s.to_ascii_lowercase().as_str() {
-        "low" => Ok(Priority::Low),
-        "medium" => Ok(Priority::Medium),
-        "high" => Ok(Priority::High),
-        other => anyhow::bail!("unknown priority {other:?}: expected low, medium, or high"),
-    }
-}
 
 /// Unified tag metadata tool.
 ///
@@ -146,7 +138,7 @@ fn set_priority(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: priority"))?;
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let priority = parse_priority(priority_str)?;
+    let priority: Priority = priority_str.parse()?;
     let mut meta = ctx.store.get_tag_meta(t)?.unwrap_or_default();
     meta.priority = Some(priority);
     ctx.store.set_tag_meta(t, meta)?;

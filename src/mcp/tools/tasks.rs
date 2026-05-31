@@ -32,14 +32,6 @@ fn validate_slug(slug: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn parse_priority(s: &str) -> anyhow::Result<Priority> {
-    match s.to_lowercase().as_str() {
-        "low" => Ok(Priority::Low),
-        "medium" | "med" => Ok(Priority::Medium),
-        "high" => Ok(Priority::High),
-        _ => anyhow::bail!("unknown priority {s:?} — expected low, medium, or high"),
-    }
-}
 
 fn str_param<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
     params.get(key).and_then(|v| v.as_str())
@@ -138,7 +130,7 @@ pub fn add_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         task.start = Some(parse_date(expr, today)?);
     }
     if let Some(p) = str_param(params, "priority") {
-        task.priority = parse_priority(p)?;
+        task.priority = p.parse()?;
     }
     if let Some(s) = str_param(params, "slug") {
         validate_slug(s)?;
@@ -252,7 +244,7 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
         task.start = Some(parse_date(expr, today)?);
     }
     if let Some(p) = str_param(params, "priority") {
-        task.priority = parse_priority(p)?;
+        task.priority = p.parse()?;
     }
     if let Some(slug) = str_param(params, "slug") {
         validate_slug(slug)?;

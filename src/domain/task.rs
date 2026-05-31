@@ -176,6 +176,18 @@ impl std::fmt::Display for Priority {
     }
 }
 
+impl std::str::FromStr for Priority {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "low"          => Ok(Priority::Low),
+            "medium" | "med" => Ok(Priority::Medium),
+            "high"         => Ok(Priority::High),
+            _ => anyhow::bail!("unknown priority {s:?} — expected low, medium, or high"),
+        }
+    }
+}
+
 impl Task {
     /// Creates a new open task in the inbox with sensible defaults.
     pub fn new(title: impl Into<String>) -> Self {

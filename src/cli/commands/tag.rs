@@ -311,7 +311,7 @@ fn clear_url(ctx: &mut AppContext, args: ClearUrlArgs) -> anyhow::Result<()> {
 
 fn set_priority(ctx: &mut AppContext, args: SetPriorityArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let priority = parse_priority(&args.priority)?;
+    let priority: Priority = args.priority.parse()?;
     let mut meta = ctx.store.get_tag_meta(&args.tag)?.unwrap_or_default();
     meta.priority = Some(priority);
     ctx.store.set_tag_meta(&args.tag, meta)?;
@@ -454,15 +454,6 @@ fn data_list(ctx: &mut AppContext, args: DataListArgs) -> anyhow::Result<()> {
         println!("{k} = {}", meta.data[k]);
     }
     Ok(())
-}
-
-fn parse_priority(s: &str) -> anyhow::Result<Priority> {
-    match s.to_ascii_lowercase().as_str() {
-        "low" => Ok(Priority::Low),
-        "medium" => Ok(Priority::Medium),
-        "high" => Ok(Priority::High),
-        other => anyhow::bail!("unknown priority {other:?}: expected low, medium, or high"),
-    }
 }
 
 fn priority_display(p: &Priority) -> &'static str {

@@ -4,7 +4,7 @@ use crate::domain::{
     date_parse::parse_date,
     recurrence::parse_snap,
     tag,
-    task::{Priority, Recurrence},
+    task::Recurrence,
 };
 
 use crate::{resolve::resolve_task_id, AppContext};
@@ -150,7 +150,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     }
 
     if let Some(p) = args.priority {
-        task.priority = parse_priority(&p)?;
+        task.priority = p.parse()?;
     }
 
     if let Some(slug) = args.slug {
@@ -274,14 +274,5 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
             .info("edit", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
     }
     Ok(())
-}
-
-fn parse_priority(s: &str) -> anyhow::Result<Priority> {
-    match s.to_lowercase().as_str() {
-        "low" => Ok(Priority::Low),
-        "medium" | "med" => Ok(Priority::Medium),
-        "high" => Ok(Priority::High),
-        _ => anyhow::bail!("unknown priority {s:?} — expected low, medium, or high"),
-    }
 }
 
