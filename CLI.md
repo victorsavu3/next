@@ -821,67 +821,9 @@ next sync [options]
 
 ---
 
-### `next import forgejo`
-
-Import issues from a Forgejo repository as tasks. On the first run, creates one task per open issue. On subsequent runs, updates only the `status` of previously imported tasks.
-
-**Usage**
-
-```
-next import forgejo <owner/repo> [options]
-```
-
-**Options**
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--parent <id>` | task ID | none | Attach all imported tasks as subtasks of this task. |
-| `--tag <tag>` | string | none | Add an extra tag to all imported tasks. Repeatable. |
-| `--json` | flag | false | Emit a summary of created and updated tasks as JSON. |
-
----
-
-### `next import ical`
-
-Import VTODO entries from an iCalendar (`.ics`) file or a webcal URL.
-
-**Usage**
-
-```
-next import ical <file-or-url>
-```
-
-**Options**
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--json` | flag | false | Emit a summary of created and updated tasks as JSON. |
-
----
-
-### `next export ical`
-
-Export matching tasks as a valid iCalendar file. Output goes to stdout by default.
-
-**Usage**
-
-```
-next export ical [filters...] [--output <file>]
-```
-
-**Options**
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--output <file>` | file path | stdout | Write output to this file instead of stdout. |
-| `--future` | flag | false | Include tasks with a future `start` date. |
-| `--all` | flag | false | Disable all implicit filtering. |
-
----
-
 ## Filter Syntax
 
-All list commands (`list`, `next`, `forecast`, `export ical`) accept filter tokens that can be combined freely in any order.
+All list commands (`list`, `next`, `forecast`) accept filter tokens that can be combined freely in any order.
 
 ### Token reference
 
@@ -928,12 +870,12 @@ to inspect a single task and its direct children.
 
 ### Tag descriptions
 
-Descriptions are stored as individual TOML files under the `tags/` directory.  The tag
-string maps directly to a path: `@work` → `tags/@work.toml`, `#printer` →
-`tags/#printer.toml`, `@home/kitchen` → `tags/@home/kitchen.toml` (slashes in
-hierarchical tags become real directory separators).  `next tag describe` and
-`next tag clear-description` are the canonical way to manage descriptions for all tag
-types (`@context`, `#resource`, and freeform tags alike).
+Descriptions are stored as individual TOML files under the `tags/` directory.  `@` and `#`
+prefixes are encoded on disk (`@` → `__context__`, `#` → `__resource__`) so paths are
+safe on all platforms: `@work` → `tags/__context__work.toml`, `#printer` →
+`tags/__resource__printer.toml`, `@home/kitchen` → `tags/__context__home/kitchen.toml`.
+`next tag describe` and `next tag clear-description` are the canonical way to manage
+descriptions for all tag types; the encoding is transparent to the user.
 
 Repositories that still contain the old `[tag_descriptions]` table in `state.toml` are
 migrated automatically on first open: each entry is written to its own `tags/*.toml`
