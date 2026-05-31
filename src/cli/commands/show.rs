@@ -18,25 +18,50 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let id = resolve_task_id(&*ctx.store, &args.id)?;
     let task = ctx.store.get_task(id)?;
 
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&task)?);
-        return Ok(());
-    }
-
     let all_tasks = ctx.store.list_tasks()?;
     let tag_metas = ctx.store.list_tag_metas()?;
     let parent = task
         .parent_id
         .and_then(|pid| all_tasks.iter().find(|t| t.id == pid));
 
-    let score = scoring::score(&task, parent, today, &ctx.config.scoring, &tag_metas);
+    let bd = scoring::score_with_breakdown(&task, parent, today, &ctx.config.scoring, &tag_metas);
+
+    if args.json {
+        let children: Vec<_> = all_tasks
+            .iter()
+            .filter(|t| t.parent_id == Some(task.id))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "task": task,
+            "score": bd.total,
+            "score_breakdown": bd,
+            "children": children,
+        }))?);
+        return Ok(());
+    }
 
     let short_id = task.id.to_string().replace('-', "");
     println!("ID:       {}", &short_id[..8]);
     println!("Title:    {}", task.title);
-    println!("Status:   {:?}", task.status);
-    println!("Priority: {:?}", task.priority);
-    println!("Score:    {:.2}", score);
+    println!("Status:   {}", task.status);
+    println!("Priority: {}", task.priority);
+
+    // Score line + compact breakdown of non-zero factors.
+    let mut parts: Vec<String> = Vec::new();
+    if bd.due       != 0.0 { parts.push(format!("due {:.2}", bd.due)); }
+    if bd.priority  != 0.0 { parts.push(format!("priority {:.2}", bd.priority)); }
+    if bd.project   != 0.0 { parts.push(format!("project {:.2}", bd.project)); }
+    if bd.age       != 0.0 { parts.push(format!("age {:.2}", bd.age)); }
+    if bd.tags      != 0.0 { parts.push(format!("tags {:.2}", bd.tags)); }
+    if bd.parent_tags != 0.0 { parts.push(format!("parent-tags {:.2}", bd.parent_tags)); }
+    if bd.started   != 0.0 { parts.push(format!("started {:.2}", bd.started)); }
+    if bd.adjustment != 0.0 { parts.push(format!("adj {:.2}", bd.adjustment)); }
+    if bd.no_time_urgency   { parts.push("no-time-urgency".to_string()); }
+    if parts.is_empty() {
+        println!("Score:    {:.2}", bd.total);
+    } else {
+        println!("Score:    {:.2}  ({})", bd.total, parts.join("  "));
+    }
 
     if let Some(due) = task.due {
         println!("Due:      {due}");

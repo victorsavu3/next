@@ -152,7 +152,28 @@ pub struct Task {
 }
 
 fn is_zero(v: &f64) -> bool {
-    *v == 0.0
+    v.abs() < f64::EPSILON
+}
+
+impl std::fmt::Display for Status {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Status::Open      => write!(f, "open"),
+            Status::Started   => write!(f, "started"),
+            Status::Done      => write!(f, "done"),
+            Status::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
+impl std::fmt::Display for Priority {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Priority::Low    => write!(f, "low"),
+            Priority::Medium => write!(f, "medium"),
+            Priority::High   => write!(f, "high"),
+        }
+    }
 }
 
 impl Task {

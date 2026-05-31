@@ -97,12 +97,18 @@ pub fn get_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     let id = resolve_task_id(&*ctx.store, id_str)?;
     let task = ctx.store.get_task(id)?;
 
-    // Include direct children for context.
+    let today = Local::now().date_naive();
     let all_tasks = ctx.store.list_tasks()?;
+    let tag_metas = ctx.store.list_tag_metas()?;
+    let parent = task.parent_id.and_then(|pid| all_tasks.iter().find(|t| t.id == pid));
+    let breakdown = scoring::score_with_breakdown(&task, parent, today, &ctx.config.scoring, &tag_metas);
+
     let children: Vec<&Task> = all_tasks.iter().filter(|t| t.parent_id == Some(id)).collect();
 
     Ok(json!({
         "task": task,
+        "score": breakdown.total,
+        "score_breakdown": breakdown,
         "children": children,
     }))
 }

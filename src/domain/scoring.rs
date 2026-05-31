@@ -16,6 +16,22 @@ pub struct ScoredTask {
     pub score: f64,
 }
 
+/// The individual factor contributions that sum to a task's urgency score.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ScoreBreakdown {
+    pub due: f64,
+    pub priority: f64,
+    pub project: f64,
+    pub age: f64,
+    pub tags: f64,
+    pub parent_tags: f64,
+    pub started: f64,
+    pub adjustment: f64,
+    pub total: f64,
+    /// True when a `no_time_urgency` tag suppressed the due and age factors.
+    pub no_time_urgency: bool,
+}
+
 /// Due-date contribution to the urgency score.
 ///
 /// Returns 0.0 when no due date is set. Otherwise the score rises steeply as
@@ -118,6 +134,27 @@ pub fn score(
         + parent_tags
         + started_factor(&task.status, w)
         + task.score_adjustment
+}
+
+/// Like [`score`] but also returns the individual factor contributions.
+pub fn score_with_breakdown(
+    task: &Task,
+    parent: Option<&Task>,
+    today: NaiveDate,
+    w: &ScoringConfig,
+    tag_metas: &HashMap<String, TagMeta>,
+) -> ScoreBreakdown {
+    let no_time = tag_no_time_urgency(&task.tags, tag_metas);
+    let due       = if no_time { 0.0 } else { due_factor(task.due, today, w) };
+    let priority  = priority_factor(&task.priority, w);
+    let project   = project_factor(parent.map(|p| &p.priority), w);
+    let age       = if no_time { 0.0 } else { age_factor(task, today, w) };
+    let tags      = tag_factor(&task.tags, tag_metas, w);
+    let parent_tags = parent.map_or(0.0, |p| tag_factor(&p.tags, tag_metas, w));
+    let started   = started_factor(&task.status, w);
+    let adjustment = task.score_adjustment;
+    let total = due + priority + project + age + tags + parent_tags + started + adjustment;
+    ScoreBreakdown { due, priority, project, age, tags, parent_tags, started, adjustment, total, no_time_urgency: no_time }
 }
 
 /// Scores each task in `tasks`, sorts by score descending (most urgent first),
