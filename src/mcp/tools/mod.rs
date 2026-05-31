@@ -6,6 +6,7 @@ pub mod view;
 
 use serde_json::{json, Value};
 
+use crate::error::AppError;
 use crate::AppContext;
 
 use super::protocol::{CallToolResult, Tool};
@@ -223,6 +224,11 @@ pub fn all_tools() -> Vec<Tool> {
 
 /// Dispatches a tool call.  Returns `CallToolResult` (never an `Err` — errors
 /// are encoded as `is_error: true` content so the MCP caller sees them).
+///
+/// User-facing errors (task not found, invalid input, etc.) are returned
+/// verbatim.  Internal / system errors are logged at ERROR level with full
+/// detail and replaced with a short sanitized message before being sent to the
+/// client, preventing information disclosure of file paths and git internals.
 pub fn dispatch(
     tool_name: &str,
     params: &Value,
@@ -231,8 +237,47 @@ pub fn dispatch(
 ) -> CallToolResult {
     match call_tool(tool_name, params, ctx, scheduler) {
         Ok(v) => CallToolResult::success(v),
-        Err(e) => CallToolResult::error(e.to_string()),
+        Err(e) => {
+            let client_msg = sanitize_error(&e, tool_name, &ctx.log);
+            CallToolResult::error(client_msg)
+        }
     }
+}
+
+/// Classifies an error as user-facing or internal.
+///
+/// User-facing errors describe a problem with the request (wrong ID, invalid
+/// argument, etc.) and are safe to return verbatim.  Internal errors contain
+/// system details (file paths, git internals) that must not be disclosed; they
+/// are logged with full context and replaced by a short generic message.
+fn sanitize_error(err: &anyhow::Error, tool_name: &str, log: &crate::log::Logger) -> String {
+    // Attempt to downcast to the structured AppError type.
+    if let Some(app_err) = err.downcast_ref::<AppError>() {
+        match app_err {
+            // User-facing: safe to return verbatim.
+            AppError::TaskNotFound(_)
+            | AppError::InvalidDate(_, _)
+            | AppError::AmbiguousId(_, _)
+            | AppError::SlugConflict(_)
+            | AppError::GitConflict(_) => return app_err.to_string(),
+
+            // Internal: log and sanitize.
+            AppError::Io(_) | AppError::Other(_) => {
+                log.error(
+                    &format!("mcp/{tool_name}"),
+                    &format!("{err:#}"),
+                );
+                return "storage error".to_owned();
+            }
+        }
+    }
+
+    // Unknown / anyhow-only error chains — treat as internal.
+    log.error(
+        &format!("mcp/{tool_name}"),
+        &format!("{err:#}"),
+    );
+    "internal error".to_owned()
 }
 
 fn call_tool(
@@ -325,5 +370,129 @@ fn run_autosync(autosync: bool, ctx: &mut AppContext, scheduler: &super::sync_ma
         }
     } else {
         scheduler.schedule_deferred();
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{log::Logger, Config, AppContext};
+    use tempfile::TempDir;
+
+    fn make_ctx() -> (TempDir, AppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(dir.path())
+                .status()
+                .unwrap();
+        }
+        let (store, vcs) = crate::storage::open(dir.path().to_path_buf()).unwrap();
+        let log = Logger::new(dir.path());
+        let ctx = AppContext {
+            config: Config::default(),
+            store: Box::new(store),
+            vcs: Box::new(vcs),
+            repo_root: dir.path().to_path_buf(),
+            log,
+        };
+        (dir, ctx)
+    }
+
+    /// Internal errors (AppError::Io / AppError::Other with file paths) must be
+    /// sanitized — the client message must not contain filesystem paths.
+    #[test]
+    fn sanitize_error_strips_filesystem_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Logger::new(dir.path());
+
+        let io_err = std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "permission denied",
+        );
+        let app_err = AppError::Io(io_err);
+        let anyhow_err = anyhow::anyhow!(app_err)
+            .context(format!("reading /home/victor/tasks/foo.toml"));
+
+        let msg = sanitize_error(&anyhow_err, "add_task", &log);
+        assert_eq!(msg, "storage error", "expected generic storage error, got: {msg}");
+        assert!(
+            !msg.contains("/home/"),
+            "client message must not contain a filesystem path: {msg}",
+        );
+    }
+
+    /// AppError::Other that embeds an absolute path must not reach the client.
+    #[test]
+    fn sanitize_error_other_strips_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Logger::new(dir.path());
+
+        let app_err = AppError::Other(
+            "path not inside repository: /home/victor/.config/task-manager/config.toml".into(),
+        );
+        let anyhow_err = anyhow::anyhow!(app_err);
+
+        let msg = sanitize_error(&anyhow_err, "update_task", &log);
+        assert_eq!(msg, "storage error");
+        assert!(!msg.contains("/home/"), "path must be stripped: {msg}");
+    }
+
+    /// User-facing errors (TaskNotFound, InvalidDate, etc.) must still be
+    /// returned verbatim so the client can act on them.
+    #[test]
+    fn sanitize_error_preserves_user_facing_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Logger::new(dir.path());
+
+        let not_found = anyhow::anyhow!(AppError::TaskNotFound("abc123".into()));
+        let msg = sanitize_error(&not_found, "get_task", &log);
+        assert!(msg.contains("abc123"), "task-not-found should be verbatim: {msg}");
+        assert!(msg.contains("task not found"), "expected 'task not found': {msg}");
+
+        let ambiguous = anyhow::anyhow!(AppError::AmbiguousId("ab".into(), 3));
+        let msg = sanitize_error(&ambiguous, "get_task", &log);
+        assert!(msg.contains("ambiguous"), "expected ambiguous id message: {msg}");
+
+        let slug = anyhow::anyhow!(AppError::SlugConflict("my-task".into()));
+        let msg = sanitize_error(&slug, "add_task", &log);
+        assert!(msg.contains("my-task"), "slug conflict should mention slug: {msg}");
+    }
+
+    /// dispatch() must not expose filesystem paths through the CallToolResult.
+    #[test]
+    fn dispatch_internal_error_no_path_disclosure() {
+        let (_dir, mut ctx) = make_ctx();
+        let scheduler = crate::mcp::sync_manager::SyncScheduler::new();
+
+        // Corrupt the backing store path to force an IO error on the next write.
+        // We achieve this by replacing the tasks directory with a file, then
+        // attempting to add a task (which needs to write into that directory).
+        let tasks_dir = ctx.repo_root.join("tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        // Remove the dir and put a file in its place so writes fail.
+        std::fs::remove_dir(&tasks_dir).unwrap();
+        std::fs::write(&tasks_dir, b"not a directory").unwrap();
+
+        let params = serde_json::json!({ "title": "Should fail", "autosync": false });
+        let result = dispatch("add_task", &params, &mut ctx, &scheduler);
+
+        assert_eq!(result.is_error, Some(true), "expected an error result");
+        let text = &result.content[0].text;
+        assert!(
+            !text.contains("/home/"),
+            "response must not contain home path, got: {text}",
+        );
+        assert!(
+            !text.contains(ctx.repo_root.to_str().unwrap()),
+            "response must not contain repo root path, got: {text}",
+        );
     }
 }
