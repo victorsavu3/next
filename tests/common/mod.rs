@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use next::Config;
-use next::{log::Logger, AppContext};
+use next::AppContext;
 use tempfile::TempDir;
 
 pub struct TestEnv {
@@ -15,13 +15,11 @@ pub fn setup() -> TestEnv {
     let dir = tempfile::tempdir().unwrap();
     init_git_repo(dir.path());
     let (store, vcs) = next::storage::open(dir.path().to_path_buf()).unwrap();
-    let log = Logger::new(dir.path());
     let ctx = AppContext {
         config: Config::default(),
         store: Box::new(store),
         vcs: Box::new(vcs),
         repo_root: dir.path().to_path_buf(),
-        log,
     };
     TestEnv { _dir: dir, ctx }
 }

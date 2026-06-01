@@ -3,7 +3,6 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
-use next::log::Logger;
 use next::mcp::{
     config::McpConfig,
     git_init::clone_or_open,
@@ -14,6 +13,10 @@ use next::{AppContext, Config};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     let config = McpConfig::from_env()?;
 
     // Ensure the git repo is present (clone if needed).
@@ -22,14 +25,12 @@ async fn main() -> anyhow::Result<()> {
     // Open the task store.
     let (store, vcs) = next::storage::open(repo_path.clone())
         .map_err(|e| anyhow::anyhow!("failed to open task store: {e}"))?;
-    let log = Logger::new(&repo_path);
 
     let ctx = AppContext {
         config: Config::default(),
         store: Box::new(store),
         vcs: Box::new(vcs),
         repo_root: repo_path,
-        log,
     };
     let ctx = Arc::new(Mutex::new(ctx));
 

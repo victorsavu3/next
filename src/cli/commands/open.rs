@@ -16,8 +16,7 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("task [{}] has no URL set", &task.id.to_string()[..8]))?;
 
     open_url(url)?;
-    ctx.log
-        .info("open", &format!("[{}] {url}", &task.id.to_string()[..8]));
+    tracing::info!(cmd = "open", "[{}] {url}", &task.id.to_string()[..8]);
     Ok(())
 }
 

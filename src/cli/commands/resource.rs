@@ -80,6 +80,6 @@ fn set(ctx: &mut AppContext, resource: String, availability: Availability) -> an
     ctx.store.save_state(&state)?;
 
     let label = if available { "available" } else { "unavailable" };
-    ctx.log.info("resource", &format!("{resource} marked as {label}"));
+    tracing::info!(cmd = "resource", "{resource} marked as {label}");
     Ok(())
 }

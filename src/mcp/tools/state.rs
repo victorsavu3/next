@@ -19,19 +19,19 @@ pub fn sync(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     if !push_only {
         match ctx.vcs.pull()? {
             crate::store::PullResult::Clean => {
-                ctx.log.info("mcp/sync", "pull: clean");
+                tracing::info!(cmd = "mcp/sync", "pull: clean");
             }
             crate::store::PullResult::Conflicts(paths) => {
                 let names: Vec<_> = paths.iter().map(|p| p.display().to_string()).collect();
                 let msg = format!("merge conflicts: {}", names.join(", "));
-                ctx.log.error("mcp/sync", &msg);
+                tracing::error!(cmd = "mcp/sync", "{msg}");
                 anyhow::bail!("{msg}");
             }
         }
     }
     if !pull_only {
         ctx.vcs.push()?;
-        ctx.log.info("mcp/sync", "push: ok");
+        tracing::info!(cmd = "mcp/sync", "push: ok");
     }
 
     Ok(json!({ "status": "ok" }))
@@ -68,7 +68,7 @@ pub fn set_context(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
     }
 
     ctx.store.save_state(&state)?;
-    ctx.log.info("mcp/context", &format!("active={:?} excluded={:?}", state.active_contexts, state.excluded_contexts));
+    tracing::info!(cmd = "mcp/context", "active={:?} excluded={:?}", state.active_contexts, state.excluded_contexts);
     Ok(serde_json::to_value(&state)?)
 }
 
@@ -91,7 +91,7 @@ pub fn set_resource(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Valu
     let mut state = ctx.store.get_state()?;
     state.resources.insert(resource.to_owned(), available);
     ctx.store.save_state(&state)?;
-    ctx.log.info("mcp/resource", &format!("set {resource}={available}"));
+    tracing::info!(cmd = "mcp/resource", "set {resource}={available}");
     Ok(serde_json::to_value(&state)?)
 }
 
@@ -102,14 +102,14 @@ pub fn set_user_filter(params: &Value, ctx: &mut AppContext) -> anyhow::Result<V
     let mut state = ctx.store.get_state()?;
     state.active_users = users;
     ctx.store.save_state(&state)?;
-    ctx.log.info("mcp/user", &format!("set {:?}", state.active_users));
+    tracing::info!(cmd = "mcp/user", "set {:?}", state.active_users);
     Ok(serde_json::to_value(&state)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Config, AppContext, log::Logger};
+    use crate::{Config, AppContext};
     use tempfile::TempDir;
 
     fn make_ctx() -> (TempDir, AppContext) {
@@ -126,13 +126,11 @@ mod tests {
                 .unwrap();
         }
         let (store, vcs) = crate::storage::open(dir.path().to_path_buf()).unwrap();
-        let log = Logger::new(dir.path());
         let ctx = AppContext {
             config: Config::default(),
             store: Box::new(store),
             vcs: Box::new(vcs),
             repo_root: dir.path().to_path_buf(),
-            log,
         };
         (dir, ctx)
     }

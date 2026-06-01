@@ -17,7 +17,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     if !args.push_only {
         match ctx.vcs.pull()? {
             PullResult::Clean => {
-                ctx.log.info("sync", "pull: clean");
+                tracing::info!(cmd = "sync", "pull: clean");
             }
             PullResult::Conflicts(paths) => {
                 let names: Vec<_> = paths
@@ -25,8 +25,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
                     .map(|p| p.display().to_string())
                     .collect();
                 eprintln!("Merge conflicts — resolve manually: {}", names.join(", "));
-                ctx.log
-                    .error("sync", &format!("pull conflicts: {}", names.join(", ")));
+                tracing::error!(cmd = "sync", "pull conflicts: {}", names.join(", "));
                 return Ok(());
             }
         }
@@ -34,7 +33,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 
     if !args.pull_only {
         ctx.vcs.push()?;
-        ctx.log.info("sync", "push: ok");
+        tracing::info!(cmd = "sync", "push: ok");
     }
 
     Ok(())

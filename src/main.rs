@@ -7,6 +7,10 @@ use next::{
 };
 
 fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     let cli = Cli::parse();
 
     // Init and Tutorial run before the repository exists — handle them before AppContext.
@@ -94,14 +98,14 @@ fn main() -> anyhow::Result<()> {
     };
 
     if let Err(ref e) = result {
-        ctx.log.error(cmd_name, &format!("{e:#}"));
+        tracing::error!(cmd = cmd_name, "{e:#}");
     }
 
     if result.is_ok() && is_mutation && (cli_autosync || ctx.config.autosync) && !cli_no_autosync {
         let sync_args = sync_cmd::Args { push_only: false, pull_only: false };
         if let Err(e) = sync_cmd::run(sync_args, &mut ctx) {
             eprintln!("autosync failed: {e:#}");
-            ctx.log.error("sync", &format!("autosync: {e:#}"));
+            tracing::error!(cmd = "sync", "autosync: {e:#}");
         }
     }
 

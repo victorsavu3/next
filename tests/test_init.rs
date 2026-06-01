@@ -114,7 +114,6 @@ fn init_then_add_task_works() {
         store: Box::new(store),
         vcs: Box::new(vcs),
         repo_root: dir.path().to_path_buf(),
-        log: next::log::Logger::new(dir.path()),
     };
 
     use next::cli::commands::add;

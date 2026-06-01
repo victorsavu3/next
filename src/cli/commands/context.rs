@@ -75,7 +75,7 @@ fn set(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
     let mut state = ctx.store.get_state()?;
     state.active_contexts = tags.clone();
     ctx.store.save_state(&state)?;
-    ctx.log.info("context", &format!("set {}", tags.join(" ")));
+    tracing::info!(cmd = "context", "set {}", tags.join(" "));
     Ok(())
 }
 
@@ -83,7 +83,7 @@ fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
     let mut state = ctx.store.get_state()?;
     state.active_contexts.clear();
     ctx.store.save_state(&state)?;
-    ctx.log.info("context", "cleared");
+    tracing::info!(cmd = "context", "cleared");
     Ok(())
 }
 
@@ -92,7 +92,7 @@ fn exclude(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
     let mut state = ctx.store.get_state()?;
     state.excluded_contexts = tags.clone();
     ctx.store.save_state(&state)?;
-    ctx.log.info("context", &format!("exclude {}", tags.join(" ")));
+    tracing::info!(cmd = "context", "exclude {}", tags.join(" "));
     Ok(())
 }
 
@@ -100,6 +100,6 @@ fn clear_excluded(ctx: &mut AppContext) -> anyhow::Result<()> {
     let mut state = ctx.store.get_state()?;
     state.excluded_contexts.clear();
     ctx.store.save_state(&state)?;
-    ctx.log.info("context", "cleared excluded");
+    tracing::info!(cmd = "context", "cleared excluded");
     Ok(())
 }

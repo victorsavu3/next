@@ -53,17 +53,16 @@ impl SyncScheduler {
 pub fn do_sync(ctx: &mut AppContext) -> anyhow::Result<()> {
     match ctx.vcs.pull()? {
         PullResult::Clean => {
-            ctx.log.info("sync", "pull: clean");
+            tracing::info!(cmd = "sync", "pull: clean");
         }
         PullResult::Conflicts(paths) => {
             let names: Vec<_> = paths.iter().map(|p| p.display().to_string()).collect();
-            ctx.log
-                .error("sync", &format!("pull conflicts: {}", names.join(", ")));
+            tracing::error!(cmd = "sync", "pull conflicts: {}", names.join(", "));
             anyhow::bail!("merge conflicts: {}", names.join(", "));
         }
     }
     ctx.vcs.push()?;
-    ctx.log.info("sync", "push: ok");
+    tracing::info!(cmd = "sync", "push: ok");
     Ok(())
 }
 
@@ -120,10 +119,7 @@ async fn run_sync_background(ctx: &Arc<Mutex<AppContext>>, semaphore: &Arc<Semap
     let permit = match Arc::clone(semaphore).try_acquire_owned() {
         Ok(p) => p,
         Err(_) => {
-            ctx.lock()
-                .await
-                .log
-                .info("sync", "background sync skipped: explicit sync already in progress");
+            tracing::info!(cmd = "sync", "background sync skipped: explicit sync already in progress");
             return;
         }
     };
@@ -139,16 +135,10 @@ async fn run_sync_background(ctx: &Arc<Mutex<AppContext>>, semaphore: &Arc<Semap
     match result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
-            ctx.lock()
-                .await
-                .log
-                .error("sync", &format!("background sync error: {e}"));
+            tracing::error!(cmd = "sync", "background sync error: {e}");
         }
         Err(e) => {
-            ctx.lock()
-                .await
-                .log
-                .error("sync", &format!("background sync task panic: {e}"));
+            tracing::error!(cmd = "sync", "background sync task panic: {e}");
         }
     }
 }

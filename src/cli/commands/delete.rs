@@ -31,7 +31,6 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     ctx.vcs
         .commit(&[task_path], &format!("next: delete {}", task.title))?;
 
-    ctx.log
-        .info("delete", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+    tracing::info!(cmd = "delete", "[{}] {}", &task.id.to_string()[..8], task.title);
     Ok(())
 }

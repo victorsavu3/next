@@ -53,7 +53,7 @@ pub fn get_forecast(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Valu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Config, AppContext, log::Logger};
+    use crate::{Config, AppContext};
     use tempfile::TempDir;
 
     fn make_ctx() -> (TempDir, AppContext) {
@@ -70,13 +70,11 @@ mod tests {
                 .unwrap();
         }
         let (store, vcs) = crate::storage::open(dir.path().to_path_buf()).unwrap();
-        let log = Logger::new(dir.path());
         let ctx = AppContext {
             config: Config::default(),
             store: Box::new(store),
             vcs: Box::new(vcs),
             repo_root: dir.path().to_path_buf(),
-            log,
         };
         (dir, ctx)
     }

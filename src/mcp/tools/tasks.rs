@@ -145,7 +145,7 @@ pub fn add_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         &*ctx.vcs,
     )?;
 
-    ctx.log.info("mcp/add", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+    tracing::info!(cmd = "mcp/add", "[{}] {}", &task.id.to_string()[..8], task.title);
 
     Ok(serde_json::to_value(&task)?)
 }
@@ -170,7 +170,7 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
             let task_path = storage::task_path(&ctx.repo_root, &task);
             ctx.store.save_task(&task)?;
             ctx.vcs.commit(&[task_path], &format!("next: start {}", task.title))?;
-            ctx.log.info("mcp/start", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+            tracing::info!(cmd = "mcp/start", "[{}] {}", &task.id.to_string()[..8], task.title);
             return Ok(serde_json::to_value(&task)?);
         }
         Some("stop") => {
@@ -179,7 +179,7 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
             let task_path = storage::task_path(&ctx.repo_root, &task);
             ctx.store.save_task(&task)?;
             ctx.vcs.commit(&[task_path], &format!("next: stop {}", task.title))?;
-            ctx.log.info("mcp/stop", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+            tracing::info!(cmd = "mcp/stop", "[{}] {}", &task.id.to_string()[..8], task.title);
             return Ok(serde_json::to_value(&task)?);
         }
         Some("cancel") => {
@@ -188,7 +188,7 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
             let task_path = storage::task_path(&ctx.repo_root, &task);
             ctx.store.save_task(&task)?;
             ctx.vcs.commit(&[task_path], &format!("next: cancel {}", task.title))?;
-            ctx.log.info("mcp/cancel", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+            tracing::info!(cmd = "mcp/cancel", "[{}] {}", &task.id.to_string()[..8], task.title);
             return Ok(serde_json::to_value(&task)?);
         }
         Some("done") => {
@@ -203,7 +203,7 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
                 &mut *ctx.store,
                 &*ctx.vcs,
             )?;
-            ctx.log.info("mcp/done", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+            tracing::info!(cmd = "mcp/done", "[{}] {}", &task.id.to_string()[..8], task.title);
             return Ok(serde_json::to_value(&task)?);
         }
         Some("move") | None => {} // fall through to field-edit path
@@ -286,7 +286,7 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
     )?;
 
     let verb = action.unwrap_or("edit");
-    ctx.log.info(&format!("mcp/{verb}"), &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+    tracing::info!(cmd = %format!("mcp/{verb}"), "[{}] {}", &task.id.to_string()[..8], task.title);
 
     Ok(serde_json::to_value(&task)?)
 }
@@ -305,7 +305,7 @@ pub fn delete_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
 
     ctx.store.delete_task(id)?;
     ctx.vcs.commit(&[task_path], &format!("next: delete {}", task.title))?;
-    ctx.log.info("mcp/delete", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+    tracing::info!(cmd = "mcp/delete", "[{}] {}", &task.id.to_string()[..8], task.title);
 
     Ok(json!({ "deleted": task.id.to_string(), "title": task.title }))
 }
@@ -313,7 +313,7 @@ pub fn delete_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Config, AppContext, log::Logger};
+    use crate::{Config, AppContext};
     use tempfile::TempDir;
 
     fn make_ctx() -> (TempDir, AppContext) {
@@ -330,13 +330,11 @@ mod tests {
                 .unwrap();
         }
         let (store, vcs) = crate::storage::open(dir.path().to_path_buf()).unwrap();
-        let log = Logger::new(dir.path());
         let ctx = AppContext {
             config: Config::default(),
             store: Box::new(store),
             vcs: Box::new(vcs),
             repo_root: dir.path().to_path_buf(),
-            log,
         };
         (dir, ctx)
     }

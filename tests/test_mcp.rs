@@ -9,7 +9,6 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
-use next::log::Logger;
 use next::mcp::{
     server::{AppState, build_router},
     sync_manager::spawn_deferred_sync,
@@ -39,13 +38,11 @@ async fn start_test_server(
 ) -> SocketAddr {
     init_git_repo(repo_dir);
     let (store, vcs) = next::storage::open(repo_dir.to_path_buf()).unwrap();
-    let log = Logger::new(repo_dir);
     let ctx = AppContext {
         config: Config::default(),
         store: Box::new(store),
         vcs: Box::new(vcs),
         repo_root: repo_dir.to_path_buf(),
-        log,
     };
     let ctx = Arc::new(Mutex::new(ctx));
     let scheduler = spawn_deferred_sync(ctx.clone(), std::time::Duration::from_secs(30));

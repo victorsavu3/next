@@ -23,8 +23,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);
     } else {
-        ctx.log
-            .info("stop", &format!("[{}] {}", &task.id.to_string()[..8], task.title));
+        tracing::info!(cmd = "stop", "[{}] {}", &task.id.to_string()[..8], task.title);
     }
     Ok(())
 }

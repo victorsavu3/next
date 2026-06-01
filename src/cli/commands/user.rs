@@ -50,7 +50,7 @@ fn set(ctx: &mut AppContext, users: Vec<String>) -> anyhow::Result<()> {
     let mut state = ctx.store.get_state()?;
     state.active_users = users.clone();
     ctx.store.save_state(&state)?;
-    ctx.log.info("user", &format!("set {}", users.join(" ")));
+    tracing::info!(cmd = "user", "set {}", users.join(" "));
     Ok(())
 }
 
@@ -58,7 +58,7 @@ fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
     let mut state = ctx.store.get_state()?;
     state.active_users.clear();
     ctx.store.save_state(&state)?;
-    ctx.log.info("user", "cleared");
+    tracing::info!(cmd = "user", "cleared");
     Ok(())
 }
 

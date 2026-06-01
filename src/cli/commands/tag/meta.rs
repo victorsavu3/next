@@ -98,8 +98,7 @@ pub fn describe(ctx: &mut AppContext, args: DescribeArgs) -> anyhow::Result<()> 
     let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
     ctx.vcs
         .commit(&[tag_path], &format!("next: tag describe {}", args.tag))?;
-    ctx.log
-        .info("tag", &format!("described {} = {}", args.tag, args.description));
+    tracing::info!(cmd = "tag", "described {} = {}", args.tag, args.description);
     Ok(())
 }
 
@@ -110,8 +109,7 @@ pub fn clear_description(ctx: &mut AppContext, args: ClearDescriptionArgs) -> an
         &[tag_path],
         &format!("next: tag clear-description {}", args.tag),
     )?;
-    ctx.log
-        .info("tag", &format!("cleared description for {}", args.tag));
+    tracing::info!(cmd = "tag", "cleared description for {}", args.tag);
     Ok(())
 }
 
@@ -123,8 +121,7 @@ pub fn set_url(ctx: &mut AppContext, args: SetUrlArgs) -> anyhow::Result<()> {
     let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
     ctx.vcs
         .commit(&[tag_path], &format!("next: tag set-url {}", args.tag))?;
-    ctx.log
-        .info("tag", &format!("set url for {} = {}", args.tag, args.url));
+    tracing::info!(cmd = "tag", "set url for {} = {}", args.tag, args.url);
     Ok(())
 }
 
@@ -143,8 +140,7 @@ pub fn clear_url(ctx: &mut AppContext, args: ClearUrlArgs) -> anyhow::Result<()>
     }
     ctx.vcs
         .commit(&[tag_path], &format!("next: tag clear-url {}", args.tag))?;
-    ctx.log
-        .info("tag", &format!("cleared url for {}", args.tag));
+    tracing::info!(cmd = "tag", "cleared url for {}", args.tag);
     Ok(())
 }
 
@@ -157,10 +153,7 @@ pub fn set_priority(ctx: &mut AppContext, args: SetPriorityArgs) -> anyhow::Resu
     let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
     ctx.vcs
         .commit(&[tag_path], &format!("next: tag set-priority {}", args.tag))?;
-    ctx.log.info(
-        "tag",
-        &format!("set priority for {} = {}", args.tag, args.priority),
-    );
+    tracing::info!(cmd = "tag", "set priority for {} = {}", args.tag, args.priority);
     Ok(())
 }
 
@@ -179,8 +172,7 @@ pub fn clear_priority(ctx: &mut AppContext, args: ClearPriorityArgs) -> anyhow::
     }
     ctx.vcs
         .commit(&[tag_path], &format!("next: tag clear-priority {}", args.tag))?;
-    ctx.log
-        .info("tag", &format!("cleared priority for {}", args.tag));
+    tracing::info!(cmd = "tag", "cleared priority for {}", args.tag);
     Ok(())
 }
 
@@ -192,8 +184,7 @@ pub fn set_no_time_urgency(ctx: &mut AppContext, args: NoTimeUrgencyArgs) -> any
     let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
     ctx.vcs
         .commit(&[tag_path], &format!("next: tag set-no-time-urgency {}", args.tag))?;
-    ctx.log
-        .info("tag", &format!("set no-time-urgency for {}", args.tag));
+    tracing::info!(cmd = "tag", "set no-time-urgency for {}", args.tag);
     Ok(())
 }
 
@@ -212,8 +203,7 @@ pub fn clear_no_time_urgency(ctx: &mut AppContext, args: NoTimeUrgencyArgs) -> a
     }
     ctx.vcs
         .commit(&[tag_path], &format!("next: tag clear-no-time-urgency {}", args.tag))?;
-    ctx.log
-        .info("tag", &format!("cleared no-time-urgency for {}", args.tag));
+    tracing::info!(cmd = "tag", "cleared no-time-urgency for {}", args.tag);
     Ok(())
 }
 

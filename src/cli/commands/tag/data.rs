@@ -76,8 +76,7 @@ fn set(ctx: &mut AppContext, args: DataSetArgs) -> anyhow::Result<()> {
         &[tag_path],
         &format!("next: tag data set {} {}", args.tag, args.key),
     )?;
-    ctx.log
-        .info("tag", &format!("set data {}.{} = {}", args.tag, args.key, args.value));
+    tracing::info!(cmd = "tag", "set data {}.{} = {}", args.tag, args.key, args.value);
     Ok(())
 }
 
@@ -110,8 +109,7 @@ fn unset(ctx: &mut AppContext, args: DataUnsetArgs) -> anyhow::Result<()> {
         &[tag_path],
         &format!("next: tag data unset {} {}", args.tag, args.key),
     )?;
-    ctx.log
-        .info("tag", &format!("unset data {}.{}", args.tag, args.key));
+    tracing::info!(cmd = "tag", "unset data {}.{}", args.tag, args.key);
     Ok(())
 }
 

@@ -238,7 +238,7 @@ pub fn dispatch(
     match call_tool(tool_name, params, ctx, scheduler) {
         Ok(v) => CallToolResult::success(v),
         Err(e) => {
-            let client_msg = sanitize_error(&e, tool_name, &ctx.log);
+            let client_msg = sanitize_error(&e, tool_name);
             CallToolResult::error(client_msg)
         }
     }
@@ -250,7 +250,7 @@ pub fn dispatch(
 /// argument, etc.) and are safe to return verbatim.  Internal errors contain
 /// system details (file paths, git internals) that must not be disclosed; they
 /// are logged with full context and replaced by a short generic message.
-fn sanitize_error(err: &anyhow::Error, tool_name: &str, log: &crate::log::Logger) -> String {
+fn sanitize_error(err: &anyhow::Error, tool_name: &str) -> String {
     // Attempt to downcast to the structured AppError type.
     if let Some(app_err) = err.downcast_ref::<AppError>() {
         match app_err {
@@ -263,20 +263,14 @@ fn sanitize_error(err: &anyhow::Error, tool_name: &str, log: &crate::log::Logger
 
             // Internal: log and sanitize.
             AppError::Io(_) | AppError::Other(_) => {
-                log.error(
-                    &format!("mcp/{tool_name}"),
-                    &format!("{err:#}"),
-                );
+                tracing::error!(cmd = %format!("mcp/{tool_name}"), "{err:#}");
                 return "storage error".to_owned();
             }
         }
     }
 
     // Unknown / anyhow-only error chains — treat as internal.
-    log.error(
-        &format!("mcp/{tool_name}"),
-        &format!("{err:#}"),
-    );
+    tracing::error!(cmd = %format!("mcp/{tool_name}"), "{err:#}");
     "internal error".to_owned()
 }
 
@@ -366,7 +360,7 @@ fn call_tool(
 fn run_autosync(autosync: bool, ctx: &mut AppContext, scheduler: &super::sync_manager::SyncScheduler) {
     if autosync {
         if let Err(e) = do_sync(ctx) {
-            ctx.log.error("mcp/autosync", &e.to_string());
+            tracing::error!(cmd = "mcp/autosync", "{e}");
         }
     } else {
         scheduler.schedule_deferred();
@@ -378,7 +372,7 @@ fn run_autosync(autosync: bool, ctx: &mut AppContext, scheduler: &super::sync_ma
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{log::Logger, Config, AppContext};
+    use crate::{Config, AppContext};
     use tempfile::TempDir;
 
     fn make_ctx() -> (TempDir, AppContext) {
@@ -395,13 +389,11 @@ mod tests {
                 .unwrap();
         }
         let (store, vcs) = crate::storage::open(dir.path().to_path_buf()).unwrap();
-        let log = Logger::new(dir.path());
         let ctx = AppContext {
             config: Config::default(),
             store: Box::new(store),
             vcs: Box::new(vcs),
             repo_root: dir.path().to_path_buf(),
-            log,
         };
         (dir, ctx)
     }
@@ -410,9 +402,6 @@ mod tests {
     /// sanitized — the client message must not contain filesystem paths.
     #[test]
     fn sanitize_error_strips_filesystem_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = Logger::new(dir.path());
-
         let io_err = std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "permission denied",
@@ -421,7 +410,7 @@ mod tests {
         let anyhow_err = anyhow::anyhow!(app_err)
             .context(format!("reading /home/victor/tasks/foo.toml"));
 
-        let msg = sanitize_error(&anyhow_err, "add_task", &log);
+        let msg = sanitize_error(&anyhow_err, "add_task");
         assert_eq!(msg, "storage error", "expected generic storage error, got: {msg}");
         assert!(
             !msg.contains("/home/"),
@@ -432,15 +421,12 @@ mod tests {
     /// AppError::Other that embeds an absolute path must not reach the client.
     #[test]
     fn sanitize_error_other_strips_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = Logger::new(dir.path());
-
         let app_err = AppError::Other(
             "path not inside repository: /home/victor/.config/task-manager/config.toml".into(),
         );
         let anyhow_err = anyhow::anyhow!(app_err);
 
-        let msg = sanitize_error(&anyhow_err, "update_task", &log);
+        let msg = sanitize_error(&anyhow_err, "update_task");
         assert_eq!(msg, "storage error");
         assert!(!msg.contains("/home/"), "path must be stripped: {msg}");
     }
@@ -449,20 +435,17 @@ mod tests {
     /// returned verbatim so the client can act on them.
     #[test]
     fn sanitize_error_preserves_user_facing_errors() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = Logger::new(dir.path());
-
         let not_found = anyhow::anyhow!(AppError::TaskNotFound("abc123".into()));
-        let msg = sanitize_error(&not_found, "get_task", &log);
+        let msg = sanitize_error(&not_found, "get_task");
         assert!(msg.contains("abc123"), "task-not-found should be verbatim: {msg}");
         assert!(msg.contains("task not found"), "expected 'task not found': {msg}");
 
         let ambiguous = anyhow::anyhow!(AppError::AmbiguousId("ab".into(), 3));
-        let msg = sanitize_error(&ambiguous, "get_task", &log);
+        let msg = sanitize_error(&ambiguous, "get_task");
         assert!(msg.contains("ambiguous"), "expected ambiguous id message: {msg}");
 
         let slug = anyhow::anyhow!(AppError::SlugConflict("my-task".into()));
-        let msg = sanitize_error(&slug, "add_task", &log);
+        let msg = sanitize_error(&slug, "add_task");
         assert!(msg.contains("my-task"), "slug conflict should mention slug: {msg}");
     }
 

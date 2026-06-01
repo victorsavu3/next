@@ -64,10 +64,7 @@ fn set(ctx: &mut AppContext, args: SetArgs) -> anyhow::Result<()> {
         &[task_path],
         &format!("next: data set {} {} on {}", args.key, value, task.title),
     )?;
-    ctx.log.info(
-        "data",
-        &format!("[{}] set {}={}", &task.id.to_string()[..8], args.key, value),
-    );
+    tracing::info!(cmd = "data", "[{}] set {}={}", &task.id.to_string()[..8], args.key, value);
     Ok(())
 }
 
@@ -87,10 +84,7 @@ fn unset(ctx: &mut AppContext, args: UnsetArgs) -> anyhow::Result<()> {
         &[task_path],
         &format!("next: data unset {} on {}", args.key, task.title),
     )?;
-    ctx.log.info(
-        "data",
-        &format!("[{}] unset {}", &task.id.to_string()[..8], args.key),
-    );
+    tracing::info!(cmd = "data", "[{}] unset {}", &task.id.to_string()[..8], args.key);
     Ok(())
 }
 

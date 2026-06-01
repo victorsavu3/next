@@ -3,15 +3,12 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 use crate::{Config, Store, VcsBackend};
 
-use crate::log::Logger;
-
 pub struct AppContext {
     pub config: Config,
     pub store: Box<dyn Store>,
     pub vcs: Box<dyn VcsBackend>,
     /// Absolute path to the repository root (contains `.git` and `state.toml`).
     pub repo_root: PathBuf,
-    pub log: Logger,
 }
 
 impl AppContext {
@@ -50,13 +47,11 @@ impl AppContext {
         let vcs: Box<dyn VcsBackend> = Box::new(v);
         let repo_root = root;
 
-        let log = Logger::new(&repo_root);
         Ok(Self {
             config,
             store,
             vcs,
             repo_root,
-            log,
         })
     }
 }
