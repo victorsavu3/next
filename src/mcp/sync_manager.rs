@@ -164,10 +164,223 @@ pub fn spawn_periodic_sync(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use tokio::sync::Mutex;
+
     use super::*;
+    use crate::error::{AppError, Result};
+    use crate::store::{PullResult, Store, VcsBackend};
+    use crate::{AppContext, Config};
+    use crate::domain::state::GlobalState;
+    use crate::domain::tag::TagMeta;
+    use crate::domain::task::Task;
+    use uuid::Uuid;
+
+    struct FakeStore;
+
+    impl Store for FakeStore {
+        fn get_task(&self, _id: Uuid) -> Result<Task> { unimplemented!() }
+        fn get_task_by_slug(&self, _slug: &str) -> Result<Option<Task>> { unimplemented!() }
+        fn find_tasks_by_prefix(&self, _prefix: &str) -> Result<Vec<Task>> { unimplemented!() }
+        fn list_tasks(&self) -> Result<Vec<Task>> { unimplemented!() }
+        fn save_task(&mut self, _task: &Task) -> Result<()> { unimplemented!() }
+        fn delete_task(&mut self, _id: Uuid) -> Result<()> { unimplemented!() }
+        fn get_state(&self) -> Result<GlobalState> { unimplemented!() }
+        fn save_state(&mut self, _state: &GlobalState) -> Result<()> { unimplemented!() }
+        fn get_tag_meta(&self, _tag: &str) -> Result<Option<TagMeta>> { unimplemented!() }
+        fn set_tag_meta(&mut self, _tag: &str, _meta: TagMeta) -> Result<()> { unimplemented!() }
+        fn delete_tag_meta(&mut self, _tag: &str) -> Result<()> { unimplemented!() }
+        fn list_tag_metas(&self) -> Result<HashMap<String, TagMeta>> { unimplemented!() }
+    }
+
+    #[derive(Clone)]
+    struct FakeVcs {
+        sync_count: Arc<AtomicUsize>,
+        fail: bool,
+    }
+
+    impl FakeVcs {
+        fn new() -> Self {
+            Self { sync_count: Arc::new(AtomicUsize::new(0)), fail: false }
+        }
+
+        fn new_failing() -> Self {
+            Self { sync_count: Arc::new(AtomicUsize::new(0)), fail: true }
+        }
+    }
+
+    impl VcsBackend for FakeVcs {
+        fn commit(&self, _paths: &[std::path::PathBuf], _message: &str) -> Result<()> { Ok(()) }
+        fn head_hash(&self) -> Result<String> { Ok("0000000000000000000000000000000000000000".to_owned()) }
+
+        fn pull(&self) -> Result<PullResult> {
+            if self.fail {
+                return Err(AppError::Other("fake pull error".to_owned()));
+            }
+            self.sync_count.fetch_add(1, Ordering::SeqCst);
+            Ok(PullResult::Clean)
+        }
+
+        fn push(&self) -> Result<()> {
+            if self.fail {
+                return Err(AppError::Other("fake push error".to_owned()));
+            }
+            Ok(())
+        }
+    }
+
+    fn make_ctx(vcs: FakeVcs) -> AppContext {
+        AppContext {
+            config: Config::default(),
+            store: Box::new(FakeStore),
+            vcs: Box::new(vcs),
+            repo_root: std::path::PathBuf::from("/tmp"),
+        }
+    }
 
     #[test]
     fn scheduler_size_check() {
         let _ = std::mem::size_of::<SyncScheduler>();
+    }
+
+    #[test]
+    fn semaphore_blocks_concurrent_sync() {
+        let scheduler = SyncScheduler::new_for_test();
+        let _permit = scheduler.try_acquire().expect("first acquire must succeed");
+        assert!(scheduler.try_acquire().is_none(), "second acquire must fail while first is held");
+    }
+
+    #[test]
+    fn semaphore_released_after_permit_drop() {
+        let scheduler = SyncScheduler::new_for_test();
+        {
+            let _permit = scheduler.try_acquire().expect("first acquire must succeed");
+        }
+        assert!(scheduler.try_acquire().is_some(), "must succeed after permit is dropped");
+    }
+
+    #[tokio::test]
+    async fn cancel_prevents_deferred_sync() {
+        tokio::time::pause();
+
+        let vcs = FakeVcs::new();
+        let counter = Arc::clone(&vcs.sync_count);
+        let ctx = Arc::new(Mutex::new(make_ctx(vcs)));
+
+        let delay = Duration::from_secs(5);
+        let scheduler = spawn_deferred_sync(ctx, delay);
+
+        scheduler.schedule_deferred();
+        // yield so the background task can receive the Schedule message
+        tokio::task::yield_now().await;
+
+        scheduler.cancel();
+        // yield so the background task can receive the Cancel message
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(delay * 2).await;
+        tokio::task::yield_now().await;
+
+        assert_eq!(counter.load(Ordering::SeqCst), 0, "cancelled sync must not run");
+    }
+
+    #[tokio::test]
+    async fn deferred_sync_fires_after_delay() {
+        tokio::time::pause();
+
+        let vcs = FakeVcs::new();
+        let counter = Arc::clone(&vcs.sync_count);
+        let ctx = Arc::new(Mutex::new(make_ctx(vcs)));
+
+        let delay = Duration::from_secs(5);
+        let scheduler = spawn_deferred_sync(ctx, delay);
+
+        scheduler.schedule_deferred();
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(delay + Duration::from_millis(1)).await;
+        // spawn_blocking runs on a dedicated thread pool; give it time to finish
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(counter.load(Ordering::SeqCst), 1, "sync must run after delay");
+    }
+
+    #[tokio::test]
+    async fn reschedule_resets_timer() {
+        tokio::time::pause();
+
+        let vcs = FakeVcs::new();
+        let counter = Arc::clone(&vcs.sync_count);
+        let ctx = Arc::new(Mutex::new(make_ctx(vcs)));
+
+        let delay = Duration::from_secs(5);
+        let scheduler = spawn_deferred_sync(ctx, delay);
+
+        scheduler.schedule_deferred();
+        tokio::task::yield_now().await;
+
+        // advance most of the way, then reschedule — timer must reset
+        tokio::time::advance(Duration::from_secs(4)).await;
+        tokio::task::yield_now().await;
+
+        scheduler.schedule_deferred();
+        tokio::task::yield_now().await;
+
+        // advancing by the original delay should NOT fire (timer was reset)
+        tokio::time::advance(Duration::from_secs(2)).await;
+        tokio::task::yield_now().await;
+
+        assert_eq!(counter.load(Ordering::SeqCst), 0, "sync must not fire before reset delay elapses");
+
+        // now advance past the full reset delay
+        tokio::time::advance(Duration::from_secs(4)).await;
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(counter.load(Ordering::SeqCst), 1, "sync must fire after reset delay elapses");
+    }
+
+    #[tokio::test]
+    async fn semaphore_held_skips_background_sync() {
+        tokio::time::pause();
+
+        let vcs = FakeVcs::new();
+        let counter = Arc::clone(&vcs.sync_count);
+        let ctx = Arc::new(Mutex::new(make_ctx(vcs)));
+
+        let delay = Duration::from_secs(1);
+        let scheduler = spawn_deferred_sync(ctx, delay);
+
+        // hold the semaphore to simulate an explicit sync in progress
+        let _permit = scheduler.try_acquire().expect("must acquire");
+
+        scheduler.schedule_deferred();
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(delay + Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(counter.load(Ordering::SeqCst), 0, "background sync must be skipped when semaphore is held");
+    }
+
+    #[tokio::test]
+    async fn do_sync_calls_pull_and_push() {
+        let vcs = FakeVcs::new();
+        let counter = Arc::clone(&vcs.sync_count);
+        let mut ctx = make_ctx(vcs);
+        do_sync(&mut ctx).unwrap();
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn do_sync_propagates_pull_error() {
+        let vcs = FakeVcs::new_failing();
+        let mut ctx = make_ctx(vcs);
+        assert!(do_sync(&mut ctx).is_err());
     }
 }
