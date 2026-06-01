@@ -1,37 +1,10 @@
 use serde_json::{json, Value};
 
 use crate::cli::commands::data::parse_value;
+use crate::domain::task::validate_key;
 use crate::resolve::resolve_task_id;
 use crate::storage;
 use crate::AppContext;
-
-/// Maximum allowed length for a data key.
-const KEY_MAX_LEN: usize = 256;
-
-/// Validates a data key.
-///
-/// Allowed characters: ASCII letters (`a-z`, `A-Z`), digits (`0-9`), hyphen (`-`),
-/// and underscore (`_`).  Keys must be non-empty and at most [`KEY_MAX_LEN`] characters.
-fn validate_key(key: &str) -> anyhow::Result<()> {
-    if key.is_empty() {
-        anyhow::bail!("key must not be empty");
-    }
-    if key.len() > KEY_MAX_LEN {
-        anyhow::bail!(
-            "key is too long ({} characters); maximum allowed length is {KEY_MAX_LEN}",
-            key.len()
-        );
-    }
-    if let Some(bad) = key
-        .chars()
-        .find(|c| !matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_'))
-    {
-        anyhow::bail!(
-            "key contains invalid character {bad:?} — only letters, digits, '-' and '_' are allowed"
-        );
-    }
-    Ok(())
-}
 
 /// Unified task data key-value tool.
 ///
@@ -257,11 +230,13 @@ mod tests {
 
     #[test]
     fn validate_key_unit_rejects_empty() {
+        use crate::domain::task::validate_key;
         assert!(validate_key("").is_err());
     }
 
     #[test]
     fn validate_key_unit_accepts_valid_keys() {
+        use crate::domain::task::validate_key;
         assert!(validate_key("score").is_ok());
         assert!(validate_key("my-key_123").is_ok());
         assert!(validate_key(&"a".repeat(256)).is_ok());

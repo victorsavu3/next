@@ -147,6 +147,34 @@ fn is_zero(v: &f64) -> bool {
     v.abs() < f64::EPSILON
 }
 
+/// Maximum allowed length for a task data key.
+pub const KEY_MAX_LEN: usize = 256;
+
+/// Validates a task data key.
+///
+/// Allowed characters: ASCII letters (`a-z`, `A-Z`), digits (`0-9`), hyphen (`-`),
+/// and underscore (`_`).  Keys must be non-empty and at most [`KEY_MAX_LEN`] characters.
+pub fn validate_key(key: &str) -> anyhow::Result<()> {
+    if key.is_empty() {
+        anyhow::bail!("key must not be empty");
+    }
+    if key.len() > KEY_MAX_LEN {
+        anyhow::bail!(
+            "key is too long ({} characters); maximum allowed length is {KEY_MAX_LEN}",
+            key.len()
+        );
+    }
+    if let Some(bad) = key
+        .chars()
+        .find(|c| !matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_'))
+    {
+        anyhow::bail!(
+            "key contains invalid character {bad:?} — only letters, digits, '-' and '_' are allowed"
+        );
+    }
+    Ok(())
+}
+
 impl std::fmt::Display for Status {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -346,5 +374,30 @@ mod tests {
         let mut t = Task::new("Do laundry");
         t.mark_done();
         assert_eq!(t.status, Status::Done);
+    }
+
+    #[test]
+    fn validate_key_rejects_empty() {
+        assert!(validate_key("").is_err());
+    }
+
+    #[test]
+    fn validate_key_accepts_valid_keys() {
+        assert!(validate_key("score").is_ok());
+        assert!(validate_key("my-key_123").is_ok());
+        assert!(validate_key(&"a".repeat(256)).is_ok());
+    }
+
+    #[test]
+    fn validate_key_rejects_oversized() {
+        let err = validate_key(&"a".repeat(257)).unwrap_err();
+        assert!(err.to_string().contains("too long"), "expected 'too long' in: {err}");
+    }
+
+    #[test]
+    fn validate_key_rejects_invalid_chars() {
+        assert!(validate_key("bad key").unwrap_err().to_string().contains("invalid character"));
+        assert!(validate_key("path/traversal").unwrap_err().to_string().contains("invalid character"));
+        assert!(validate_key("some.key").unwrap_err().to_string().contains("invalid character"));
     }
 }

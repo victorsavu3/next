@@ -1,3 +1,4 @@
+use crate::domain::task::validate_key;
 use crate::{resolve::resolve_task_id, AppContext};
 
 #[derive(clap::Args, Debug)]
@@ -51,6 +52,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 }
 
 fn set(ctx: &mut AppContext, args: SetArgs) -> anyhow::Result<()> {
+    validate_key(&args.key)?;
     let id = resolve_task_id(&*ctx.store, &args.id)?;
     let mut task = ctx.store.get_task(id)?;
 
@@ -72,6 +74,7 @@ fn set(ctx: &mut AppContext, args: SetArgs) -> anyhow::Result<()> {
 }
 
 fn unset(ctx: &mut AppContext, args: UnsetArgs) -> anyhow::Result<()> {
+    validate_key(&args.key)?;
     let id = resolve_task_id(&*ctx.store, &args.id)?;
     let mut task = ctx.store.get_task(id)?;
 
@@ -95,6 +98,7 @@ fn unset(ctx: &mut AppContext, args: UnsetArgs) -> anyhow::Result<()> {
 }
 
 fn get(ctx: &mut AppContext, args: GetArgs) -> anyhow::Result<()> {
+    validate_key(&args.key)?;
     let id = resolve_task_id(&*ctx.store, &args.id)?;
     let task = ctx.store.get_task(id)?;
 
