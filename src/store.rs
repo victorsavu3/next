@@ -109,6 +109,15 @@ pub trait Store: Send + Sync {
             .filter_map(|(tag, meta)| meta.description.map(|d| (tag, d)))
             .collect())
     }
+
+    /// Called after a VCS pull to allow cache invalidation.
+    ///
+    /// Implementations that cache data keyed on the git HEAD (e.g. `CachedStore`)
+    /// should rebuild when `new_head` differs from the stored hash. The default
+    /// implementation is a no-op for stores that need no special handling.
+    fn after_pull(&mut self, _new_head: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Version-control backend.

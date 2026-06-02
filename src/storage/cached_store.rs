@@ -180,6 +180,14 @@ impl Store for CachedStore {
     fn list_tag_metas(&self) -> Result<HashMap<String, TagMeta>> {
         self.inner.list_tag_metas()
     }
+
+    fn after_pull(&mut self, new_head: &str) -> Result<()> {
+        let stored = self.with_conn(|conn| get_meta(conn, "head_hash"))?;
+        if stored.as_deref() != Some(new_head) {
+            self.rebuild(new_head)?;
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -475,5 +483,39 @@ mod tests {
         let found = store.get_task_by_slug("external").unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().title, "External task");
+    }
+
+    #[test]
+    fn after_pull_picks_up_new_toml_files() {
+        // Simulates what happens in the MCP server: store is opened once,
+        // then a git pull adds new TOML files to disk. after_pull() must
+        // rebuild the cache so the new tasks become visible.
+        let dir = TempDir::new().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+
+        let tasks_dir = dir.path().join("tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+
+        let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let db_path = dir.path().join(".next.db");
+        let mut store = CachedStore::open(inner, db_path, "head-before-pull").unwrap();
+
+        // Initially empty.
+        assert!(store.list_tasks().unwrap().is_empty());
+
+        // Simulate a git pull: write a new TOML file to disk directly.
+        let task = Task::new("Pulled task");
+        let toml = toml::to_string_pretty(&task).unwrap();
+        fs::write(tasks_dir.join("pulled.toml"), toml).unwrap();
+
+        // Cache still stale — task not visible yet.
+        assert!(store.list_tasks().unwrap().is_empty());
+
+        // after_pull with a new head hash triggers a rebuild.
+        store.after_pull("head-after-pull").unwrap();
+
+        let all = store.list_tasks().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].title, "Pulled task");
     }
 }

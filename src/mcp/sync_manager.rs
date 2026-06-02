@@ -61,6 +61,8 @@ pub fn do_sync(ctx: &mut AppContext) -> anyhow::Result<()> {
             anyhow::bail!("merge conflicts: {}", names.join(", "));
         }
     }
+    let new_head = ctx.vcs.head_hash()?;
+    ctx.store.after_pull(&new_head)?;
     ctx.vcs.push()?;
     tracing::info!(cmd = "sync", "push: ok");
     Ok(())
