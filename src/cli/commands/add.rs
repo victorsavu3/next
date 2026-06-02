@@ -126,6 +126,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);
     } else {
+        println!("added {short_id}");
         tracing::info!(cmd = "add", "added [{}] {}", short_id, task.title);
     }
 
