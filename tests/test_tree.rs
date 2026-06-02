@@ -42,8 +42,8 @@ fn capture_tree(env: &common::TestEnv, all: bool) -> String {
 
 #[test]
 fn tree_empty_when_no_tasks() {
-    let mut env = common::setup();
-    tree::run(tree_args(false), &mut env.ctx).unwrap();
+    let env = common::setup();
+    tree::run(tree_args(false), &env.ctx).unwrap();
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn tree_shows_top_level_tasks() {
     add::run(add_args("Task A"), &mut env.ctx).unwrap();
     add::run(add_args("Task B"), &mut env.ctx).unwrap();
     // Must not error; two tasks, no parent.
-    tree::run(tree_args(false), &mut env.ctx).unwrap();
+    tree::run(tree_args(false), &env.ctx).unwrap();
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn tree_shows_children_under_parent() {
     .unwrap();
 
     // No error; child is nested under parent.
-    tree::run(tree_args(false), &mut env.ctx).unwrap();
+    tree::run(tree_args(false), &env.ctx).unwrap();
 
     // Verify structure: parent has one child.
     let all = env.ctx.store.list_tasks().unwrap();
@@ -112,7 +112,7 @@ fn tree_excludes_done_tasks_by_default() {
         .count();
     assert_eq!(open_count, 1);
     // Default tree should not error even with mixed statuses.
-    tree::run(tree_args(false), &mut env.ctx).unwrap();
+    tree::run(tree_args(false), &env.ctx).unwrap();
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn tree_all_includes_done_tasks() {
     .unwrap();
 
     // --all must not error and includes done tasks.
-    tree::run(tree_args(true), &mut env.ctx).unwrap();
+    tree::run(tree_args(true), &env.ctx).unwrap();
 
     let all = env.ctx.store.list_tasks().unwrap();
     assert_eq!(all.len(), 1);
@@ -143,7 +143,7 @@ fn tree_all_includes_done_tasks() {
 fn tree_json_output() {
     let mut env = common::setup();
     add::run(add_args("Task JSON"), &mut env.ctx).unwrap();
-    tree::run(tree::Args { all: false, json: true }, &mut env.ctx).unwrap();
+    tree::run(tree::Args { all: false, json: true }, &env.ctx).unwrap();
 }
 
 // ---------------------------------------------------------------------------

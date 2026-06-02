@@ -49,15 +49,15 @@ fn due_in(n: i64) -> String {
 
 #[test]
 fn forecast_empty_when_no_tasks() {
-    let mut env = common::setup();
-    forecast::run(forecast_args(None), &mut env.ctx).unwrap();
+    let env = common::setup();
+    forecast::run(forecast_args(None), &env.ctx).unwrap();
 }
 
 #[test]
 fn forecast_empty_when_no_due_dates() {
     let mut env = common::setup();
     add::run(add_args("No due date"), &mut env.ctx).unwrap();
-    forecast::run(forecast_args(None), &mut env.ctx).unwrap();
+    forecast::run(forecast_args(None), &env.ctx).unwrap();
 }
 
 #[test]
@@ -68,7 +68,7 @@ fn forecast_shows_tasks_due_within_horizon() {
         &mut env.ctx,
     )
     .unwrap();
-    forecast::run(forecast_args(Some(30)), &mut env.ctx).unwrap();
+    forecast::run(forecast_args(Some(30)), &env.ctx).unwrap();
     // Task with due date within horizon must be in the store.
     let task = env.ctx.store.list_tasks().unwrap().remove(0);
     assert!(task.due.is_some());
@@ -83,7 +83,7 @@ fn forecast_excludes_tasks_beyond_horizon() {
     )
     .unwrap();
     // With a 90-day horizon the task is beyond the cutoff — no error.
-    forecast::run(forecast_args(Some(90)), &mut env.ctx).unwrap();
+    forecast::run(forecast_args(Some(90)), &env.ctx).unwrap();
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn forecast_json_output() {
     .unwrap();
     forecast::run(
         forecast::Args { json: true, ..forecast_args(Some(30)) },
-        &mut env.ctx,
+        &env.ctx,
     )
     .unwrap();
 }
@@ -109,7 +109,7 @@ fn forecast_overdue_task_included() {
         &mut env.ctx,
     )
     .unwrap();
-    forecast::run(forecast_args(Some(90)), &mut env.ctx).unwrap();
+    forecast::run(forecast_args(Some(90)), &env.ctx).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -128,5 +128,5 @@ fn forecast_unicode_title_does_not_panic() {
     )
     .unwrap();
     // This must not panic even though the title is > 45 bytes and contains multibyte chars.
-    forecast::run(forecast_args(Some(30)), &mut env.ctx).unwrap();
+    forecast::run(forecast_args(Some(30)), &env.ctx).unwrap();
 }

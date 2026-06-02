@@ -41,7 +41,7 @@ fn next_shows_open_tasks() {
     let mut env = common::setup();
     add::run(add_args("Task one"), &mut env.ctx).unwrap();
     add::run(add_args("Task two"), &mut env.ctx).unwrap();
-    next_cmd::run(next_args(None), &mut env.ctx).unwrap();
+    next_cmd::run(next_args(None), &env.ctx).unwrap();
 }
 
 #[test]
@@ -51,7 +51,7 @@ fn next_respects_count_arg() {
         add::run(add_args(&format!("task {i}")), &mut env.ctx).unwrap();
     }
     // Count of 2 must not error; all 5 tasks remain in the store.
-    next_cmd::run(next_args(Some(2)), &mut env.ctx).unwrap();
+    next_cmd::run(next_args(Some(2)), &env.ctx).unwrap();
     assert_eq!(env.ctx.store.list_tasks().unwrap().len(), 5);
 }
 
@@ -63,7 +63,7 @@ fn next_default_count_from_config() {
     }
     env.ctx.config.next_count = 3;
     // With 15 tasks and next_count = 3, must not error.
-    next_cmd::run(next_args(None), &mut env.ctx).unwrap();
+    next_cmd::run(next_args(None), &env.ctx).unwrap();
     assert_eq!(env.ctx.store.list_tasks().unwrap().len(), 15);
 }
 
@@ -80,7 +80,7 @@ fn next_excludes_done_tasks() {
     done::run(done::Args { id: "done-task".into(), completed_at: None, json: false }, &mut env.ctx).unwrap();
 
     // next only shows open tasks
-    next_cmd::run(next_args(None), &mut env.ctx).unwrap();
+    next_cmd::run(next_args(None), &env.ctx).unwrap();
     let all = env.ctx.store.list_tasks().unwrap();
     let open_count = all
         .iter()
@@ -95,13 +95,13 @@ fn next_json_output() {
     add::run(add_args("JSON task"), &mut env.ctx).unwrap();
     next_cmd::run(
         next_cmd::Args { json: true, ..next_args(None) },
-        &mut env.ctx,
+        &env.ctx,
     )
     .unwrap();
 }
 
 #[test]
 fn next_empty_list_does_not_error() {
-    let mut env = common::setup();
-    next_cmd::run(next_args(None), &mut env.ctx).unwrap();
+    let env = common::setup();
+    next_cmd::run(next_args(None), &env.ctx).unwrap();
 }

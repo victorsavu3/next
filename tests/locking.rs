@@ -60,7 +60,7 @@ fn concurrent_task_saves_all_persisted() {
             let root = Arc::clone(&root);
             std::thread::spawn(move || {
                 let mut store = fresh_store(&root);
-                let task = Task::new(&format!("Concurrent task {i}"));
+                let task = Task::new(format!("Concurrent task {i}"));
                 store.save_task(&task).unwrap();
             })
         })
@@ -70,7 +70,7 @@ fn concurrent_task_saves_all_persisted() {
         h.join().unwrap();
     }
 
-    let store = fresh_store(&dir.path().to_path_buf());
+    let store = fresh_store(dir.path());
     let tasks = store.list_tasks().unwrap();
     assert_eq!(tasks.len(), N, "all {N} tasks must be persisted without corruption");
 }
@@ -91,7 +91,7 @@ fn concurrent_unique_slugs_no_conflict() {
             let root = Arc::clone(&root);
             std::thread::spawn(move || {
                 let mut store = fresh_store(&root);
-                let mut task = Task::new(&format!("Task {i}"));
+                let mut task = Task::new(format!("Task {i}"));
                 task.slug = Some(format!("task-{i}"));
                 store.save_task(&task).unwrap();
             })
@@ -102,7 +102,7 @@ fn concurrent_unique_slugs_no_conflict() {
         h.join().unwrap();
     }
 
-    let store = fresh_store(&dir.path().to_path_buf());
+    let store = fresh_store(dir.path());
     let tasks = store.list_tasks().unwrap();
     assert_eq!(tasks.len(), N);
 }
@@ -143,7 +143,7 @@ fn concurrent_slug_conflict_detected() {
     assert_eq!(conflicts, THREADS - 1, "all others must get SlugConflict");
 
     // The winning task is intact on disk.
-    let store = fresh_store(&dir.path().to_path_buf());
+    let store = fresh_store(dir.path());
     let tasks = store.list_tasks().unwrap();
     assert_eq!(tasks.len(), 1);
 }
@@ -183,7 +183,7 @@ fn concurrent_state_saves_no_corruption() {
     }
 
     // state.toml must parse cleanly — the last writer's data.
-    let store = fresh_store(&dir.path().to_path_buf());
+    let store = fresh_store(dir.path());
     let state = store.get_state().unwrap();
     assert_eq!(state.active_contexts.len(), 1, "state must not be corrupt");
     assert!(
@@ -208,7 +208,7 @@ fn concurrent_task_and_state_saves_no_corruption() {
         let root = Arc::clone(&root);
         handles.push(std::thread::spawn(move || {
             let mut store = fresh_store(&root);
-            store.save_task(&Task::new(&format!("Task {i}"))).unwrap();
+            store.save_task(&Task::new(format!("Task {i}"))).unwrap();
         }));
     }
 
@@ -228,7 +228,7 @@ fn concurrent_task_and_state_saves_no_corruption() {
         h.join().unwrap();
     }
 
-    let store = fresh_store(&dir.path().to_path_buf());
+    let store = fresh_store(dir.path());
     assert_eq!(store.list_tasks().unwrap().len(), N, "all task files intact");
     store.get_state().unwrap(); // must not error
 }
@@ -257,7 +257,7 @@ fn concurrent_save_and_commit_no_errors() {
                 let mut store = fresh_store(&root);
                 let vcs = fresh_vcs(&root);
 
-                let task = Task::new(&format!("Task {i}"));
+                let task = Task::new(format!("Task {i}"));
                 store.save_task(&task).unwrap();
 
                 let task_path = next::storage::task_path(&root, &task);
@@ -271,7 +271,7 @@ fn concurrent_save_and_commit_no_errors() {
     }
 
     // All N tasks must be readable from disk.
-    let store = fresh_store(&dir.path().to_path_buf());
+    let store = fresh_store(dir.path());
     assert_eq!(store.list_tasks().unwrap().len(), N);
 }
 

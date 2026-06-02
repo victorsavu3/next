@@ -408,7 +408,7 @@ mod tests {
         );
         let app_err = AppError::Io(io_err);
         let anyhow_err = anyhow::anyhow!(app_err)
-            .context(format!("reading /home/victor/tasks/foo.toml"));
+            .context("reading /home/victor/tasks/foo.toml".to_string());
 
         let msg = sanitize_error(&anyhow_err, "add_task");
         assert_eq!(msg, "storage error", "expected generic storage error, got: {msg}");

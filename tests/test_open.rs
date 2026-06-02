@@ -34,7 +34,7 @@ fn open_errors_when_task_has_no_url() {
     )
     .unwrap();
 
-    let err = open::run(open::Args { id: "no-url".to_string() }, &mut env.ctx).unwrap_err();
+    let err = open::run(open::Args { id: "no-url".to_string() }, &env.ctx).unwrap_err();
     assert!(
         err.to_string().contains("no URL"),
         "unexpected error: {err}"
@@ -43,10 +43,10 @@ fn open_errors_when_task_has_no_url() {
 
 #[test]
 fn open_errors_on_nonexistent_task() {
-    let mut env = common::setup();
+    let env = common::setup();
     let err = open::run(
         open::Args { id: "does-not-exist".to_string() },
-        &mut env.ctx,
+        &env.ctx,
     )
     .unwrap_err();
     assert!(

@@ -221,8 +221,7 @@ fn add_auto_applies_active_context_when_no_context_tag() {
     let mut env = common::setup();
 
     // Set @work as the active context.
-    let mut state = GlobalState::default();
-    state.active_contexts = vec!["@work".to_string()];
+    let state = GlobalState { active_contexts: vec!["@work".to_string()], ..Default::default() };
     env.ctx.store.save_state(&state).unwrap();
 
     add::run(args("No-context task"), &mut env.ctx).unwrap();
@@ -240,8 +239,7 @@ fn add_does_not_auto_apply_when_context_tag_already_present() {
     use next::domain::state::GlobalState;
     let mut env = common::setup();
 
-    let mut state = GlobalState::default();
-    state.active_contexts = vec!["@work".to_string()];
+    let state = GlobalState { active_contexts: vec!["@work".to_string()], ..Default::default() };
     env.ctx.store.save_state(&state).unwrap();
 
     add::run(

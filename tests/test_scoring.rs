@@ -196,8 +196,7 @@ fn high_priority_tag_boosts_task_rank() {
     ).unwrap();
 
     // Give the tag high priority in the store.
-    let mut meta = TagMeta::default();
-    meta.priority = Some(Priority::High);
+    let meta = TagMeta { priority: Some(Priority::High), ..Default::default() };
     env.ctx.store.set_tag_meta("urgent", meta).unwrap();
 
     let ranked = score_all(&mut env);
@@ -217,8 +216,7 @@ fn low_priority_tag_penalises_task_rank() {
         &mut env.ctx,
     ).unwrap();
 
-    let mut meta = TagMeta::default();
-    meta.priority = Some(Priority::Low);
+    let meta = TagMeta { priority: Some(Priority::Low), ..Default::default() };
     env.ctx.store.set_tag_meta("someday", meta).unwrap();
 
     let ranked = score_all(&mut env);
@@ -292,8 +290,7 @@ fn no_time_urgency_tag_suppresses_overdue_factor() {
         &mut env.ctx,
     ).unwrap();
 
-    let mut meta = TagMeta::default();
-    meta.no_time_urgency = true;
+    let meta = TagMeta { no_time_urgency: true, ..Default::default() };
     env.ctx.store.set_tag_meta("wishlist", meta).unwrap();
 
     let ranked = score_all(&mut env);
@@ -317,8 +314,7 @@ fn low_priority_tag_reduces_score_by_one() {
     ).unwrap();
 
     // Tag with low priority → tag_low default = -1.0; combined with priority_medium=1.0 → base 0.
-    let mut meta = TagMeta::default();
-    meta.priority = Some(Priority::Low);
+    let meta = TagMeta { priority: Some(Priority::Low), ..Default::default() };
     env.ctx.store.set_tag_meta("wishlist", meta).unwrap();
 
     let ranked = score_all(&mut env);

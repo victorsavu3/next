@@ -289,7 +289,7 @@ fn list_limit_truncates_results() {
     assert_eq!(all.len(), 5);
 
     // With limit = 3 only three are returned.
-    next::cli::commands::list::run(list_args_with_limit(Some(3)), &mut env.ctx).unwrap();
+    next::cli::commands::list::run(list_args_with_limit(Some(3)), &env.ctx).unwrap();
     let store = &env.ctx.store;
     let tasks = store.list_tasks().unwrap();
     // Verify the store still has all five (limit only affects output, not storage).
@@ -300,7 +300,7 @@ fn list_limit_truncates_results() {
 fn list_limit_zero_shows_nothing() {
     let mut env = common::setup();
     add::run(add_args("task one"), &mut env.ctx).unwrap();
-    next::cli::commands::list::run(list_args_with_limit(Some(0)), &mut env.ctx).unwrap();
+    next::cli::commands::list::run(list_args_with_limit(Some(0)), &env.ctx).unwrap();
 }
 
 #[test]
@@ -311,7 +311,7 @@ fn list_config_limit_applies_when_no_flag() {
     }
     env.ctx.config.list_limit = Some(2);
     // run() should truncate to 2 without passing --limit
-    next::cli::commands::list::run(list_args_with_limit(None), &mut env.ctx).unwrap();
+    next::cli::commands::list::run(list_args_with_limit(None), &env.ctx).unwrap();
     // The store still has five tasks.
     assert_eq!(env.ctx.store.list_tasks().unwrap().len(), 5);
 }
@@ -510,6 +510,6 @@ fn list_flag_overrides_config_limit() {
     }
     env.ctx.config.list_limit = Some(1);
     // --limit 4 overrides config limit of 1
-    next::cli::commands::list::run(list_args_with_limit(Some(4)), &mut env.ctx).unwrap();
+    next::cli::commands::list::run(list_args_with_limit(Some(4)), &env.ctx).unwrap();
     assert_eq!(env.ctx.store.list_tasks().unwrap().len(), 5);
 }
