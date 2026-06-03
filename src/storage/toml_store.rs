@@ -121,23 +121,15 @@ impl TomlStore {
         self.tags_dir().join(format!("{}.toml", crate::storage::encode_tag_path(tag)))
     }
 
-    /// Acquires an exclusive repository-level lock.
+    /// Acquires the exclusive repository-level lock.
     ///
-    /// The lock is released when the returned `File` is dropped.  Both
+    /// The lock is released when the returned guard is dropped.  Both
     /// `TomlStore` (task writes) and `GitBackend` (commit/pull/push) use the
-    /// same `.next.lock` file, so they are mutually exclusive across threads
-    /// and processes.
-    pub(crate) fn acquire_repo_lock(&self) -> Result<File> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(self.repo_lock_path())
-            .map_err(|e| AppError::Other(format!("open .next.lock: {e}")))?;
-        file.lock_exclusive()
-            .map_err(|e| AppError::Other(format!("acquire repo lock: {e}")))?;
-        Ok(file)
+    /// same `.next.lock` file via [`crate::storage::RepoLock`], so they are
+    /// mutually exclusive across processes and threads, and re-entrant within a
+    /// thread (so a transaction may hold the lock across nested writes).
+    pub(crate) fn acquire_repo_lock(&self) -> Result<crate::storage::RepoLock> {
+        crate::storage::RepoLock::acquire(&self.repo_lock_path())
     }
 
     /// Acquires a shared (read) lock on the state lock file.

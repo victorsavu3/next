@@ -1,11 +1,9 @@
 use std::{
-    fs::{File, OpenOptions},
     path::{Path, PathBuf},
     process::Command,
     sync::Mutex,
 };
 
-use fs4::FileExt;
 use git2::{build::CheckoutBuilder, Repository};
 use crate::{
     error::{AppError, Result},
@@ -46,18 +44,11 @@ impl GitBackend {
     }
 
     /// Acquires the repository-level exclusive lock shared with `TomlStore`.
-    /// Released when the returned `File` is dropped.
-    fn acquire_repo_lock(&self) -> Result<File> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&self.lock_path)
-            .map_err(|e| AppError::Other(format!("open .next.lock: {e}")))?;
-        file.lock_exclusive()
-            .map_err(|e| AppError::Other(format!("acquire repo lock: {e}")))?;
-        Ok(file)
+    /// Released when the returned guard is dropped.  Re-entrant within a thread
+    /// via [`crate::storage::RepoLock`], so a transaction holding the lock can
+    /// call `commit` / `pull` / `push` without self-deadlocking.
+    fn acquire_repo_lock(&self) -> Result<crate::storage::RepoLock> {
+        crate::storage::RepoLock::acquire(&self.lock_path)
     }
 }
 

@@ -1,10 +1,12 @@
 pub mod cached_store;
 pub mod filenames;
 pub mod git_backend;
+pub mod lock;
 pub mod toml_store;
 
 pub use cached_store::CachedStore;
 pub use git_backend::GitBackend;
+pub use lock::RepoLock;
 pub use toml_store::TomlStore;
 
 use std::path::{Path, PathBuf};
@@ -130,6 +132,20 @@ fn collect_toml_files(dir: &Path) -> Vec<PathBuf> {
         }
     }
     result
+}
+
+/// Returns the path to the repository-level lock file under `root`.
+pub fn repo_lock_path(root: &Path) -> PathBuf {
+    root.join(".next.lock")
+}
+
+/// Acquires the repository-level exclusive lock for the repo rooted at `root`.
+///
+/// The returned guard holds the lock until dropped.  It is re-entrant within a
+/// single thread, so a transaction can hold it across a read-modify-write while
+/// the nested `save_task` / `commit` calls re-acquire it harmlessly.
+pub fn lock_repo(root: &Path) -> Result<RepoLock> {
+    RepoLock::acquire(&repo_lock_path(root))
 }
 
 /// Returns the full path where `task` is (or will be) stored under `root`.
