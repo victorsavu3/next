@@ -15,7 +15,7 @@ pub struct Args {}
 /// Steps:
 ///  1. `git init` if `.git` is absent.
 ///  2. Create `tasks/` if absent.
-///  3. Append `.next.db`, `.next.lock`, `state.toml` to `.gitignore`.
+///  3. Append `.next.db`, its WAL sidecars, `.next.lock`, `state.toml` to `.gitignore`.
 ///  4. Create an initial git commit when the repository has no commits yet.
 pub fn run(_args: Args, dir: &Path) -> anyhow::Result<()> {
     // Step 1 — git repository.
@@ -37,8 +37,15 @@ pub fn run(_args: Args, dir: &Path) -> anyhow::Result<()> {
     }
 
     // Step 3 — .gitignore entries for generated files.
+    // `.next.db-wal` / `.next.db-shm` are the SQLite WAL sidecar files.
     let gitignore_path = dir.join(".gitignore");
-    for entry in &[".next.db", ".next.lock", "state.toml"] {
+    for entry in &[
+        ".next.db",
+        ".next.db-wal",
+        ".next.db-shm",
+        ".next.lock",
+        "state.toml",
+    ] {
         ensure_gitignored(&gitignore_path, entry)?;
     }
 

@@ -33,6 +33,7 @@ impl CachedStore {
     pub fn open(inner: TomlStore, db_path: PathBuf, head_hash: &str) -> Result<Self> {
         let conn = Connection::open(&db_path)
             .map_err(|e| AppError::Other(format!("sqlite open {}: {e}", db_path.display())))?;
+        configure_connection(&conn)?;
         setup_schema(&conn)?;
         let stored = get_meta(&conn, "head_hash")?;
         let this = Self {
@@ -194,6 +195,24 @@ impl Store for CachedStore {
 // Schema helpers
 // ---------------------------------------------------------------------------
 
+/// Configures the connection for safe concurrent multi-process access.
+///
+/// `.next.db` is a per-process cache, but several `next` processes (CLI
+/// invocations, the long-running MCP server, and future plugin processes) open
+/// the *same* database file at once.  WAL mode lets readers and a writer
+/// proceed concurrently instead of blocking, and `busy_timeout` makes a process
+/// wait briefly for a transient lock rather than failing immediately with
+/// `SQLITE_BUSY`.
+fn configure_connection(conn: &Connection) -> Result<()> {
+    // WAL persists in the database header; setting it on every open is
+    // idempotent.  `synchronous=NORMAL` is the standard, safe companion to WAL.
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        .map_err(|e| AppError::Other(format!("sqlite pragma setup: {e}")))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| AppError::Other(format!("sqlite busy_timeout: {e}")))?;
+    Ok(())
+}
+
 fn setup_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
@@ -288,6 +307,18 @@ mod tests {
         let db_path = dir.path().join(".next.db");
         let store = CachedStore::open(inner, db_path, &head_hash).unwrap();
         (dir, store, vcs)
+    }
+
+    #[test]
+    fn connection_uses_wal_and_busy_timeout() {
+        let (_dir, store, _vcs) = setup();
+        let mode: String = store
+            .with_conn(|conn| {
+                conn.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+                    .map_err(|e| AppError::Other(e.to_string()))
+            })
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal", "cache must run in WAL mode");
     }
 
     #[test]
