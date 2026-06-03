@@ -25,11 +25,13 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         }
     }
 
-    // Compute path before deleting so we can stage the removal.
-    let task_path = crate::storage::task_path(&ctx.repo_root, &task);
-    ctx.store.delete_task(id)?;
-    ctx.vcs
-        .commit(&[task_path], &format!("next: delete {}", task.title))?;
+    ctx.transaction(|store, vcs, root| {
+        // Compute path before deleting so we can stage the removal.
+        let task_path = crate::storage::task_path(root, &task);
+        store.delete_task(id)?;
+        vcs.commit(&[task_path], &format!("next: delete {}", task.title))?;
+        Ok(())
+    })?;
 
     tracing::info!(cmd = "delete", "[{}] {}", &task.id.to_string()[..8], task.title);
     Ok(())

@@ -94,52 +94,60 @@ pub fn show(ctx: &mut AppContext, args: ShowArgs) -> anyhow::Result<()> {
 
 pub fn describe(ctx: &mut AppContext, args: DescribeArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    ctx.store.set_tag_description(&args.tag, &args.description)?;
-    let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
-    ctx.vcs
-        .commit(&[tag_path], &format!("next: tag describe {}", args.tag))?;
+    ctx.transaction(|store, vcs, root| {
+        store.set_tag_description(&args.tag, &args.description)?;
+        let tag_path = crate::storage::tag_meta_path(root, &args.tag);
+        vcs.commit(&[tag_path], &format!("next: tag describe {}", args.tag))?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "tag", "described {} = {}", args.tag, args.description);
     Ok(())
 }
 
 pub fn clear_description(ctx: &mut AppContext, args: ClearDescriptionArgs) -> anyhow::Result<()> {
-    ctx.store.delete_tag_description(&args.tag)?;
-    let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
-    ctx.vcs.commit(
-        &[tag_path],
-        &format!("next: tag clear-description {}", args.tag),
-    )?;
+    ctx.transaction(|store, vcs, root| {
+        store.delete_tag_description(&args.tag)?;
+        let tag_path = crate::storage::tag_meta_path(root, &args.tag);
+        vcs.commit(
+            &[tag_path],
+            &format!("next: tag clear-description {}", args.tag),
+        )?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "tag", "cleared description for {}", args.tag);
     Ok(())
 }
 
 pub fn set_url(ctx: &mut AppContext, args: SetUrlArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut meta = ctx.store.get_tag_meta(&args.tag)?.unwrap_or_default();
-    meta.url = Some(args.url.clone());
-    ctx.store.set_tag_meta(&args.tag, meta)?;
-    let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
-    ctx.vcs
-        .commit(&[tag_path], &format!("next: tag set-url {}", args.tag))?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store.get_tag_meta(&args.tag)?.unwrap_or_default();
+        meta.url = Some(args.url.clone());
+        store.set_tag_meta(&args.tag, meta)?;
+        let tag_path = crate::storage::tag_meta_path(root, &args.tag);
+        vcs.commit(&[tag_path], &format!("next: tag set-url {}", args.tag))?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "tag", "set url for {} = {}", args.tag, args.url);
     Ok(())
 }
 
 pub fn clear_url(ctx: &mut AppContext, args: ClearUrlArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut meta = ctx
-        .store
-        .get_tag_meta(&args.tag)?
-        .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {:?}", args.tag))?;
-    meta.url = None;
-    let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
-    if meta == TagMeta::default() {
-        ctx.store.delete_tag_meta(&args.tag)?;
-    } else {
-        ctx.store.set_tag_meta(&args.tag, meta)?;
-    }
-    ctx.vcs
-        .commit(&[tag_path], &format!("next: tag clear-url {}", args.tag))?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store
+            .get_tag_meta(&args.tag)?
+            .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {:?}", args.tag))?;
+        meta.url = None;
+        let tag_path = crate::storage::tag_meta_path(root, &args.tag);
+        if meta == TagMeta::default() {
+            store.delete_tag_meta(&args.tag)?;
+        } else {
+            store.set_tag_meta(&args.tag, meta)?;
+        }
+        vcs.commit(&[tag_path], &format!("next: tag clear-url {}", args.tag))?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "tag", "cleared url for {}", args.tag);
     Ok(())
 }
@@ -147,62 +155,68 @@ pub fn clear_url(ctx: &mut AppContext, args: ClearUrlArgs) -> anyhow::Result<()>
 pub fn set_priority(ctx: &mut AppContext, args: SetPriorityArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
     let priority: Priority = args.priority.parse()?;
-    let mut meta = ctx.store.get_tag_meta(&args.tag)?.unwrap_or_default();
-    meta.priority = Some(priority);
-    ctx.store.set_tag_meta(&args.tag, meta)?;
-    let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
-    ctx.vcs
-        .commit(&[tag_path], &format!("next: tag set-priority {}", args.tag))?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store.get_tag_meta(&args.tag)?.unwrap_or_default();
+        meta.priority = Some(priority);
+        store.set_tag_meta(&args.tag, meta)?;
+        let tag_path = crate::storage::tag_meta_path(root, &args.tag);
+        vcs.commit(&[tag_path], &format!("next: tag set-priority {}", args.tag))?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "tag", "set priority for {} = {}", args.tag, args.priority);
     Ok(())
 }
 
 pub fn clear_priority(ctx: &mut AppContext, args: ClearPriorityArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut meta = ctx
-        .store
-        .get_tag_meta(&args.tag)?
-        .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {:?}", args.tag))?;
-    meta.priority = None;
-    let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
-    if meta == TagMeta::default() {
-        ctx.store.delete_tag_meta(&args.tag)?;
-    } else {
-        ctx.store.set_tag_meta(&args.tag, meta)?;
-    }
-    ctx.vcs
-        .commit(&[tag_path], &format!("next: tag clear-priority {}", args.tag))?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store
+            .get_tag_meta(&args.tag)?
+            .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {:?}", args.tag))?;
+        meta.priority = None;
+        let tag_path = crate::storage::tag_meta_path(root, &args.tag);
+        if meta == TagMeta::default() {
+            store.delete_tag_meta(&args.tag)?;
+        } else {
+            store.set_tag_meta(&args.tag, meta)?;
+        }
+        vcs.commit(&[tag_path], &format!("next: tag clear-priority {}", args.tag))?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "tag", "cleared priority for {}", args.tag);
     Ok(())
 }
 
 pub fn set_no_time_urgency(ctx: &mut AppContext, args: NoTimeUrgencyArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut meta = ctx.store.get_tag_meta(&args.tag)?.unwrap_or_default();
-    meta.no_time_urgency = true;
-    ctx.store.set_tag_meta(&args.tag, meta)?;
-    let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
-    ctx.vcs
-        .commit(&[tag_path], &format!("next: tag set-no-time-urgency {}", args.tag))?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store.get_tag_meta(&args.tag)?.unwrap_or_default();
+        meta.no_time_urgency = true;
+        store.set_tag_meta(&args.tag, meta)?;
+        let tag_path = crate::storage::tag_meta_path(root, &args.tag);
+        vcs.commit(&[tag_path], &format!("next: tag set-no-time-urgency {}", args.tag))?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "tag", "set no-time-urgency for {}", args.tag);
     Ok(())
 }
 
 pub fn clear_no_time_urgency(ctx: &mut AppContext, args: NoTimeUrgencyArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut meta = ctx
-        .store
-        .get_tag_meta(&args.tag)?
-        .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {:?}", args.tag))?;
-    meta.no_time_urgency = false;
-    let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
-    if meta == TagMeta::default() {
-        ctx.store.delete_tag_meta(&args.tag)?;
-    } else {
-        ctx.store.set_tag_meta(&args.tag, meta)?;
-    }
-    ctx.vcs
-        .commit(&[tag_path], &format!("next: tag clear-no-time-urgency {}", args.tag))?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store
+            .get_tag_meta(&args.tag)?
+            .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {:?}", args.tag))?;
+        meta.no_time_urgency = false;
+        let tag_path = crate::storage::tag_meta_path(root, &args.tag);
+        if meta == TagMeta::default() {
+            store.delete_tag_meta(&args.tag)?;
+        } else {
+            store.set_tag_meta(&args.tag, meta)?;
+        }
+        vcs.commit(&[tag_path], &format!("next: tag clear-no-time-urgency {}", args.tag))?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "tag", "cleared no-time-urgency for {}", args.tag);
     Ok(())
 }

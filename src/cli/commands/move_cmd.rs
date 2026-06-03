@@ -17,22 +17,25 @@ pub struct Args {
 
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let id = resolve_task_id(&*ctx.store, &args.id)?;
-    let mut task = ctx.store.get_task(id)?;
+    let parent = args.parent.clone();
+    let task = ctx.transaction(|store, vcs, root| {
+        let mut task = store.get_task(id)?;
 
-    match args.parent.as_deref() {
-        Some("none") => task.parent_id = None,
-        Some(parent_ref) => {
-            task.parent_id = Some(resolve_task_id(&*ctx.store, parent_ref)?);
+        match parent.as_deref() {
+            Some("none") => task.parent_id = None,
+            Some(parent_ref) => {
+                task.parent_id = Some(resolve_task_id(&*store, parent_ref)?);
+            }
+            None => {}
         }
-        None => {}
-    }
 
-    task.touch();
-    ctx.store.save_task(&task)?;
+        task.touch();
+        store.save_task(&task)?;
 
-    let task_path = crate::storage::task_path(&ctx.repo_root, &task);
-    ctx.vcs
-        .commit(&[task_path], &format!("next: move {}", task.title))?;
+        let task_path = crate::storage::task_path(root, &task);
+        vcs.commit(&[task_path], &format!("next: move {}", task.title))?;
+        Ok(task)
+    })?;
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);

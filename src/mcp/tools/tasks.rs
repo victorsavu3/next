@@ -165,29 +165,38 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
     let action = str_param(params, "action");
     match action {
         Some("start") => {
-            let mut task = ctx.store.get_task(id)?;
-            task.mark_started();
-            let task_path = storage::task_path(&ctx.repo_root, &task);
-            ctx.store.save_task(&task)?;
-            ctx.vcs.commit(&[task_path], &format!("next: start {}", task.title))?;
+            let task = ctx.transaction(|store, vcs, root| {
+                let mut task = store.get_task(id)?;
+                task.mark_started();
+                let task_path = storage::task_path(root, &task);
+                store.save_task(&task)?;
+                vcs.commit(&[task_path], &format!("next: start {}", task.title))?;
+                Ok(task)
+            })?;
             tracing::info!(cmd = "mcp/start", "[{}] {}", &task.id.to_string()[..8], task.title);
             return Ok(serde_json::to_value(&task)?);
         }
         Some("stop") => {
-            let mut task = ctx.store.get_task(id)?;
-            task.mark_stopped();
-            let task_path = storage::task_path(&ctx.repo_root, &task);
-            ctx.store.save_task(&task)?;
-            ctx.vcs.commit(&[task_path], &format!("next: stop {}", task.title))?;
+            let task = ctx.transaction(|store, vcs, root| {
+                let mut task = store.get_task(id)?;
+                task.mark_stopped();
+                let task_path = storage::task_path(root, &task);
+                store.save_task(&task)?;
+                vcs.commit(&[task_path], &format!("next: stop {}", task.title))?;
+                Ok(task)
+            })?;
             tracing::info!(cmd = "mcp/stop", "[{}] {}", &task.id.to_string()[..8], task.title);
             return Ok(serde_json::to_value(&task)?);
         }
         Some("cancel") => {
-            let mut task = ctx.store.get_task(id)?;
-            task.mark_cancelled();
-            let task_path = storage::task_path(&ctx.repo_root, &task);
-            ctx.store.save_task(&task)?;
-            ctx.vcs.commit(&[task_path], &format!("next: cancel {}", task.title))?;
+            let task = ctx.transaction(|store, vcs, root| {
+                let mut task = store.get_task(id)?;
+                task.mark_cancelled();
+                let task_path = storage::task_path(root, &task);
+                store.save_task(&task)?;
+                vcs.commit(&[task_path], &format!("next: cancel {}", task.title))?;
+                Ok(task)
+            })?;
             tracing::info!(cmd = "mcp/cancel", "[{}] {}", &task.id.to_string()[..8], task.title);
             return Ok(serde_json::to_value(&task)?);
         }
@@ -300,11 +309,13 @@ pub fn delete_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: id"))?;
 
     let id = resolve_task_id(&*ctx.store, id_str)?;
-    let task = ctx.store.get_task(id)?;
-    let task_path = storage::task_path(&ctx.repo_root, &task);
-
-    ctx.store.delete_task(id)?;
-    ctx.vcs.commit(&[task_path], &format!("next: delete {}", task.title))?;
+    let task = ctx.transaction(|store, vcs, root| {
+        let task = store.get_task(id)?;
+        let task_path = storage::task_path(root, &task);
+        store.delete_task(id)?;
+        vcs.commit(&[task_path], &format!("next: delete {}", task.title))?;
+        Ok(task)
+    })?;
     tracing::info!(cmd = "mcp/delete", "[{}] {}", &task.id.to_string()[..8], task.title);
 
     Ok(json!({ "deleted": task.id.to_string(), "title": task.title }))

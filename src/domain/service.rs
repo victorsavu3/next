@@ -31,7 +31,7 @@ use crate::{
 /// `save_task` / `commit` calls re-acquire the same lock harmlessly.
 ///
 /// Pair with [`end_mutation`] after the commit succeeds.
-fn begin_mutation(
+pub(crate) fn begin_mutation(
     repo_root: &Path,
     store: &mut dyn Store,
     vcs: &dyn VcsBackend,
@@ -45,7 +45,7 @@ fn begin_mutation(
 /// Closes a mutation transaction: records the post-commit HEAD on the store's
 /// cache so the next [`begin_mutation`] does not rebuild unnecessarily.  Must be
 /// called while the transaction lock is still held.
-fn end_mutation(store: &mut dyn Store, vcs: &dyn VcsBackend) -> anyhow::Result<()> {
+pub(crate) fn end_mutation(store: &mut dyn Store, vcs: &dyn VcsBackend) -> anyhow::Result<()> {
     let head = vcs.head_hash()?;
     store.note_head(&head)?;
     Ok(())

@@ -74,17 +74,20 @@ fn set(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: value"))?;
 
     let value = parse_value(raw)?;
-
     let id = resolve_task_id(&*ctx.store, id_str)?;
-    let mut task = ctx.store.get_task(id)?;
-    task.data.insert(key.to_owned(), value.clone());
-    task.touch();
 
-    let task_path = storage::task_path(&ctx.repo_root, &task);
-    ctx.store.save_task(&task)?;
-    ctx.vcs.commit(&[task_path], &format!("next: data set {} on {}", key, task.title))?;
+    let task_id = ctx.transaction(|store, vcs, root| {
+        let mut task = store.get_task(id)?;
+        task.data.insert(key.to_owned(), value.clone());
+        task.touch();
 
-    Ok(json!({ "id": task.id.to_string(), "key": key, "value": value }))
+        let task_path = storage::task_path(root, &task);
+        store.save_task(&task)?;
+        vcs.commit(&[task_path], &format!("next: data set {} on {}", key, task.title))?;
+        Ok(task.id)
+    })?;
+
+    Ok(json!({ "id": task_id.to_string(), "key": key, "value": value }))
 }
 
 fn unset(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
@@ -96,19 +99,23 @@ fn unset(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     validate_key(key)?;
 
     let id = resolve_task_id(&*ctx.store, id_str)?;
-    let mut task = ctx.store.get_task(id)?;
 
-    if !task.data.contains_key(key) {
-        anyhow::bail!("task [{}] has no data key {key:?}", &task.id.to_string()[..8]);
-    }
-    task.data.remove(key);
-    task.touch();
+    let task_id = ctx.transaction(|store, vcs, root| {
+        let mut task = store.get_task(id)?;
 
-    let task_path = storage::task_path(&ctx.repo_root, &task);
-    ctx.store.save_task(&task)?;
-    ctx.vcs.commit(&[task_path], &format!("next: data unset {} on {}", key, task.title))?;
+        if !task.data.contains_key(key) {
+            anyhow::bail!("task [{}] has no data key {key:?}", &task.id.to_string()[..8]);
+        }
+        task.data.remove(key);
+        task.touch();
 
-    Ok(json!({ "id": task.id.to_string(), "unset": key }))
+        let task_path = storage::task_path(root, &task);
+        store.save_task(&task)?;
+        vcs.commit(&[task_path], &format!("next: data unset {} on {}", key, task.title))?;
+        Ok(task.id)
+    })?;
+
+    Ok(json!({ "id": task_id.to_string(), "unset": key }))
 }
 
 #[cfg(test)]

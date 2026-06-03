@@ -68,14 +68,17 @@ fn set(ctx: &mut AppContext, args: DataSetArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
     let value: serde_json::Value = serde_json::from_str(&args.value)
         .unwrap_or_else(|_| serde_json::Value::String(args.value.clone()));
-    let mut meta = ctx.store.get_tag_meta(&args.tag)?.unwrap_or_default();
-    meta.data.insert(args.key.clone(), value);
-    ctx.store.set_tag_meta(&args.tag, meta)?;
-    let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
-    ctx.vcs.commit(
-        &[tag_path],
-        &format!("next: tag data set {} {}", args.tag, args.key),
-    )?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store.get_tag_meta(&args.tag)?.unwrap_or_default();
+        meta.data.insert(args.key.clone(), value);
+        store.set_tag_meta(&args.tag, meta)?;
+        let tag_path = crate::storage::tag_meta_path(root, &args.tag);
+        vcs.commit(
+            &[tag_path],
+            &format!("next: tag data set {} {}", args.tag, args.key),
+        )?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "tag", "set data {}.{} = {}", args.tag, args.key, args.value);
     Ok(())
 }
@@ -92,23 +95,25 @@ fn get(ctx: &mut AppContext, args: DataGetArgs) -> anyhow::Result<()> {
 
 fn unset(ctx: &mut AppContext, args: DataUnsetArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut meta = ctx
-        .store
-        .get_tag_meta(&args.tag)?
-        .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {:?}", args.tag))?;
-    if meta.data.remove(&args.key).is_none() {
-        anyhow::bail!("key {:?} not found for tag {:?}", args.key, args.tag);
-    }
-    let tag_path = crate::storage::tag_meta_path(&ctx.repo_root, &args.tag);
-    if meta == TagMeta::default() {
-        ctx.store.delete_tag_meta(&args.tag)?;
-    } else {
-        ctx.store.set_tag_meta(&args.tag, meta)?;
-    }
-    ctx.vcs.commit(
-        &[tag_path],
-        &format!("next: tag data unset {} {}", args.tag, args.key),
-    )?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store
+            .get_tag_meta(&args.tag)?
+            .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {:?}", args.tag))?;
+        if meta.data.remove(&args.key).is_none() {
+            anyhow::bail!("key {:?} not found for tag {:?}", args.key, args.tag);
+        }
+        let tag_path = crate::storage::tag_meta_path(root, &args.tag);
+        if meta == TagMeta::default() {
+            store.delete_tag_meta(&args.tag)?;
+        } else {
+            store.set_tag_meta(&args.tag, meta)?;
+        }
+        vcs.commit(
+            &[tag_path],
+            &format!("next: tag data unset {} {}", args.tag, args.key),
+        )?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "tag", "unset data {}.{}", args.tag, args.key);
     Ok(())
 }

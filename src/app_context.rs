@@ -22,6 +22,25 @@ impl AppContext {
         &mut *self.store
     }
 
+    /// Runs `f` as a repository mutation transaction.
+    ///
+    /// Holds the re-entrant repository lock for the entire closure so the
+    /// read-modify-write-commit sequence cannot interleave with another
+    /// process, reconciles the cache with the on-disk git HEAD before `f` runs
+    /// (so reads see other processes' commits), and records the new HEAD
+    /// afterwards.  `f` receives the store, the VCS backend, and the repo root,
+    /// and is responsible for performing the read, mutation, save, and commit.
+    pub fn transaction<T>(
+        &mut self,
+        f: impl FnOnce(&mut dyn Store, &dyn VcsBackend, &Path) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let _lock =
+            crate::domain::service::begin_mutation(&self.repo_root, &mut *self.store, &*self.vcs)?;
+        let out = f(&mut *self.store, &*self.vcs, &self.repo_root)?;
+        crate::domain::service::end_mutation(&mut *self.store, &*self.vcs)?;
+        Ok(out)
+    }
+
     /// Construct an application context.
     ///
     /// * `config_path` — use this config file instead of the XDG default.

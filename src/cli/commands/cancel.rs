@@ -1,4 +1,4 @@
-use crate::AppContext;
+use crate::{resolve::resolve_task_id, AppContext};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -11,8 +11,15 @@ pub struct Args {
 }
 
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
-    let (task, path) = super::change_status(ctx, &args.id, |t| t.mark_cancelled())?;
-    ctx.vcs.commit(&[path], &format!("next: cancel {}", task.title))?;
+    let id = resolve_task_id(&*ctx.store, &args.id)?;
+    let task = ctx.transaction(|store, vcs, root| {
+        let mut task = store.get_task(id)?;
+        task.mark_cancelled();
+        store.save_task(&task)?;
+        let path = crate::storage::task_path(root, &task);
+        vcs.commit(&[path], &format!("next: cancel {}", task.title))?;
+        Ok(task)
+    })?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);
     } else {

@@ -115,17 +115,23 @@ fn describe(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: description"))?;
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
-    ctx.store.set_tag_description(t, description)?;
-    let tag_path = storage::tag_meta_path(&ctx.repo_root, t);
-    ctx.vcs.commit(&[tag_path], &format!("next: tag describe {t}"))?;
+    ctx.transaction(|store, vcs, root| {
+        store.set_tag_description(t, description)?;
+        let tag_path = storage::tag_meta_path(root, t);
+        vcs.commit(&[tag_path], &format!("next: tag describe {t}"))?;
+        Ok(())
+    })?;
     Ok(json!({ "tag": t, "description": description }))
 }
 
 fn clear_description(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
-    ctx.store.delete_tag_description(t)?;
-    let tag_path = storage::tag_meta_path(&ctx.repo_root, t);
-    ctx.vcs.commit(&[tag_path], &format!("next: tag clear-description {t}"))?;
+    ctx.transaction(|store, vcs, root| {
+        store.delete_tag_description(t)?;
+        let tag_path = storage::tag_meta_path(root, t);
+        vcs.commit(&[tag_path], &format!("next: tag clear-description {t}"))?;
+        Ok(())
+    })?;
     Ok(json!({ "tag": t, "cleared": "description" }))
 }
 
@@ -136,29 +142,34 @@ fn set_url(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: url"))?;
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut meta = ctx.store.get_tag_meta(t)?.unwrap_or_default();
-    meta.url = Some(url.to_owned());
-    ctx.store.set_tag_meta(t, meta)?;
-    let tag_path = storage::tag_meta_path(&ctx.repo_root, t);
-    ctx.vcs.commit(&[tag_path], &format!("next: tag set-url {t}"))?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store.get_tag_meta(t)?.unwrap_or_default();
+        meta.url = Some(url.to_owned());
+        store.set_tag_meta(t, meta)?;
+        let tag_path = storage::tag_meta_path(root, t);
+        vcs.commit(&[tag_path], &format!("next: tag set-url {t}"))?;
+        Ok(())
+    })?;
     Ok(json!({ "tag": t, "url": url }))
 }
 
 fn clear_url(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut meta = ctx
-        .store
-        .get_tag_meta(t)?
-        .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {t:?}"))?;
-    meta.url = None;
-    let tag_path = storage::tag_meta_path(&ctx.repo_root, t);
-    if meta == TagMeta::default() {
-        ctx.store.delete_tag_meta(t)?;
-    } else {
-        ctx.store.set_tag_meta(t, meta)?;
-    }
-    ctx.vcs.commit(&[tag_path], &format!("next: tag clear-url {t}"))?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store
+            .get_tag_meta(t)?
+            .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {t:?}"))?;
+        meta.url = None;
+        let tag_path = storage::tag_meta_path(root, t);
+        if meta == TagMeta::default() {
+            store.delete_tag_meta(t)?;
+        } else {
+            store.set_tag_meta(t, meta)?;
+        }
+        vcs.commit(&[tag_path], &format!("next: tag clear-url {t}"))?;
+        Ok(())
+    })?;
     Ok(json!({ "tag": t, "cleared": "url" }))
 }
 
@@ -170,58 +181,68 @@ fn set_priority(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: priority"))?;
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
     let priority: Priority = priority_str.parse()?;
-    let mut meta = ctx.store.get_tag_meta(t)?.unwrap_or_default();
-    meta.priority = Some(priority);
-    ctx.store.set_tag_meta(t, meta)?;
-    let tag_path = storage::tag_meta_path(&ctx.repo_root, t);
-    ctx.vcs.commit(&[tag_path], &format!("next: tag set-priority {t}"))?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store.get_tag_meta(t)?.unwrap_or_default();
+        meta.priority = Some(priority);
+        store.set_tag_meta(t, meta)?;
+        let tag_path = storage::tag_meta_path(root, t);
+        vcs.commit(&[tag_path], &format!("next: tag set-priority {t}"))?;
+        Ok(())
+    })?;
     Ok(json!({ "tag": t, "priority": priority_str }))
 }
 
 fn clear_priority(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut meta = ctx
-        .store
-        .get_tag_meta(t)?
-        .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {t:?}"))?;
-    meta.priority = None;
-    let tag_path = storage::tag_meta_path(&ctx.repo_root, t);
-    if meta == TagMeta::default() {
-        ctx.store.delete_tag_meta(t)?;
-    } else {
-        ctx.store.set_tag_meta(t, meta)?;
-    }
-    ctx.vcs.commit(&[tag_path], &format!("next: tag clear-priority {t}"))?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store
+            .get_tag_meta(t)?
+            .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {t:?}"))?;
+        meta.priority = None;
+        let tag_path = storage::tag_meta_path(root, t);
+        if meta == TagMeta::default() {
+            store.delete_tag_meta(t)?;
+        } else {
+            store.set_tag_meta(t, meta)?;
+        }
+        vcs.commit(&[tag_path], &format!("next: tag clear-priority {t}"))?;
+        Ok(())
+    })?;
     Ok(json!({ "tag": t, "cleared": "priority" }))
 }
 
 fn set_no_time_urgency(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut meta = ctx.store.get_tag_meta(t)?.unwrap_or_default();
-    meta.no_time_urgency = true;
-    ctx.store.set_tag_meta(t, meta)?;
-    let tag_path = storage::tag_meta_path(&ctx.repo_root, t);
-    ctx.vcs.commit(&[tag_path], &format!("next: tag set-no-time-urgency {t}"))?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store.get_tag_meta(t)?.unwrap_or_default();
+        meta.no_time_urgency = true;
+        store.set_tag_meta(t, meta)?;
+        let tag_path = storage::tag_meta_path(root, t);
+        vcs.commit(&[tag_path], &format!("next: tag set-no-time-urgency {t}"))?;
+        Ok(())
+    })?;
     Ok(json!({ "tag": t, "no_time_urgency": true }))
 }
 
 fn clear_no_time_urgency(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut meta = ctx
-        .store
-        .get_tag_meta(t)?
-        .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {t:?}"))?;
-    meta.no_time_urgency = false;
-    let tag_path = storage::tag_meta_path(&ctx.repo_root, t);
-    if meta == TagMeta::default() {
-        ctx.store.delete_tag_meta(t)?;
-    } else {
-        ctx.store.set_tag_meta(t, meta)?;
-    }
-    ctx.vcs.commit(&[tag_path], &format!("next: tag clear-no-time-urgency {t}"))?;
+    ctx.transaction(|store, vcs, root| {
+        let mut meta = store
+            .get_tag_meta(t)?
+            .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {t:?}"))?;
+        meta.no_time_urgency = false;
+        let tag_path = storage::tag_meta_path(root, t);
+        if meta == TagMeta::default() {
+            store.delete_tag_meta(t)?;
+        } else {
+            store.set_tag_meta(t, meta)?;
+        }
+        vcs.commit(&[tag_path], &format!("next: tag clear-no-time-urgency {t}"))?;
+        Ok(())
+    })?;
     Ok(json!({ "tag": t, "no_time_urgency": false }))
 }
 
