@@ -371,6 +371,41 @@ produce a git commit.
 `pull` returns `PullResult::Clean` or `PullResult::Conflicts(Vec<PathBuf>)`. The sync
 command aborts and prints conflicting file paths when conflicts are detected.
 
+### 6.3 Concurrency and locking
+
+Multiple `next` processes — CLI invocations, the long-running `next-mcp` server, and
+(planned) external plugin processes — mutate the same repository in parallel. Three
+mechanisms keep this safe:
+
+1. **Re-entrant repository lock** (`storage::RepoLock`, `src/storage/lock.rs`). An
+   advisory `flock(2)` on `<repo>/.next.lock`, shared by `TomlStore` (task/tag writes)
+   and `GitBackend` (commit/pull/push). It is exclusive across processes and across
+   threads, but **re-entrant within a single thread** so a mutation transaction can hold
+   it while the nested `save_task` / `commit` calls re-acquire it. A process-global
+   registry maps each lock-file path to one in-process gate (owner thread + recursion
+   depth) layered over the OS lock — plain `flock` is per open-file-description and would
+   otherwise self-deadlock on the second acquire.
+
+2. **Mutation transactions** (`AppContext::transaction`, built on
+   `service::begin_mutation` / `end_mutation`). Every task or tag mutation holds the repo
+   lock across the *entire* read → modify → write → commit sequence, so two processes
+   cannot interleave and lose each other's updates. On entry the transaction reconciles
+   the cache with the on-disk git HEAD (`Store::after_pull`) so the read reflects other
+   processes' commits; on exit it records the new HEAD (`Store::note_head`) so the next
+   transaction does not rebuild needlessly. `tests/locking.rs` covers lost-update
+   prevention, slug-conflict races, and pull/commit coordination.
+
+3. **SQLite WAL + busy_timeout** (`CachedStore::configure_connection`). `.next.db` is a
+   single file shared by all processes; WAL lets readers and a writer proceed
+   concurrently and the 5 s `busy_timeout` waits out transient locks instead of failing
+   with `SQLITE_BUSY` (e.g. `next list` running during an MCP mutation). The WAL sidecars
+   (`.next.db-wal` / `.next.db-shm`) are git-ignored.
+
+State mutations (context, resource, user) are machine-local: they write only to the XDG
+state file under a separate `state.toml.lock` (shared-read / exclusive-write) and do not
+take the repo lock. Lock ordering is always repo-lock-before-state-lock, never the
+reverse, so the two cannot deadlock.
+
 ---
 
 ## 7. Logging
@@ -595,7 +630,7 @@ propagates the `anyhow::Error` to produce a non-zero exit code.
 | `CachedStore` | `src/storage/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |
 | Cache sync | `tests/cache_sync.rs` | Integration tests: write-through consistency (SQLite ↔ TOML), git pull propagation (HEAD change triggers rebuild), cache-reuse (same HEAD = no rebuild) |
 | Migration | `tests/migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next::storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens |
-| File locking | `tests/locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption |
+| File locking | `tests/locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption, including transactional lost-update prevention (N processes each add a distinct tag to one task; all must survive). Re-entrant lock unit tests live in `src/storage/lock.rs` |
 | CLI commands | `tests/test_*.rs` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |
 | MCP unit tests | `src/mcp/tools/*.rs` | Unit tests per tool module using real `AppContext` in a `tempdir` git repo (requires `--features mcp`) |
 | MCP integration tests | `tests/test_mcp.rs` | Start a real HTTP server on `127.0.0.1:0` in `#[tokio::test]`; test all 13 tools, auth, webhook, and autosync (requires `--features mcp`) |
