@@ -85,6 +85,12 @@ pub struct InitializeResult {
     pub capabilities: ServerCapabilities,
     #[serde(rename = "serverInfo")]
     pub server_info: ServerInfo,
+    /// Free-text guidance the client MAY inject into the model's system prompt.
+    /// Used to push tagging conventions and a snapshot of known contexts /
+    /// resources onto the AI without it having to query for them first.
+    /// Valid since protocol revision 2024-11-05.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 impl Default for InitializeResult {
@@ -104,7 +110,14 @@ impl InitializeResult {
                 name: "next-mcp",
                 version: env!("CARGO_PKG_VERSION"),
             },
+            instructions: None,
         }
+    }
+
+    /// Attach server instructions, consuming and returning `self` for chaining.
+    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Some(instructions.into());
+        self
     }
 }
 
@@ -151,5 +164,28 @@ impl CallToolResult {
             content: vec![Content { content_type: "text", text: message.into() }],
             is_error: Some(true),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `instructions` is omitted from the wire when unset (default `new()`).
+    #[test]
+    fn initialize_omits_instructions_when_absent() {
+        let v = serde_json::to_value(InitializeResult::new()).unwrap();
+        assert!(v.get("instructions").is_none(), "instructions must be omitted: {v}");
+        assert_eq!(v["protocolVersion"], "2024-11-05");
+    }
+
+    /// `with_instructions` makes the field appear verbatim on the wire.
+    #[test]
+    fn initialize_serializes_instructions_when_present() {
+        let v = serde_json::to_value(
+            InitializeResult::new().with_instructions("hello guide"),
+        )
+        .unwrap();
+        assert_eq!(v["instructions"], "hello guide");
     }
 }

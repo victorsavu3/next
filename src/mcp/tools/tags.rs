@@ -43,7 +43,27 @@ fn require_tag(params: &Value) -> anyhow::Result<&str> {
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: tag"))
 }
 
-fn list(ctx: &mut AppContext) -> anyhow::Result<Value> {
+/// A single tag plus its metadata, as surfaced in the catalog.
+#[derive(Debug, Clone)]
+pub struct CatalogEntry {
+    pub tag: String,
+    pub meta: TagMeta,
+}
+
+/// The full set of known tags, grouped by kind and sorted within each group.
+///
+/// "Known" means any tag that either carries metadata (`tags/<tag>.toml`) or is
+/// in use on at least one task. Shared by the `manage_tag list` action and by
+/// the server `instructions` snapshot so both report the same view.
+#[derive(Debug, Clone, Default)]
+pub struct TagCatalog {
+    pub contexts: Vec<CatalogEntry>,
+    pub resources: Vec<CatalogEntry>,
+    pub freeform: Vec<CatalogEntry>,
+}
+
+/// Builds the tag catalog from tag metadata and the tags in use across tasks.
+pub fn tag_catalog(ctx: &AppContext) -> anyhow::Result<TagCatalog> {
     let metas = ctx.store.list_tag_metas()?;
     let tasks = ctx.store.list_tasks()?;
 
@@ -53,21 +73,32 @@ fn list(ctx: &mut AppContext) -> anyhow::Result<Value> {
     }
     for t in metas.keys() { all_tags.insert(t.clone()); }
 
-    let mut contexts = vec![];
-    let mut resources = vec![];
-    let mut freeform = vec![];
-
+    let mut catalog = TagCatalog::default();
     for t in &all_tags {
         let meta = metas.get(t.as_str()).cloned().unwrap_or_default();
-        let entry = json!({ "tag": t, "meta": meta });
+        let entry = CatalogEntry { tag: t.clone(), meta };
         match tag::classify(t) {
-            TagKind::Context  => contexts.push(entry),
-            TagKind::Resource => resources.push(entry),
-            TagKind::Freeform => freeform.push(entry),
+            TagKind::Context  => catalog.contexts.push(entry),
+            TagKind::Resource => catalog.resources.push(entry),
+            TagKind::Freeform => catalog.freeform.push(entry),
         }
     }
+    Ok(catalog)
+}
 
-    Ok(json!({ "contexts": contexts, "resources": resources, "freeform": freeform }))
+fn list(ctx: &AppContext) -> anyhow::Result<Value> {
+    let catalog = tag_catalog(ctx)?;
+    let to_json = |entries: &[CatalogEntry]| -> Vec<Value> {
+        entries
+            .iter()
+            .map(|e| json!({ "tag": e.tag, "meta": e.meta }))
+            .collect()
+    };
+    Ok(json!({
+        "contexts": to_json(&catalog.contexts),
+        "resources": to_json(&catalog.resources),
+        "freeform": to_json(&catalog.freeform),
+    }))
 }
 
 fn show(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {

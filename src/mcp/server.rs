@@ -73,7 +73,7 @@ async fn mcp_handler(
     }
 
     let response = match req.method.as_str() {
-        "initialize" => handle_initialize(req.id),
+        "initialize" => handle_initialize(req.id, &state).await,
         "tools/list"  => handle_tools_list(req.id),
         "tools/call"  => handle_tools_call(req.id, req.params, &state).await,
         other => JsonRpcResponse::method_not_found(req.id, other),
@@ -82,8 +82,23 @@ async fn mcp_handler(
     Json(response).into_response()
 }
 
-fn handle_initialize(id: Option<Value>) -> JsonRpcResponse {
-    JsonRpcResponse::ok(id, json!(InitializeResult::new()))
+async fn handle_initialize(id: Option<Value>, state: &AppState) -> JsonRpcResponse {
+    // Build a connect-time snapshot of tagging conventions + known tags/state so
+    // the client can inject it into the model's system prompt. Reads the store,
+    // so run on a blocking thread; fall back to the bare result if it fails.
+    let ctx = state.ctx.clone();
+    let instructions = tokio::task::spawn_blocking(move || {
+        let ctx = ctx.blocking_lock();
+        tools::server_instructions(&ctx)
+    })
+    .await
+    .ok();
+
+    let result = match instructions {
+        Some(text) => InitializeResult::new().with_instructions(text),
+        None => InitializeResult::new(),
+    };
+    JsonRpcResponse::ok(id, json!(result))
 }
 
 fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {

@@ -4,11 +4,15 @@ pub mod tags;
 pub mod tasks;
 pub mod view;
 
+use std::fmt::Write as _;
+
 use serde_json::{json, Value};
 
+use crate::domain::tag::TagMeta;
 use crate::error::AppError;
 use crate::AppContext;
 
+use self::tags::{CatalogEntry, TagCatalog};
 use super::protocol::{CallToolResult, Tool};
 use super::sync_manager::do_sync;
 
@@ -218,6 +222,115 @@ pub fn all_tools() -> Vec<Tool> {
             }),
         },
     ]
+}
+
+// ── Server instructions (initialize) ───────────────────────────────────────────
+
+/// The static tagging guide — conventions that never change. Always included so
+/// the model understands the tag system even on an empty repository.
+const TAGGING_GUIDE: &str = "\
+# next task manager
+
+Every task is labelled with tags. A tag's leading character classifies it:
+- `@context` — a working environment (e.g. `@work`, `@home`). Tasks carrying an \
+`@` tag are hidden unless that context is active or no context is active; tasks \
+with no `@` tag are always shown.
+- `#resource` — a physical or situational resource (e.g. `#printer`). Tasks are \
+hidden while the resource is marked unavailable.
+- bare `freeform` — a plain label (e.g. `python`, `errand`), no filtering effect.
+
+All three kinds nest with `/` (e.g. `@work/frontend`, `#office/printer`); a \
+filter on a parent segment matches every descendant. A tag may carry metadata: a \
+default `priority` (high/medium/low) added to the urgency of tasks bearing it, \
+and `no_time_urgency` to stop age and deadlines from raising that urgency.
+
+When creating tasks, reuse an existing tag from the lists below rather than \
+inventing a near-duplicate, and apply the active context unless the user says \
+otherwise.";
+
+/// Builds the `instructions` string returned in the MCP `initialize` result.
+///
+/// Combines the static [`TAGGING_GUIDE`] with a live, connect-time snapshot of
+/// the active context/resource state and the known-tag catalog, so a client can
+/// inject the whole thing into the model's system prompt. Storage reads that
+/// fail are skipped rather than propagated — the guide is always returned.
+pub fn server_instructions(ctx: &AppContext) -> String {
+    let mut out = String::from(TAGGING_GUIDE);
+
+    if let Ok(state) = ctx.store.get_state() {
+        out.push_str("\n\n## Current state\n");
+        if state.active_contexts.is_empty() {
+            out.push_str("- Active context: none (tasks from all contexts are shown)\n");
+        } else {
+            let _ = writeln!(out, "- Active context: {}", state.active_contexts.join(", "));
+        }
+        if !state.excluded_contexts.is_empty() {
+            let _ = writeln!(out, "- Excluded contexts: {}", state.excluded_contexts.join(", "));
+        }
+        let mut unavailable: Vec<&String> = state
+            .resources
+            .iter()
+            .filter(|(_, available)| !**available)
+            .map(|(name, _)| name)
+            .collect();
+        unavailable.sort();
+        if !unavailable.is_empty() {
+            // Normalise to a single `#` prefix regardless of how the key was stored.
+            let names: Vec<String> = unavailable
+                .iter()
+                .map(|n| format!("#{}", crate::domain::tag::bare_name(n)))
+                .collect();
+            let _ = writeln!(out, "- Unavailable resources: {}", names.join(", "));
+        }
+        if !state.active_users.is_empty() {
+            let _ = writeln!(out, "- Active user filter: {}", state.active_users.join(", "));
+        }
+    }
+
+    if let Ok(catalog) = tags::tag_catalog(ctx) {
+        render_catalog_section(&mut out, &catalog);
+    }
+
+    out
+}
+
+/// Renders the known-tag catalog as markdown lists, omitting empty groups.
+fn render_catalog_section(out: &mut String, catalog: &TagCatalog) {
+    let groups: [(&str, &[CatalogEntry]); 3] = [
+        ("Known contexts", &catalog.contexts),
+        ("Known resources", &catalog.resources),
+        ("Known freeform tags", &catalog.freeform),
+    ];
+    for (heading, entries) in groups {
+        if entries.is_empty() {
+            continue;
+        }
+        let _ = write!(out, "\n\n## {heading}\n");
+        for entry in entries {
+            let _ = write!(out, "- `{}`", entry.tag);
+            let annotation = annotate_meta(&entry.meta);
+            if !annotation.is_empty() {
+                let _ = write!(out, " — {annotation}");
+            }
+            out.push('\n');
+        }
+    }
+}
+
+/// Formats a tag's metadata into a single-line annotation, or "" if it carries
+/// no description, priority, or no-time-urgency flag.
+fn annotate_meta(meta: &TagMeta) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(desc) = &meta.description {
+        parts.push(desc.clone());
+    }
+    if let Some(priority) = &meta.priority {
+        parts.push(format!("[default priority: {priority}]"));
+    }
+    if meta.no_time_urgency {
+        parts.push("[no time urgency]".to_string());
+    }
+    parts.join(" ")
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
@@ -476,6 +589,73 @@ mod tests {
         assert!(
             !text.contains(ctx.repo_root.to_str().unwrap()),
             "response must not contain repo root path, got: {text}",
+        );
+    }
+
+    // ── server_instructions ─────────────────────────────────────────────────
+
+    /// On an empty repo the instructions still carry the static tagging guide
+    /// and report that no context is active.
+    #[test]
+    fn instructions_include_conventions_on_empty_repo() {
+        let (_dir, ctx) = make_ctx();
+        let text = server_instructions(&ctx);
+        assert!(!text.is_empty());
+        // Conventions are always present.
+        assert!(text.contains("@context"), "missing context convention: {text}");
+        assert!(text.contains("#resource"), "missing resource convention: {text}");
+        assert!(text.contains("freeform"), "missing freeform convention: {text}");
+        // No tags exist yet, so no catalog headings are emitted.
+        assert!(!text.contains("## Known contexts"), "unexpected catalog: {text}");
+        assert!(text.contains("Active context: none"), "missing active-context line: {text}");
+    }
+
+    /// Known tags and their metadata appear in the snapshot, grouped by kind.
+    #[test]
+    fn instructions_include_known_tags_with_metadata() {
+        let (_dir, mut ctx) = make_ctx();
+        // A described, high-priority context and a described resource.
+        tags::manage_tag(
+            &json!({ "action": "describe", "tag": "@work", "description": "Office tasks" }),
+            &mut ctx,
+        )
+        .unwrap();
+        tags::manage_tag(
+            &json!({ "action": "set_priority", "tag": "@work", "priority": "high" }),
+            &mut ctx,
+        )
+        .unwrap();
+        tags::manage_tag(
+            &json!({ "action": "describe", "tag": "#printer", "description": "2nd-floor laser" }),
+            &mut ctx,
+        )
+        .unwrap();
+
+        let text = server_instructions(&ctx);
+        assert!(text.contains("## Known contexts"), "missing contexts heading: {text}");
+        assert!(text.contains("`@work`"), "missing @work entry: {text}");
+        assert!(text.contains("Office tasks"), "missing @work description: {text}");
+        assert!(
+            text.contains("[default priority: high]"),
+            "missing priority annotation: {text}"
+        );
+        assert!(text.contains("## Known resources"), "missing resources heading: {text}");
+        assert!(text.contains("`#printer`"), "missing #printer entry: {text}");
+    }
+
+    /// Active context and unavailable resources are reflected in the snapshot.
+    #[test]
+    fn instructions_reflect_active_state() {
+        let (_dir, mut ctx) = make_ctx();
+        state::set_context(&json!({ "contexts": ["@work"] }), &mut ctx).unwrap();
+        state::set_resource(&json!({ "resource": "#printer", "available": false }), &mut ctx)
+            .unwrap();
+
+        let text = server_instructions(&ctx);
+        assert!(text.contains("Active context: @work"), "missing active context: {text}");
+        assert!(
+            text.contains("Unavailable resources: #printer"),
+            "missing unavailable resource: {text}"
         );
     }
 }

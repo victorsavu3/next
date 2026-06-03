@@ -317,6 +317,17 @@ At most one sync runs at a time — the `sync` tool and webhook return an error 
 
 **Slug format**: letters, digits, `-` and `_` only (e.g. `water-plants`, `work_infra`).
 
+### Server instructions
+
+The `initialize` response includes an `instructions` string (a standard MCP field) that
+clients MAY inject into the model's system prompt. It carries the tagging conventions
+(`@context`, `#resource`, freeform; `/` hierarchy; tag priority / no-time-urgency
+metadata) plus a connect-time snapshot of the active context, unavailable resources, and
+the catalog of known tags with their descriptions. This pushes tag knowledge onto the AI
+up front so it reuses existing tags and respects the active context without having to call
+`manage_tag list` / `get_state` first. The snapshot is taken at connection time and
+refreshes on reconnect.
+
 ### Webhook
 
 `POST /webhook/sync` triggers an immediate pull+push using `NEXT_WEBHOOK_TOKEN` for auth (strictly separate from the MCP bearer token — neither token is accepted on the other route). Wire it to your git host's push webhook to keep the container up to date when others push.
