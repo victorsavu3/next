@@ -89,7 +89,12 @@ pub fn set_resource(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Valu
     }
 
     let mut state = ctx.store.get_state()?;
-    state.resources.insert(resource.to_owned(), available);
+    // Store the bare name (without `#`), matching the CLI and the key convention
+    // that `GlobalState::is_resource_available` looks up. Storing the prefixed
+    // form here meant MCP-set resources never actually filtered.
+    state
+        .resources
+        .insert(crate::domain::tag::bare_name(resource).to_owned(), available);
     ctx.store.save_state(&state)?;
     tracing::info!(cmd = "mcp/resource", "set {resource}={available}");
     Ok(serde_json::to_value(&state)?)
@@ -155,7 +160,20 @@ mod tests {
         let (_dir, mut ctx) = make_ctx();
         super::set_resource(&json!({ "resource": "#printer", "available": false }), &mut ctx).unwrap();
         let state = get_state(&json!({}), &mut ctx).unwrap();
-        assert_eq!(state["resources"]["#printer"], false);
+        // Key is stored bare (without `#`) so it matches is_resource_available's lookup.
+        assert_eq!(state["resources"]["printer"], false);
+        assert!(state["resources"].get("#printer").is_none(), "key must not carry a '#' prefix");
+    }
+
+    /// Regression: a resource marked unavailable via MCP must actually be
+    /// reported unavailable by `GlobalState::is_resource_available`, which keys
+    /// on the bare name.
+    #[test]
+    fn set_resource_actually_filters() {
+        let (_dir, mut ctx) = make_ctx();
+        super::set_resource(&json!({ "resource": "#printer", "available": false }), &mut ctx).unwrap();
+        let state = ctx.store.get_state().unwrap();
+        assert!(!state.is_resource_available("#printer"));
     }
 
     #[test]
