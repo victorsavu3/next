@@ -7,7 +7,11 @@
 use std::{path::Path, process::Command, sync::Arc};
 
 use next::{
-    domain::{state::GlobalState, task::Task},
+    domain::{
+        service::{apply_edits, EditTaskParams},
+        state::GlobalState,
+        task::Task,
+    },
     store::{Store as _, VcsBackend as _},
 };
 use next::storage::{GitBackend, TomlStore};
@@ -231,6 +235,81 @@ fn concurrent_task_and_state_saves_no_corruption() {
     let store = fresh_store(dir.path());
     assert_eq!(store.list_tasks().unwrap().len(), N, "all task files intact");
     store.get_state().unwrap(); // must not error
+}
+
+// ---------------------------------------------------------------------------
+// Lost-update prevention (transactional read-modify-write)
+// ---------------------------------------------------------------------------
+
+/// N concurrent "processes" each add a *distinct* tag to the *same* task.
+///
+/// Each thread opens its own `CachedStore` + `GitBackend` (as a separate
+/// process would) and calls `apply_edits`, which reads the task, appends one
+/// tag, writes, and commits.  Without a transaction that holds the repo lock
+/// across the whole read-modify-write — and reconciles the cache with the
+/// on-disk HEAD before reading — concurrent edits clobber each other and tags
+/// are silently lost.  With it, every tag must survive.
+#[test]
+fn concurrent_tag_edits_do_not_lose_updates() {
+    let dir = TempDir::new().unwrap();
+    init_git(dir.path());
+
+    // Seed a single task and an initial commit so HEAD exists.
+    let task_id = {
+        let (mut store, vcs) = next::storage::open(dir.path().to_path_buf()).unwrap();
+        let task = Task::new("Shared task");
+        let id = task.id;
+        store.save_task(&task).unwrap();
+        let path = next::storage::task_path(dir.path(), &task);
+        vcs.commit(&[path], "seed task").unwrap();
+        id
+    };
+
+    let root = Arc::new(dir.path().to_path_buf());
+    const N: usize = 12;
+    let barrier = Arc::new(std::sync::Barrier::new(N));
+
+    let handles: Vec<_> = (0..N)
+        .map(|i| {
+            let root = Arc::clone(&root);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let (mut store, vcs) = next::storage::open((*root).clone()).unwrap();
+                let edits = EditTaskParams {
+                    add_tags: vec![format!("tag{i}")],
+                    ..Default::default()
+                };
+                // Release all threads at once to maximise contention.
+                barrier.wait();
+                apply_edits(
+                    task_id,
+                    edits,
+                    chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                    &root,
+                    &mut store,
+                    &vcs,
+                )
+                .unwrap();
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    // Re-open fresh and assert every tag survived.
+    let (store, _vcs) = next::storage::open(dir.path().to_path_buf()).unwrap();
+    let task = store.get_task(task_id).unwrap();
+    let mut tags: Vec<String> = task.tags.iter().filter(|t| t.starts_with("tag")).cloned().collect();
+    tags.sort();
+    let expected: Vec<String> = (0..N).map(|i| format!("tag{i}")).collect();
+    let mut expected_sorted = expected.clone();
+    expected_sorted.sort();
+    assert_eq!(
+        tags, expected_sorted,
+        "all {N} concurrent tag additions must survive; lost updates indicate a broken transaction"
+    );
 }
 
 // ---------------------------------------------------------------------------

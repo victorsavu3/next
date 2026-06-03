@@ -110,12 +110,24 @@ pub trait Store: Send + Sync {
             .collect())
     }
 
-    /// Called after a VCS pull to allow cache invalidation.
+    /// Reconciles any HEAD-keyed cache with `new_head`, rebuilding when it
+    /// differs from the stored hash.
     ///
-    /// Implementations that cache data keyed on the git HEAD (e.g. `CachedStore`)
-    /// should rebuild when `new_head` differs from the stored hash. The default
+    /// Called after a VCS pull and at the start of a mutation transaction so the
+    /// subsequent read reflects commits made by other processes.  The default
     /// implementation is a no-op for stores that need no special handling.
     fn after_pull(&mut self, _new_head: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// Records `new_head` as the cache's current HEAD *without* rebuilding.
+    ///
+    /// Called at the end of a mutation transaction: the writes were already
+    /// applied to the cache in-place by `save_task` / `save_state`, so the cache
+    /// is current and a rebuild would be wasted work — but the stored HEAD hash
+    /// must advance to match the new commit, otherwise the next [`after_pull`]
+    /// would see a mismatch and rebuild unnecessarily.  Default: no-op.
+    fn note_head(&mut self, _new_head: &str) -> Result<()> {
         Ok(())
     }
 }

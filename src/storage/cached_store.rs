@@ -189,6 +189,10 @@ impl Store for CachedStore {
         }
         Ok(())
     }
+
+    fn note_head(&mut self, new_head: &str) -> Result<()> {
+        self.with_conn(|conn| set_meta(conn, "head_hash", new_head))
+    }
 }
 
 // ---------------------------------------------------------------------------

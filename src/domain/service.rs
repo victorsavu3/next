@@ -16,9 +16,40 @@ use crate::{
         task::{Recurrence, Task},
     },
     resolve::resolve_task_id,
-    storage,
+    storage::{self, RepoLock},
     Store, VcsBackend,
 };
+
+// ── Mutation transaction ──────────────────────────────────────────────────────
+
+/// Opens a mutation transaction over the repository.
+///
+/// Acquires the re-entrant repository lock and reconciles the store's cache
+/// with the on-disk git HEAD, so the read that follows reflects commits made by
+/// other processes (closing the lost-update window).  The returned lock guard
+/// MUST stay alive for the whole read-modify-write-commit sequence; the nested
+/// `save_task` / `commit` calls re-acquire the same lock harmlessly.
+///
+/// Pair with [`end_mutation`] after the commit succeeds.
+fn begin_mutation(
+    repo_root: &Path,
+    store: &mut dyn Store,
+    vcs: &dyn VcsBackend,
+) -> anyhow::Result<RepoLock> {
+    let lock = storage::lock_repo(repo_root)?;
+    let head = vcs.head_hash()?;
+    store.after_pull(&head)?;
+    Ok(lock)
+}
+
+/// Closes a mutation transaction: records the post-commit HEAD on the store's
+/// cache so the next [`begin_mutation`] does not rebuild unnecessarily.  Must be
+/// called while the transaction lock is still held.
+fn end_mutation(store: &mut dyn Store, vcs: &dyn VcsBackend) -> anyhow::Result<()> {
+    let head = vcs.head_hash()?;
+    store.note_head(&head)?;
+    Ok(())
+}
 
 // ── Validation helpers ────────────────────────────────────────────────────────
 
@@ -146,6 +177,8 @@ pub fn create_task(
     store: &mut dyn Store,
     vcs: &dyn VcsBackend,
 ) -> anyhow::Result<Task> {
+    let _txn = begin_mutation(repo_root, store, vcs)?;
+
     let mut task = Task::new(title);
 
     task.due = params.due;
@@ -207,6 +240,7 @@ pub fn create_task(
     store.save_task(&task)?;
     vcs.commit(&[task_path], &format!("next: add {}", task.title))?;
 
+    end_mutation(store, vcs)?;
     Ok(task)
 }
 
@@ -223,6 +257,8 @@ pub fn complete_task(
     store: &mut dyn Store,
     vcs: &dyn VcsBackend,
 ) -> anyhow::Result<Task> {
+    let _txn = begin_mutation(repo_root, store, vcs)?;
+
     let mut task = store.get_task(id)?;
     task.mark_done();
 
@@ -238,6 +274,7 @@ pub fn complete_task(
     store.save_task(&task)?;
     vcs.commit(&paths, &format!("next: done {}", task.title))?;
 
+    end_mutation(store, vcs)?;
     Ok(task)
 }
 
@@ -255,6 +292,8 @@ pub fn apply_edits(
     store: &mut dyn Store,
     vcs: &dyn VcsBackend,
 ) -> anyhow::Result<Task> {
+    let _txn = begin_mutation(repo_root, store, vcs)?;
+
     let mut task = store.get_task(id)?;
 
     if let Some(title) = edits.title {
@@ -359,6 +398,7 @@ pub fn apply_edits(
     store.save_task(&task)?;
     vcs.commit(&[task_path], &format!("next: edit {}", task.title))?;
 
+    end_mutation(store, vcs)?;
     Ok(task)
 }
 
