@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
-use crate::{Config, Store, VcsBackend};
+use uuid::Uuid;
+use crate::{plugin::TaskEvent, Config, Store, VcsBackend};
 
 pub struct AppContext {
     pub config: Config,
@@ -9,9 +10,51 @@ pub struct AppContext {
     pub vcs: Box<dyn VcsBackend>,
     /// Absolute path to the repository root (contains `.git` and `state.toml`).
     pub repo_root: PathBuf,
+    /// Task mutations performed this run, drained at the post-mutation
+    /// chokepoint to notify subscribed plugins.
+    task_events: Vec<TaskEvent>,
+    /// The plugin that owns this process, from `NEXT_PLUGIN_ORIGIN`.  Skipped
+    /// when dispatching notifications so a plugin is never notified of its own
+    /// changes (loop guard).
+    plugin_origin: Option<String>,
 }
 
 impl AppContext {
+    /// Assembles a context from its parts, reading the `NEXT_PLUGIN_ORIGIN`
+    /// loop-guard env var.  Used by [`AppContext::new`] and by tests that wire
+    /// up a store directly.
+    pub fn with_parts(
+        config: Config,
+        store: Box<dyn Store>,
+        vcs: Box<dyn VcsBackend>,
+        repo_root: PathBuf,
+    ) -> Self {
+        Self {
+            config,
+            store,
+            vcs,
+            repo_root,
+            task_events: Vec::new(),
+            plugin_origin: std::env::var("NEXT_PLUGIN_ORIGIN").ok().filter(|s| !s.is_empty()),
+        }
+    }
+
+    /// Records a task mutation for later plugin notification.  Called by each
+    /// mutating handler after its transaction returns (lock released).
+    pub fn record_task_event(&mut self, verb: &'static str, task_id: Uuid) {
+        self.task_events.push(TaskEvent::new(verb, task_id));
+    }
+
+    /// Drains the buffered task events (called at the post-mutation chokepoint).
+    pub fn take_task_events(&mut self) -> Vec<TaskEvent> {
+        std::mem::take(&mut self.task_events)
+    }
+
+    /// The plugin origin of this process, if any (loop guard).
+    pub fn plugin_origin(&self) -> Option<&str> {
+        self.plugin_origin.as_deref()
+    }
+
     /// Returns a shared reference to the task store.
     pub fn store(&self) -> &dyn Store {
         &*self.store
@@ -79,14 +122,8 @@ impl AppContext {
         let v = v.with_subprocess(config.sync.git_subprocess);
         let store: Box<dyn Store> = Box::new(s);
         let vcs: Box<dyn VcsBackend> = Box::new(v);
-        let repo_root = root;
 
-        Ok(Self {
-            config,
-            store,
-            vcs,
-            repo_root,
-        })
+        Ok(Self::with_parts(config, store, vcs, root))
     }
 }
 

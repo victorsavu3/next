@@ -235,12 +235,7 @@ mod tests {
     }
 
     fn make_ctx(vcs: FakeVcs) -> AppContext {
-        AppContext {
-            config: Config::default(),
-            store: Box::new(FakeStore),
-            vcs: Box::new(vcs),
-            repo_root: std::path::PathBuf::from("/tmp"),
-        }
+        AppContext::with_parts(Config::default(), Box::new(FakeStore), Box::new(vcs), std::path::PathBuf::from("/tmp"))
     }
 
     #[test]

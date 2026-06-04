@@ -38,12 +38,7 @@ async fn start_test_server(
 ) -> SocketAddr {
     init_git_repo(repo_dir);
     let (store, vcs) = next::storage::open(repo_dir.to_path_buf()).unwrap();
-    let ctx = AppContext {
-        config: Config::default(),
-        store: Box::new(store),
-        vcs: Box::new(vcs),
-        repo_root: repo_dir.to_path_buf(),
-    };
+    let ctx = AppContext::with_parts(Config::default(), Box::new(store), Box::new(vcs), repo_dir.to_path_buf());
     let ctx = Arc::new(Mutex::new(ctx));
     let scheduler = spawn_deferred_sync(ctx.clone(), std::time::Duration::from_secs(30));
 

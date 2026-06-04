@@ -15,12 +15,7 @@ pub fn setup() -> TestEnv {
     let dir = tempfile::tempdir().unwrap();
     init_git_repo(dir.path());
     let (store, vcs) = next::storage::open(dir.path().to_path_buf()).unwrap();
-    let ctx = AppContext {
-        config: Config::default(),
-        store: Box::new(store),
-        vcs: Box::new(vcs),
-        repo_root: dir.path().to_path_buf(),
-    };
+    let ctx = AppContext::with_parts(Config::default(), Box::new(store), Box::new(vcs), dir.path().to_path_buf());
     TestEnv { _dir: dir, ctx }
 }
 

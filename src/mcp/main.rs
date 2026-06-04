@@ -26,12 +26,12 @@ async fn main() -> anyhow::Result<()> {
     let (store, vcs) = next::storage::open(repo_path.clone())
         .map_err(|e| anyhow::anyhow!("failed to open task store: {e}"))?;
 
-    let ctx = AppContext {
-        config: Config::default(),
-        store: Box::new(store),
-        vcs: Box::new(vcs),
-        repo_root: repo_path,
-    };
+    let ctx = AppContext::with_parts(
+        Config::default(),
+        Box::new(store),
+        Box::new(vcs),
+        repo_path,
+    );
     let ctx = Arc::new(Mutex::new(ctx));
 
     // Background deferred-sync task.

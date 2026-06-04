@@ -109,12 +109,7 @@ fn init_then_add_task_works() {
     }
 
     let (store, vcs) = next::storage::open(dir.path().to_path_buf()).unwrap();
-    let mut ctx = next::AppContext {
-        config: next::Config::default(),
-        store: Box::new(store),
-        vcs: Box::new(vcs),
-        repo_root: dir.path().to_path_buf(),
-    };
+    let mut ctx = next::AppContext::with_parts(next::Config::default(), Box::new(store), Box::new(vcs), dir.path().to_path_buf());
 
     use next::cli::commands::add;
     add::run(
