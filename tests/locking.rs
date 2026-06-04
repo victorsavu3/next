@@ -365,6 +365,49 @@ fn concurrent_state_edits_do_not_lose_updates() {
     );
 }
 
+/// N concurrent "processes" each subscribe one plugin to a distinct task via
+/// `registry::watch`, which holds the re-entrant plugins lock across its
+/// load → modify → save. Without that lock the concurrent writers would clobber
+/// each other; with it, every subscription must survive.
+#[test]
+fn concurrent_plugin_watches_do_not_lose_updates() {
+    use next::plugin::registry;
+
+    let dir = TempDir::new().unwrap();
+    let root = Arc::new(dir.path().to_path_buf());
+    registry::register(&root, "p", vec!["cmd".to_string()]).unwrap();
+
+    const N: usize = 12;
+    let barrier = Arc::new(std::sync::Barrier::new(N));
+    let ids: Vec<uuid::Uuid> = (0..N).map(|_| uuid::Uuid::new_v4()).collect();
+
+    let handles: Vec<_> = ids
+        .iter()
+        .map(|id| {
+            let root = Arc::clone(&root);
+            let barrier = Arc::clone(&barrier);
+            let id = *id;
+            std::thread::spawn(move || {
+                barrier.wait();
+                registry::watch(&root, "p", id).unwrap();
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let reg = registry::load(&root).unwrap();
+    let mut watched = reg.plugins[0].tasks.clone();
+    watched.sort();
+    let mut expected = ids;
+    expected.sort();
+    assert_eq!(
+        watched, expected,
+        "all {N} concurrent subscriptions must survive; lost updates indicate a broken plugins lock"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Repo-lock coordination between TomlStore and GitBackend
 // ---------------------------------------------------------------------------

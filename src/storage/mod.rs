@@ -209,6 +209,14 @@ pub fn tag_description_path(root: &Path, tag: &str) -> PathBuf {
 /// FNV-1a hash of the canonical repository root path.  Each repository gets its
 /// own isolated state directory, so multiple repos can coexist without conflict.
 pub fn state_path_for_repo(root: &Path) -> PathBuf {
+    state_dir_for_repo(root).join("state.toml")
+}
+
+/// Returns the per-repository machine-local directory under
+/// `$XDG_STATE_HOME/task-manager/<hash>` where `<hash>` is an FNV-1a hash of the
+/// canonical repository root path.  Both `state.toml` and `plugins.toml` live
+/// here, so they are guaranteed co-located.
+fn state_dir_for_repo(root: &Path) -> PathBuf {
     let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let hash = fnv1a_hash(&canonical.to_string_lossy());
     let base = dirs::state_dir()
@@ -218,7 +226,33 @@ pub fn state_path_for_repo(root: &Path) -> PathBuf {
                 .join(".local/state")
         })
         .join("task-manager");
-    base.join(hash).join("state.toml")
+    base.join(hash)
+}
+
+/// Returns the path to the machine-local plugin registry for the repo at `root`.
+///
+/// Co-located with `state.toml` (`plugins.toml` in the same per-repo state dir).
+/// Like the state file it is never committed to git — plugin binaries are
+/// per-machine, so registrations are not synced.
+pub fn plugins_path_for_repo(root: &Path) -> PathBuf {
+    state_dir_for_repo(root).join("plugins.toml")
+}
+
+/// Acquires the exclusive plugin-registry lock for the repo rooted at `root`.
+///
+/// A third lock independent of the repo lock (`.next.lock`) and state lock
+/// (`.state.toml.lock`); guards concurrent edits to `plugins.toml` and is
+/// re-entrant within a thread so a load → modify → save sequence is atomic.
+pub fn lock_plugins(root: &Path) -> Result<FileLock> {
+    let lock_path = state_lock_path(&plugins_path_for_repo(root));
+    // The per-repo state dir may not exist yet on the first plugin operation
+    // (unlike the state lock, nothing else pre-creates it); flock cannot create
+    // a file in a missing directory.
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| AppError::Other(format!("create plugins dir: {e}")))?;
+    }
+    FileLock::acquire(&lock_path)
 }
 
 /// FNV-1a 64-bit hash — deterministic, no dependencies.

@@ -5,6 +5,7 @@ pub mod domain;
 pub mod error;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+pub mod plugin;
 pub mod resolve;
 pub mod storage;
 pub mod store;

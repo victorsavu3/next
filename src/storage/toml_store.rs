@@ -212,7 +212,7 @@ impl TomlStore {
 ///
 /// Readers always see either the old complete file or the new complete file —
 /// never a partially-written one.
-fn atomic_write(path: &Path, content: &str) -> Result<()> {
+pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<()> {
     let mut tmp_name = path.as_os_str().to_owned();
     tmp_name.push(".tmp");
     let tmp_path = PathBuf::from(tmp_name);
