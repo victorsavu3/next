@@ -1,8 +1,10 @@
 //! `next-plugin-forgejo` — Forgejo integration plugin binary.
 
-use anyhow::Result;
+use std::path::Path;
+
+use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
-use next::forgejo::{config, issues::ForgejoApi, reconcile, tasks::LibTaskStore};
+use next::forgejo::{config, hook, issues::ForgejoApi, reconcile, tasks::LibTaskStore, PLUGIN_NAME};
 
 #[derive(Parser)]
 #[command(name = "next-plugin-forgejo", about = "Forgejo integration plugin for next")]
@@ -33,9 +35,27 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Sync { dry_run } => sync(dry_run),
-        Command::Hook => anyhow::bail!("hook: not yet implemented"),
-        Command::Register => anyhow::bail!("register: not yet implemented"),
+        Command::Hook => hook::run(),
+        Command::Register => register(),
     }
+}
+
+/// Registers this binary as `next`'s export-hook handler (idempotent: replaces
+/// the command, keeps existing task subscriptions).
+fn ensure_registered(repo_root: &Path) -> Result<()> {
+    let exe = std::env::current_exe().context("resolve current executable")?;
+    let command = vec![exe.to_string_lossy().into_owned(), "hook".to_owned()];
+    next::plugin::registry::register(repo_root, PLUGIN_NAME, command)?;
+    Ok(())
+}
+
+/// `register` subcommand: register the export hook without importing anything.
+fn register() -> Result<()> {
+    let cfg = config::load()?;
+    let store = LibTaskStore::open(cfg.next_repo.as_deref())?;
+    ensure_registered(store.repo_root())?;
+    println!("registered {PLUGIN_NAME} export hook for {}", store.repo_root().display());
+    Ok(())
 }
 
 /// Import issues and reconcile resolution across all configured mappings.
@@ -47,6 +67,10 @@ fn sync(dry_run: bool) -> Result<()> {
     }
     let issues = ForgejoApi::new(&cfg.forgejo_url, &cfg.forgejo_token)?;
     let mut tasks = LibTaskStore::open(cfg.next_repo.as_deref())?;
+
+    // Self-register so the per-task `watch` during import succeeds and local
+    // resolution later fires the hook. Idempotent (keeps existing watches).
+    ensure_registered(tasks.repo_root())?;
 
     // Best-effort pull so we reconcile against the canonical repo and avoid
     // duplicate imports; never fatal (e.g. no remote configured).

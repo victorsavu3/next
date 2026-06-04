@@ -10,6 +10,7 @@
 //! directly rather than shelling out to the CLI.
 
 pub mod config;
+pub mod hook;
 pub mod issues;
 pub mod reconcile;
 pub mod tasks;
