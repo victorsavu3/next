@@ -3,17 +3,29 @@ repo = "local"
 
 [[repos.hooks]]
 id = "cargo-clippy"
-name = "cargo clippy"
+name = "cargo clippy (all features)"
 language = "system"
-entry = "cargo clippy --workspace --all-targets --features mcp,forgejo"
+entry = "cargo clippy --workspace --all-targets --all-features"
+args = ["--", "-D", "warnings"]
+files = "\\.rs$|Cargo\\.toml"
+pass_filenames = false
+
+[[repos.hooks]]
+id = "cargo-clippy-core"
+name = "cargo clippy (core, no features)"
+language = "system"
+# Verifies the featureless crate (the core library others link) still compiles
+# warning-free without the CLI / clap. No --all-targets: integration tests
+# reference the cli/mcp features and are covered by the all-features run above.
+entry = "cargo clippy --workspace --no-default-features"
 args = ["--", "-D", "warnings"]
 files = "\\.rs$|Cargo\\.toml"
 pass_filenames = false
 
 [[repos.hooks]]
 id = "cargo-test"
-name = "cargo test"
+name = "cargo test (all features)"
 language = "system"
-entry = "cargo test --workspace --features mcp,forgejo"
+entry = "cargo test --workspace --all-features"
 files = "\\.rs$|Cargo\\.toml"
 pass_filenames = false

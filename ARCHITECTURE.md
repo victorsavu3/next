@@ -42,12 +42,16 @@ modules live in `src/mcp/` and are gated by the `mcp` Cargo feature.
 
 ## 2. Module layout
 
-The project is a single crate named `next` with a library (`src/lib.rs`) and two
-binaries: `src/main.rs` (CLI) and `src/mcp/main.rs` (MCP server, requires `--features mcp`).
+The project is a single crate named `next` with a library (`src/lib.rs`) and three
+feature-gated binaries: `src/main.rs` (CLI, requires `cli` — on by default),
+`src/mcp/main.rs` (MCP server, requires `mcp`), and `src/forgejo/main.rs`
+(`next-forgejo`, requires `forgejo`). With **no features** the crate is just the core
+library (domain, storage, store, plugin, core, app_context, config) that other crates can
+link without the CLI or `clap`. See §2.1.
 
 ```
 next/                             # crate root (also git repo)
-  Cargo.toml                      # [package] manifest; features: mcp (default = off)
+  Cargo.toml                      # features: cli (default), mcp, forgejo; clap/tracing-subscriber optional
   Containerfile                   # multi-stage build for next-mcp container image
   quadlets/
     next-mcp.container            # Podman Quadlet systemd unit file
@@ -84,6 +88,10 @@ next/                             # crate root (also git repo)
       toml_store.rs               # TomlStore: source-of-truth TOML file I/O
       cached_store.rs             # CachedStore: wraps TomlStore with SQLite read cache
       git_backend.rs              # GitBackend: implements VcsBackend via git2
+    core/                         # logic shared across cli/mcp/forgejo (always compiled)
+      filter_args.rs              # FilterArgs -> FilterSet (filter-token parsing)
+      value.rs                    # parse_value(): task data value parsing
+      sync.rs                     # sync(): pull -> cache-reconcile -> push
     plugin/                       # external plugin export hook (machine-local)
       registry.rs                 # PluginRegistry: plugins.toml store (subscriptions)
       notify.rs                   # TaskEvent + notify(): fire-and-forget plugin spawn
@@ -92,9 +100,8 @@ next/                             # crate root (also git repo)
     app_context.rs                # AppContext struct + ::new()
     log.rs                        # Logger: append-only next.log with rotation
     resolve.rs                    # fn resolve_task_id(store, id_str) -> Result<Uuid>
-    cli/
+    cli/                          # feature = "cli" (default); the `next` binary + clap
       mod.rs                      # top-level Cli struct + Command enum (clap derive)
-      filter.rs                   # FilterArgs -> FilterSet
       render.rs                   # text column / --json rendering
       recurrence_parse.rs         # parse_recurrence(): --recur-schedule/completion/snap → Recurrence
       commands/
@@ -117,6 +124,22 @@ next/                             # crate root (also git repo)
     test_mcp.rs                   # in-process MCP HTTP integration tests (requires --features mcp)
     test_container.rs             # container integration tests (requires CONTAINER_TESTS=1)
 ```
+
+### 2.1 Cargo features
+
+| Feature | Default | Adds | Optional deps pulled in |
+|---------|---------|------|--------------------------|
+| `cli` | ✓ | `next` binary, `src/cli/**` | `clap`, `tracing-subscriber` |
+| `mcp` | | `next-mcp` binary, `src/mcp/**` | `tokio`, `axum`, `tracing-subscriber` |
+| `forgejo` | | `next-forgejo` binary, `src/forgejo/**` | `forgejo-api`, `url`, `tokio`, `clap`, `tracing-subscriber` |
+
+With **no features** (`--no-default-features`) the crate is just the core library —
+`domain`, `storage`, `store`, `plugin`, `core`, `app_context`, `config`, `resolve`, `error`
+— with no `clap`/CLI dependencies, so other crates can link it. The three feature modules
+depend only on this core (the cross-cutting helpers they share — filter-token parsing,
+data-value parsing, repo sync — live in `core`, never in `cli`). The presubmit
+(`prek.toml`) runs clippy+test with `--all-features` and a `--no-default-features` clippy to
+keep the core build clean.
 
 ---
 

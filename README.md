@@ -430,6 +430,30 @@ Run `sync` periodically (cron / systemd timer) to keep imports current.
 
 ---
 
+## Cargo features
+
+`next` is one crate with feature-gated binaries on top of a feature-free core library:
+
+| Feature | Default | Builds |
+|---------|---------|--------|
+| `cli` | ✓ | the `next` CLI binary (pulls in `clap`) |
+| `mcp` | | the `next-mcp` server (`--features mcp`) |
+| `forgejo` | | the `next-forgejo` plugin (`--features forgejo`) |
+
+```sh
+cargo build                          # the next CLI (default)
+cargo build --no-default-features    # core library only — no CLI, no clap
+cargo build --features mcp           # + the MCP server
+cargo build --features forgejo       # + the Forgejo plugin
+```
+
+With `--no-default-features` the crate is just the core (`domain`, `storage`, `store`,
+`plugin`, `core`, `app_context`, `config`) that other crates can link without the CLI or
+its dependencies. Logic shared between the CLI, MCP server, and plugins lives in the
+`core` module so the feature modules depend only on the core.
+
+---
+
 ## See also
 
 - `REQUIREMENTS.md` — functional requirements
