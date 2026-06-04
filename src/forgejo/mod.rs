@@ -10,8 +10,10 @@
 //! directly rather than shelling out to the CLI.
 
 pub mod config;
+pub mod issues;
 
 pub use config::{Config, Mapping};
+pub use issues::{ForgejoIssue, IssueSource, IssueState};
 
 /// Task `data` keys used to link a task to its Forgejo issue. All carry the
 /// `__forgejo-` prefix and satisfy `domain::task::validate_key`.
