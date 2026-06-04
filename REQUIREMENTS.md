@@ -545,9 +545,11 @@ this setting.
 
 ## 10. Integrations / plugins
 
-Integrations (Forgejo, iCalendar/WebCal) are provided as **external plugin binaries**,
-not built into the core. The core provides the *export hook*: plugins subscribe to
-individual tasks and are notified when those tasks change.
+Integrations (Forgejo, iCalendar/WebCal) are provided as **plugin binaries** — separate
+processes, not built into the default core. The core provides the *export hook*: plugins
+subscribe to individual tasks and are notified when those tasks change. A plugin MAY be a
+fully external binary, or MAY be bundled in this crate behind a Cargo feature (off by
+default, like `mcp`) and link the `next` library directly.
 
 ### 10.1 Registration
 
@@ -573,6 +575,24 @@ individual tasks and are notified when those tasks change.
   `NEXT_PLUGIN_ORIGIN` when spawning a plugin; a `next` process running with that env set
   skips notifying the named plugin.
 - A `delete` event is delivered, after which the task's subscriptions are pruned.
+
+### 10.3 Forgejo plugin (`forgejo` feature)
+
+The bundled `next-plugin-forgejo` binary (behind the off-by-default `forgejo` feature)
+links the `next` library directly and maps Forgejo repositories to contexts.
+
+- Config `~/.config/next-plugin-forgejo/config.toml`: `forgejo_url`, `forgejo_token`,
+  optional `next_repo`, and `[[map]]` entries (`repo = "owner/repo"`, `context = "@ctx"`).
+- `sync` MUST import each **open** issue with no linked task as a task tagged with the
+  mapped context (title, issue url, body → description), link it via task data attributes
+  `__forgejo-repo` / `__forgejo-issue` / `__forgejo-url` / `__forgejo-labels` (labels as a
+  JSON array, NOT local tags), and subscribe the plugin to it. `--dry-run` MUST mutate
+  nothing.
+- Resolution is **close-only** and bidirectional: a closed issue marks its task done (on
+  `sync`); a task resolved locally closes its issue (in real time via `hook`, and as a
+  reconcile on `sync`). Reopening is out of scope for v1.
+- `hook` reads `next` and mutates only Forgejo (never `next`), so it cannot loop.
+- `sync` self-registers the export hook (idempotent) so per-task `watch` succeeds.
 
 ---
 

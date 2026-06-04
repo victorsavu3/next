@@ -109,9 +109,10 @@ All list commands accept filters that can be combined freely:
 - Offline edits accumulate as local git commits; sync merges them when connectivity returns
 - Git merge conflicts are resolved manually
 
-### Forgejo integration (removed from core binary)
-Built-in Forgejo import/completion-sync has been removed from `next` and will be
-provided as an external plugin. See REQUIREMENTS.md §10.
+### Forgejo integration (plugin — implemented)
+Provided by the bundled `next-plugin-forgejo` binary behind the off-by-default `forgejo`
+feature: maps Forgejo repos to contexts, imports open issues as tasks, and syncs
+resolution both ways. See REQUIREMENTS.md §10.3.
 
 ### WebCal (iCalendar) support (removed from core binary)
 Built-in iCal/WebCal import and export has been removed from `next` and will be

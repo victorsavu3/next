@@ -383,6 +383,51 @@ should be idempotent. **Loop guard:** a plugin is never notified of changes it c
 itself — `next` sets `NEXT_PLUGIN_ORIGIN` when spawning the plugin, and any `next`
 mutations the plugin makes (which inherit that env) skip notifying that same plugin.
 
+### Forgejo plugin
+
+The first bundled plugin maps Forgejo repositories to `next` contexts. It ships in this
+crate behind the `forgejo` Cargo feature (off by default, like `mcp`) as the
+`next-plugin-forgejo` binary:
+
+```sh
+cargo build --release --features forgejo   # builds next-plugin-forgejo
+```
+
+Configure `~/.config/next-plugin-forgejo/config.toml`:
+
+```toml
+forgejo_url   = "https://forgejo.victorsavu.eu"
+forgejo_token = "<api token>"
+# next_repo = "/home/you/tasks"   # optional; else next's configured/default repo
+
+[[map]]
+repo    = "victor/task-manager"   # owner/repo on Forgejo
+context = "@ai/task-manager"      # imported tasks get this context tag
+```
+
+Commands:
+
+```sh
+next-plugin-forgejo register      # register the export hook (sync also does this)
+next-plugin-forgejo sync          # import issues + reconcile resolution (both ways)
+next-plugin-forgejo sync --dry-run
+next-plugin-forgejo hook          # internal: invoked by next's export hook
+```
+
+`sync` imports each **open** issue with no task yet (title, issue url, the mapped
+`@context`, body → description), links them via `__forgejo-*` task data, and subscribes the
+plugin so local resolution propagates. Resolution syncs **both ways** (close-only in v1):
+
+- A Forgejo issue closed → the linked task is marked **done** on the next `sync`.
+- A task resolved locally (`next done`/`cancel`) → the export hook closes the Forgejo issue
+  in real time; `sync` also reconciles any resolution the hook missed.
+
+Link data attributes on each task (`__forgejo-` prefix): `__forgejo-repo` (`owner/repo`),
+`__forgejo-issue` (number), `__forgejo-url`, and `__forgejo-labels` (the issue's labels, as
+a JSON array — kept as data rather than local tags for now). Reopening is manual in v1.
+
+Run `sync` periodically (cron / systemd timer) to keep imports current.
+
 ---
 
 ## See also
