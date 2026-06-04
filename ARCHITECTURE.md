@@ -45,9 +45,11 @@ modules live in `src/mcp/` and are gated by the `mcp` Cargo feature.
 The project is a single crate named `next` with a library (`src/lib.rs`) and three
 feature-gated binaries: `src/main.rs` (CLI, requires `cli` — on by default),
 `src/mcp/main.rs` (MCP server, requires `mcp`), and `src/forgejo/main.rs`
-(`next-forgejo`, requires `forgejo`). With **no features** the crate is just the core
-library (domain, storage, store, plugin, core, app_context, config) that other crates can
-link without the CLI or `clap`. See §2.1.
+(`next-forgejo`, requires `forgejo`). With **no features** the crate is just the `core`
+module — the task store, git backend, domain types, scoring/service/recurrence, the
+plugin registry, and `TaskRepository` — which other crates can link without the CLI or
+`clap`. The CLI's `AppContext` (config-file handling) and the feature modules sit on top.
+See §2.1.
 
 ```
 next/                             # crate root (also git repo)
@@ -56,66 +58,40 @@ next/                             # crate root (also git repo)
   quadlets/
     next-mcp.container            # Podman Quadlet systemd unit file
   src/
-    main.rs                       # `next` binary entry point
-    mcp/
-      main.rs                     # `next-mcp` binary entry point (requires mcp feature)
-      mod.rs                      # library module root (pub re-exports for tests)
-      config.rs                   # McpConfig: all config from env vars
-      git_init.rs                 # clone_or_open(): HTTPS git clone on first start
-      protocol.rs                 # JSON-RPC 2.0 + MCP types
-      auth.rs                     # Bearer token middleware (MCP + webhook); constant-time comparison that does not leak token length
-      sync_manager.rs             # do_sync(), SyncScheduler (Semaphore(1) + configurable deferred timer, default 30s), periodic sync
-      server.rs                   # axum router (64 KB body limit), MCP dispatch, webhook handler
-      tools/
-        mod.rs                    # all_tools() registry + dispatch()
-        tasks.rs                  # list_tasks, get_task, add_task, update_task, delete_task; validate_slug (allowlist: a-zA-Z0-9-_)
-        state.rs                  # sync, get_state, set_context, set_resource, set_user_filter
-        tags.rs                   # manage_tag
-        data.rs                   # manage_task_data; validate_key (allowlist: a-zA-Z0-9-_, max 256 chars)
-        view.rs                   # get_forecast
-    lib.rs                        # library root; public re-exports
-    config.rs                     # Config, BackendConfig, BackendKind
-    error.rs                      # AppError, Result
-    store.rs                      # Store + VcsBackend traits
-    domain/                       # pure domain types (no I/O)
-      mod.rs
-      task.rs       state.rs      tag.rs          service.rs
-      filter.rs     scoring.rs    date_parse.rs   recurrence.rs
-    storage/                      # local TOML + SQLite + git backend
-      mod.rs                      # open(), task_path(), tag_meta_path(), encode/decode_tag_path, state_path_for_repo(), plugins_path_for_repo()
-      filenames.rs                # generate_filename(), task_path(), title_to_slug()
-      lock.rs                     # FileLock: re-entrant cross-process advisory lock
-      toml_store.rs               # TomlStore: source-of-truth TOML file I/O
-      cached_store.rs             # CachedStore: wraps TomlStore with SQLite read cache
-      git_backend.rs              # GitBackend: implements VcsBackend via git2
-    core/                         # logic shared across cli/mcp/forgejo (always compiled)
-      filter_args.rs              # FilterArgs -> FilterSet (filter-token parsing)
-      value.rs                    # parse_value(): task data value parsing
+    lib.rs                        # `pub mod core` + feature-gated cli/mcp/forgejo; small type prelude
+    app_context.rs                # AppContext (cli): Config + TaskRepository (Derefs to it); config.toml loading
+    core/                         # THE CORE LIBRARY — compiled with no features
+      error.rs                    # TaskError, Result
+      config.rs                   # Config + SyncConfig (config.toml schema; no backend selection)
+      store.rs                    # Store + VcsBackend traits
+      resolve.rs                  # resolve_task_id(store, id_str) -> Result<Uuid>
+      task_repository.rs          # TaskRepository: store + vcs + repo_root + transactions + plugin events
       sync.rs                     # sync(): pull -> cache-reconcile -> push
-    plugin/                       # external plugin export hook (machine-local)
-      registry.rs                 # PluginRegistry: plugins.toml store (subscriptions)
-      notify.rs                   # TaskEvent + notify(): fire-and-forget plugin spawn
-    forgejo/                      # next-forgejo binary (feature = "forgejo")
-      main.rs config.rs issues.rs tasks.rs reconcile.rs hook.rs
-    app_context.rs                # AppContext struct + ::new()
-    log.rs                        # Logger: append-only next.log with rotation
-    resolve.rs                    # fn resolve_task_id(store, id_str) -> Result<Uuid>
+      value.rs                    # parse_value(): task data value parsing
+      filter_args.rs              # FilterArgs -> FilterSet (filter-token parsing)
+      scoring.rs                  # ScoredTask, ScoringConfig, score_and_sort()
+      service.rs                  # create_task/complete_task/apply_edits; begin/end_mutation
+      recurrence.rs               # next_occurrence(), apply_snap(), spawn_next(), parse_snap()
+      domain/                     # pure domain types (no I/O)
+        mod.rs  task.rs  state.rs  tag.rs  filter.rs  date_parse.rs
+      storage/                    # local TOML + SQLite + git backend
+        mod.rs                    # open(), task_path(), state_path_for_repo(), plugins_path_for_repo()
+        filenames.rs  lock.rs (FileLock)  toml_store.rs  cached_store.rs  git_backend.rs
+      plugin/                     # export hook (machine-local plugins registry + notify)
+        mod.rs  registry.rs  notify.rs
     cli/                          # feature = "cli" (default); the `next` binary + clap
-      mod.rs                      # top-level Cli struct + Command enum (clap derive)
-      render.rs                   # text column / --json rendering
-      recurrence_parse.rs         # parse_recurrence(): --recur-schedule/completion/snap → Recurrence
+      main.rs                     # `next` binary entry point
+      mod.rs  render.rs  recurrence_parse.rs
       commands/
-        add.rs        cancel.rs   context.rs  data.rs
-        delete.rs     done.rs     edit.rs     forecast.rs
-        init.rs       list.rs     mod.rs      move_cmd.rs
-        next_cmd.rs   open.rs     resource.rs show.rs
-        start.rs      stop.rs     sync.rs     tree.rs
-        tutorial.rs   user.rs
-        plugin/       # mod.rs: next plugin register/watch/unwatch/unregister/list
-        tag/
-          mod.rs      # TagSubcommand dispatch + list()
-          meta.rs     # describe, set-url, set-priority, set-no-time-urgency, show, clear-*
-          data.rs     # tag data set/get/unset/list
+        add.rs   cancel.rs  context.rs  data.rs   delete.rs  done.rs  edit.rs
+        forecast.rs  init.rs  list.rs  mod.rs  move_cmd.rs  next_cmd.rs  open.rs
+        resource.rs  show.rs  start.rs  stop.rs  sync.rs  tree.rs  tutorial.rs  user.rs
+        plugin/mod.rs   tag/{mod,meta,data}.rs
+    mcp/                          # feature = "mcp"; `next-mcp` binary
+      main.rs  mod.rs  config.rs (McpConfig)  git_init.rs  protocol.rs  auth.rs
+      sync_manager.rs  server.rs  tools/{mod,tasks,state,tags,data,view}.rs
+    forgejo/                      # feature = "forgejo"; `next-forgejo` binary
+      main.rs  mod.rs  config.rs  issues.rs  tasks.rs  reconcile.rs  hook.rs
   tests/
     common/mod.rs                 # shared test helpers (TestEnv, setup())
     test_add.rs   test_data.rs    test_done.rs   test_edit.rs
