@@ -543,10 +543,36 @@ this setting.
 
 ---
 
-## 10. Integrations
+## 10. Integrations / plugins
 
-Integrations (Forgejo, iCalendar/WebCal) have been removed from the core binary and
-will be provided as plugins. See the plugin system requirements when available.
+Integrations (Forgejo, iCalendar/WebCal) are provided as **external plugin binaries**,
+not built into the core. The core provides the *export hook*: plugins subscribe to
+individual tasks and are notified when those tasks change.
+
+### 10.1 Registration
+
+- Registration is performed via `next plugin …` CLI commands: `register <name> -- <argv>`
+  (define/replace a plugin's command, preserving subscriptions), `watch`/`unwatch <name>
+  <task>`, `unregister <name>`, and `list`.
+- The registry MUST be machine-local — stored as `plugins.toml` in the per-repo state
+  directory (`$XDG_STATE_HOME/task-manager/<hash>/`), never committed to git, guarded by
+  its own lock (`.plugins.toml.lock`) independent of the repo and state locks. Plugin
+  commands are stored as argv (never shell-parsed).
+
+### 10.2 Notification
+
+- When a subscribed task is mutated (add/start/stop/done/cancel/edit/move/delete/data), the
+  process performing the mutation (CLI or MCP server) MUST spawn each subscribed plugin's
+  command **after the repository lock is released** (a plugin may call back into `next`).
+- Spawning is **fire-and-forget** and best-effort; a failed or missing plugin MUST NOT fail
+  the triggering command.
+- The event is delivered on the child's stdin as JSON and in `NEXT_PLUGIN_EVENT`:
+  `{ "event", "task_id", "repo", "timestamp" }`. `NEXT_REPO` and `NEXT_PLUGIN_ORIGIN`
+  (the plugin name) are also set; cwd is the repo root.
+- **Loop guard:** a plugin MUST NOT be notified of changes it caused itself. `next` sets
+  `NEXT_PLUGIN_ORIGIN` when spawning a plugin; a `next` process running with that env set
+  skips notifying the named plugin.
+- A `delete` event is delivered, after which the task's subscriptions are pruned.
 
 ---
 

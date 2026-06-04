@@ -78,11 +78,15 @@ next/                             # crate root (also git repo)
       task.rs       state.rs      tag.rs          service.rs
       filter.rs     scoring.rs    date_parse.rs   recurrence.rs
     storage/                      # local TOML + SQLite + git backend
-      mod.rs                      # open(), task_path(), tag_meta_path(), encode/decode_tag_path, state_path_for_repo()
+      mod.rs                      # open(), task_path(), tag_meta_path(), encode/decode_tag_path, state_path_for_repo(), plugins_path_for_repo()
       filenames.rs                # generate_filename(), task_path(), title_to_slug()
+      lock.rs                     # FileLock: re-entrant cross-process advisory lock
       toml_store.rs               # TomlStore: source-of-truth TOML file I/O
       cached_store.rs             # CachedStore: wraps TomlStore with SQLite read cache
       git_backend.rs              # GitBackend: implements VcsBackend via git2
+    plugin/                       # external plugin export hook (machine-local)
+      registry.rs                 # PluginRegistry: plugins.toml store (subscriptions)
+      notify.rs                   # TaskEvent + notify(): fire-and-forget plugin spawn
     app_context.rs                # AppContext struct + ::new()
     log.rs                        # Logger: append-only next.log with rotation
     resolve.rs                    # fn resolve_task_id(store, id_str) -> Result<Uuid>
@@ -98,6 +102,7 @@ next/                             # crate root (also git repo)
         next_cmd.rs   open.rs     resource.rs show.rs
         start.rs      stop.rs     sync.rs     tree.rs
         tutorial.rs   user.rs
+        plugin/       # mod.rs: next plugin register/watch/unwatch/unregister/list
         tag/
           mod.rs      # TagSubcommand dispatch + list()
           meta.rs     # describe, set-url, set-priority, set-no-time-urgency, show, clear-*
@@ -374,7 +379,7 @@ command aborts and prints conflicting file paths when conflicts are detected.
 ### 6.3 Concurrency and locking
 
 Multiple `next` processes — CLI invocations, the long-running `next-mcp` server, and
-(planned) external plugin processes — mutate the same repository in parallel. Three
+external plugin processes — mutate the same repository in parallel. Several
 mechanisms keep this safe:
 
 1. **Re-entrant advisory lock** (`storage::FileLock`, `src/storage/lock.rs`). A generic
@@ -383,9 +388,9 @@ mechanisms keep this safe:
    `save_task` / `commit` / `save_state` calls re-acquire it. A process-global registry
    maps each lock-file path to one in-process gate (owner thread + recursion depth)
    layered over the OS lock — plain `flock` is per open-file-description and would
-   otherwise self-deadlock on the second acquire. Two *separate* instances are used: the
+   otherwise self-deadlock on the second acquire. Three *separate* instances are used: the
    **repo lock** (`<repo>/.next.lock`, shared by `TomlStore` task/tag writes and
-   `GitBackend` commit/pull/push) and the **state lock** (see below).
+   `GitBackend` commit/pull/push), the **state lock**, and the **plugins lock** (see below).
 
 2. **Repository mutation transactions** (`AppContext::transaction`, built on
    `service::begin_mutation` / `end_mutation`). Every task or tag mutation holds the repo
@@ -408,12 +413,32 @@ mechanisms keep this safe:
    with `SQLITE_BUSY` (e.g. `next list` running during an MCP mutation). The WAL sidecars
    (`.next.db-wal` / `.next.db-shm`) are git-ignored.
 
-The repo lock and the state lock are independent files and never block one another. When
-a path takes both (e.g. `create_task` reading active contexts while committing), the
-ordering is always repo-lock-before-state-lock, never the reverse, so they cannot
-deadlock. `tests/locking.rs` covers lost-update prevention for both task and state edits,
-slug-conflict races, and pull/commit coordination; re-entrant lock unit tests live in
-`src/storage/lock.rs`.
+5. **Plugin notification** (`plugin::notify`, see §6.4). Subscribed plugins are spawned
+   only at the post-mutation chokepoints (`main.rs` after autosync; MCP `tools::dispatch`
+   after the tool runs), i.e. **after the repo lock is released** — a plugin typically
+   calls back into `next` and would otherwise deadlock. The plugins registry has its own
+   `.plugins.toml.lock`, taken only there and during `next plugin` edits.
+
+The three locks are independent files and never block one another. When a path takes more
+than one, the ordering is always repo-lock-before-state/plugins-lock, never the reverse, so
+they cannot deadlock. `tests/locking.rs` covers lost-update prevention for task, state, and
+plugin-subscription edits, slug-conflict races, and pull/commit coordination; re-entrant
+lock unit tests live in `src/storage/lock.rs`.
+
+### 6.4 Plugins (export hook)
+
+External plugin binaries subscribe to individual tasks and are notified when those tasks
+change. The registry (`plugin::registry`) is machine-local — `plugins.toml` in the per-repo
+state dir (`storage::plugins_path_for_repo`), never committed — each entry being
+`{ name, command: argv, tasks: [uuid] }`, managed by the `next plugin` subcommands.
+
+Each task-mutating handler records a `(verb, task_id)` `TaskEvent` on `AppContext` after its
+transaction returns. The CLI (`main.rs`) and MCP (`tools::dispatch`) chokepoints drain the
+buffer and call `plugin::notify`, which spawns every subscribed plugin's command
+fire-and-forget (event JSON on stdin + `NEXT_PLUGIN_EVENT`/`NEXT_REPO`/`NEXT_PLUGIN_ORIGIN`
+env). The origin plugin is skipped (loop guard via `NEXT_PLUGIN_ORIGIN`), the long-lived
+server reaps children on a helper thread, and `delete` events prune the subscription. See
+REQUIREMENTS.md §10 for the full contract.
 
 ---
 

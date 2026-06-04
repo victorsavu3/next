@@ -193,6 +193,7 @@ All list commands accept filter tokens in any order:
 | `next context [set/clear/exclude/clear-excluded]` | Manage global context filter (include and exclude lists) |
 | `next resource [set]` | Manage resource availability |
 | `next user [set/clear/list]` | Manage user filter |
+| `next plugin [register/watch/unwatch/unregister/list]` | Manage export plugins (see [Plugins](#plugins)) |
 | `next forecast` | Show upcoming due dates grouped by time |
 | `next sync` | Pull from remote, push local commits |
 Task IDs accept a full UUID, a slug, or any unambiguous 4+ character hex prefix.
@@ -338,6 +339,49 @@ refreshes on reconnect.
 - Request bodies are capped at 64 KB
 - Bearer token comparison is constant-time and does not leak the expected token's length
 - Embedded git credentials are stripped from `NEXT_GIT_URL` before any logging
+
+---
+
+## Plugins
+
+Integrations (e.g. Forgejo, WebDAV/CalDAV) live outside the core as **external plugin
+binaries**. A plugin subscribes to individual tasks and is notified whenever one of them
+changes; it then does its work by linking the `next` library or calling the `next` CLI.
+
+### Registering a plugin
+
+```sh
+next plugin register <name> -- <program> [args…]   # define/replace a plugin's command
+next plugin watch   <name> <task>                  # notify <name> on any update to <task>
+next plugin unwatch <name> <task>
+next plugin unregister <name>
+next plugin list
+```
+
+A plugin typically registers itself: after importing an external item as a task, it runs
+`next plugin watch <name> <task-id>` so it learns about later changes. Registrations are
+**machine-local** — stored in `plugins.toml` beside the state file under
+`$XDG_STATE_HOME/task-manager/<hash>/`, never committed to git (plugin binaries are
+per-machine).
+
+### Notification contract
+
+When a watched task is updated (any of add/start/stop/done/cancel/edit/move/delete/data),
+`next` spawns the plugin's command **fire-and-forget**, after the repository lock is
+released, with:
+
+- **stdin**: a JSON event, also provided in `NEXT_PLUGIN_EVENT`:
+  ```json
+  { "event": "done", "task_id": "<uuid>", "repo": "<path>", "timestamp": "<rfc3339>" }
+  ```
+- **env**: `NEXT_REPO` (repo root), `NEXT_PLUGIN_EVENT` (the JSON above),
+  `NEXT_PLUGIN_ORIGIN` (the plugin's own name).
+- **cwd**: the repository root.
+
+Delivery is best-effort (a missed event is reconciled on the plugin's next run); plugins
+should be idempotent. **Loop guard:** a plugin is never notified of changes it caused
+itself — `next` sets `NEXT_PLUGIN_ORIGIN` when spawning the plugin, and any `next`
+mutations the plugin makes (which inherit that env) skip notifying that same plugin.
 
 ---
 
