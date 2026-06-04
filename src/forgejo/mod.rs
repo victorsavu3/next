@@ -11,6 +11,7 @@
 
 pub mod config;
 pub mod issues;
+pub mod reconcile;
 pub mod tasks;
 
 pub use config::{Config, Mapping};
