@@ -121,6 +121,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         &mut *ctx.store,
         &*ctx.vcs,
     )?;
+    ctx.record_task_event("add", task.id);
 
     let short_id = task.id.to_string().replace('-', "")[..8].to_owned();
     if args.json {

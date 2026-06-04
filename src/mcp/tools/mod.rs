@@ -348,13 +348,31 @@ pub fn dispatch(
     ctx: &mut AppContext,
     scheduler: &super::sync_manager::SyncScheduler,
 ) -> CallToolResult {
-    match call_tool(tool_name, params, ctx, scheduler) {
+    let result = match call_tool(tool_name, params, ctx, scheduler) {
         Ok(v) => CallToolResult::success(v),
         Err(e) => {
             let client_msg = sanitize_error(&e, tool_name);
             CallToolResult::error(client_msg)
         }
+    };
+
+    // Notify subscribed plugins of any task changes recorded by the tool. The
+    // repo lock was released when each tool's transaction returned (and autosync
+    // already ran inside call_tool), so spawning here is safe. Fire-and-forget;
+    // handlers only record after a successful mutation, so a failed call leaves
+    // the buffer empty.
+    let events = ctx.take_task_events();
+    if !events.is_empty() {
+        let repo_root = ctx.repo_root.clone();
+        crate::plugin::notify(&repo_root, &events, ctx.plugin_origin());
+        for ev in &events {
+            if ev.verb == "delete" {
+                let _ = crate::plugin::registry::prune_task(&repo_root, ev.task_id);
+            }
+        }
     }
+
+    result
 }
 
 /// Classifies an error as user-facing or internal.

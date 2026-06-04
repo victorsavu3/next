@@ -86,6 +86,7 @@ fn set(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         vcs.commit(&[task_path], &format!("next: data set {} on {}", key, task.title))?;
         Ok(task.id)
     })?;
+    ctx.record_task_event("data", task_id);
 
     Ok(json!({ "id": task_id.to_string(), "key": key, "value": value }))
 }
@@ -114,6 +115,7 @@ fn unset(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         vcs.commit(&[task_path], &format!("next: data unset {} on {}", key, task.title))?;
         Ok(task.id)
     })?;
+    ctx.record_task_event("data", task_id);
 
     Ok(json!({ "id": task_id.to_string(), "unset": key }))
 }

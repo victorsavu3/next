@@ -20,6 +20,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         vcs.commit(&[task_path], &format!("next: stop {}", task.title))?;
         Ok(task)
     })?;
+    ctx.record_task_event("stop", task.id);
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);

@@ -69,7 +69,9 @@ fn set(ctx: &mut AppContext, args: SetArgs) -> anyhow::Result<()> {
         )?;
         tracing::info!(cmd = "data", "[{}] set {}={}", &task.id.to_string()[..8], args.key, value);
         Ok(())
-    })
+    })?;
+    ctx.record_task_event("data", id);
+    Ok(())
 }
 
 fn unset(ctx: &mut AppContext, args: UnsetArgs) -> anyhow::Result<()> {
@@ -93,7 +95,9 @@ fn unset(ctx: &mut AppContext, args: UnsetArgs) -> anyhow::Result<()> {
         )?;
         tracing::info!(cmd = "data", "[{}] unset {}", &task.id.to_string()[..8], args.key);
         Ok(())
-    })
+    })?;
+    ctx.record_task_event("data", id);
+    Ok(())
 }
 
 fn get(ctx: &mut AppContext, args: GetArgs) -> anyhow::Result<()> {

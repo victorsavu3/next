@@ -20,6 +20,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         vcs.commit(&[path], &format!("next: cancel {}", task.title))?;
         Ok(task)
     })?;
+    ctx.record_task_event("cancel", task.id);
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);
     } else {

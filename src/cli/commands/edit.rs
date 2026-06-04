@@ -243,6 +243,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         &mut *ctx.store,
         &*ctx.vcs,
     )?;
+    ctx.record_task_event("edit", task.id);
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);

@@ -144,6 +144,7 @@ pub fn add_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
         &mut *ctx.store,
         &*ctx.vcs,
     )?;
+    ctx.record_task_event("add", task.id);
 
     tracing::info!(cmd = "mcp/add", "[{}] {}", &task.id.to_string()[..8], task.title);
 
@@ -173,6 +174,7 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
                 vcs.commit(&[task_path], &format!("next: start {}", task.title))?;
                 Ok(task)
             })?;
+            ctx.record_task_event("start", task.id);
             tracing::info!(cmd = "mcp/start", "[{}] {}", &task.id.to_string()[..8], task.title);
             return Ok(serde_json::to_value(&task)?);
         }
@@ -185,6 +187,7 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
                 vcs.commit(&[task_path], &format!("next: stop {}", task.title))?;
                 Ok(task)
             })?;
+            ctx.record_task_event("stop", task.id);
             tracing::info!(cmd = "mcp/stop", "[{}] {}", &task.id.to_string()[..8], task.title);
             return Ok(serde_json::to_value(&task)?);
         }
@@ -197,6 +200,7 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
                 vcs.commit(&[task_path], &format!("next: cancel {}", task.title))?;
                 Ok(task)
             })?;
+            ctx.record_task_event("cancel", task.id);
             tracing::info!(cmd = "mcp/cancel", "[{}] {}", &task.id.to_string()[..8], task.title);
             return Ok(serde_json::to_value(&task)?);
         }
@@ -212,6 +216,7 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
                 &mut *ctx.store,
                 &*ctx.vcs,
             )?;
+            ctx.record_task_event("done", task.id);
             tracing::info!(cmd = "mcp/done", "[{}] {}", &task.id.to_string()[..8], task.title);
             return Ok(serde_json::to_value(&task)?);
         }
@@ -294,7 +299,8 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
         &*ctx.vcs,
     )?;
 
-    let verb = action.unwrap_or("edit");
+    let verb: &'static str = if matches!(action, Some("move")) { "move" } else { "edit" };
+    ctx.record_task_event(verb, task.id);
     tracing::info!(cmd = %format!("mcp/{verb}"), "[{}] {}", &task.id.to_string()[..8], task.title);
 
     Ok(serde_json::to_value(&task)?)
@@ -316,6 +322,7 @@ pub fn delete_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
         vcs.commit(&[task_path], &format!("next: delete {}", task.title))?;
         Ok(task)
     })?;
+    ctx.record_task_event("delete", task.id);
     tracing::info!(cmd = "mcp/delete", "[{}] {}", &task.id.to_string()[..8], task.title);
 
     Ok(json!({ "deleted": task.id.to_string(), "title": task.title }))
