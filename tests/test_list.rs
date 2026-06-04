@@ -3,7 +3,7 @@ mod common;
 use chrono::Local;
 use next::domain::{filter, scoring::ScoredTask, scoring};
 use next::cli::commands::add;
-use next::cli::filter::FilterArgs;
+use next::core::FilterArgs;
 
 fn add_args(title: &str) -> add::Args {
     add::Args {

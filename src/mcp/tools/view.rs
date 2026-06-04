@@ -1,7 +1,7 @@
 use chrono::Local;
 use serde_json::Value;
 
-use crate::cli::filter::FilterArgs;
+use crate::core::FilterArgs;
 use crate::domain::{filter, scoring};
 use crate::AppContext;
 

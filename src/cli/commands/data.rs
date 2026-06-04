@@ -1,3 +1,4 @@
+use crate::core::parse_value;
 use crate::domain::task::validate_key;
 use crate::{resolve::resolve_task_id, AppContext};
 
@@ -112,14 +113,4 @@ fn get(ctx: &mut AppContext, args: GetArgs) -> anyhow::Result<()> {
 
     println!("{value}");
     Ok(())
-}
-
-/// Parse a value string as JSON; bare strings that are not valid JSON are stored as strings.
-pub fn parse_value(raw: &str) -> anyhow::Result<serde_json::Value> {
-    let value: serde_json::Value =
-        serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::String(raw.to_owned()));
-    if value.is_null() {
-        anyhow::bail!("data value must not be null");
-    }
-    Ok(value)
 }

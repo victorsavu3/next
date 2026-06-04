@@ -40,7 +40,7 @@ pub fn list_tasks(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value>
         .and_then(|v| v.as_u64())
         .map(|n| n as usize);
 
-    let mut filter_args = crate::cli::filter::FilterArgs::parse(tokens);
+    let mut filter_args = crate::core::FilterArgs::parse(tokens);
     filter_args.all = include_all;
     let mut filter_set = filter_args.to_filter_set()?;
 

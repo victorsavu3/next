@@ -1,7 +1,7 @@
 use chrono::{Local, NaiveDate};
 use crate::domain::{filter, scoring};
 
-use crate::cli::filter::FilterArgs;
+use crate::core::FilterArgs;
 use crate::AppContext;
 
 #[derive(clap::Args, Debug)]

@@ -60,20 +60,16 @@ impl LibTaskStore {
         &self.ctx.repo_root
     }
 
-    /// Pulls from the remote (best-effort; reuses the `next sync` path).
+    /// Pulls from the remote and reconciles the cache (best-effort).
     pub fn git_pull(&mut self) -> Result<()> {
-        crate::cli::commands::sync::run(
-            crate::cli::commands::sync::Args { push_only: false, pull_only: true },
-            &mut self.ctx,
-        )
+        crate::core::sync(&mut self.ctx, false, true)?;
+        Ok(())
     }
 
     /// Pushes local commits to the remote (best-effort).
     pub fn git_push(&mut self) -> Result<()> {
-        crate::cli::commands::sync::run(
-            crate::cli::commands::sync::Args { push_only: true, pull_only: false },
-            &mut self.ctx,
-        )
+        crate::core::sync(&mut self.ctx, true, false)?;
+        Ok(())
     }
 }
 

@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-use crate::cli::commands::data::parse_value;
+use crate::core::parse_value;
 use crate::domain::task::validate_key;
 use crate::resolve::resolve_task_id;
 use crate::storage;

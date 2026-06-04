@@ -1,7 +1,7 @@
 use chrono::Local;
 use crate::domain::{filter, scoring};
 
-use crate::cli::{filter::FilterArgs, render};
+use crate::{cli::render, core::FilterArgs};
 use crate::AppContext;
 
 #[derive(clap::Args, Debug)]

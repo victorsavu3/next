@@ -2,7 +2,7 @@ mod common;
 
 use chrono::Local;
 use next::cli::commands::{add, done, start};
-use next::cli::filter::FilterArgs;
+use next::core::FilterArgs;
 use next::domain::{filter, scoring};
 use next::domain::scoring::ScoredTask;
 use next::domain::tag::TagMeta;
