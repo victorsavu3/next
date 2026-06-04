@@ -11,9 +11,11 @@
 
 pub mod config;
 pub mod issues;
+pub mod tasks;
 
 pub use config::{Config, Mapping};
 pub use issues::{ForgejoIssue, IssueSource, IssueState};
+pub use tasks::{forgejo_link, TaskStore};
 
 /// Task `data` keys used to link a task to its Forgejo issue. All carry the
 /// `__forgejo-` prefix and satisfy `domain::task::validate_key`.
