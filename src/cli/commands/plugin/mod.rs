@@ -2,9 +2,9 @@
 //!
 //! Plugins subscribe to individual tasks and are spawned when a watched task is
 //! updated.  Registrations live in a machine-local `plugins.toml` (not synced
-//! via git); see [`crate::plugin`].
+//! via git); see [`crate::core::plugin`].
 
-use crate::{plugin::registry, resolve::resolve_task_id, AppContext};
+use crate::{core::{plugin::registry, resolve::resolve_task_id}, AppContext};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {

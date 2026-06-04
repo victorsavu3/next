@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-use crate::AppContext;
+use crate::TaskRepository;
 
 fn strings_param(params: &Value, key: &str) -> Vec<String> {
     params
@@ -12,16 +12,16 @@ fn strings_param(params: &Value, key: &str) -> Vec<String> {
 
 // ── sync ──────────────────────────────────────────────────────────────────────
 
-pub fn sync(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+pub fn sync(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let push_only = params.get("push_only").and_then(|v| v.as_bool()).unwrap_or(false);
     let pull_only = params.get("pull_only").and_then(|v| v.as_bool()).unwrap_or(false);
 
     if !push_only {
         match ctx.vcs.pull()? {
-            crate::store::PullResult::Clean => {
+            crate::core::store::PullResult::Clean => {
                 tracing::info!(cmd = "mcp/sync", "pull: clean");
             }
-            crate::store::PullResult::Conflicts(paths) => {
+            crate::core::store::PullResult::Conflicts(paths) => {
                 let names: Vec<_> = paths.iter().map(|p| p.display().to_string()).collect();
                 let msg = format!("merge conflicts: {}", names.join(", "));
                 tracing::error!(cmd = "mcp/sync", "{msg}");
@@ -39,14 +39,14 @@ pub fn sync(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
 
 // ── get_state ────────────────────────────────────────────────────────────────
 
-pub fn get_state(_params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+pub fn get_state(_params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let state = ctx.store.get_state()?;
     Ok(serde_json::to_value(&state)?)
 }
 
 // ── set_context ───────────────────────────────────────────────────────────────
 
-pub fn set_context(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+pub fn set_context(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let contexts = strings_param(params, "contexts");
     for c in &contexts {
         if !c.starts_with('@') {
@@ -81,7 +81,7 @@ pub fn set_context(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
 
 // ── set_resource ──────────────────────────────────────────────────────────────
 
-pub fn set_resource(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+pub fn set_resource(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let resource = params
         .get("resource")
         .and_then(|v| v.as_str())
@@ -95,7 +95,7 @@ pub fn set_resource(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Valu
         anyhow::bail!("resource names must start with '#', got: {resource}");
     }
 
-    let bare = crate::domain::tag::bare_name(resource).to_owned();
+    let bare = crate::core::domain::tag::bare_name(resource).to_owned();
     let state = ctx.state_transaction(|store| {
         let mut state = store.get_state()?;
         // Store the bare name (without `#`), matching the CLI and the key
@@ -111,7 +111,7 @@ pub fn set_resource(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Valu
 
 // ── set_user_filter ───────────────────────────────────────────────────────────
 
-pub fn set_user_filter(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+pub fn set_user_filter(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let users = strings_param(params, "users");
     let state = ctx.state_transaction(|store| {
         let mut state = store.get_state()?;
@@ -126,10 +126,10 @@ pub fn set_user_filter(params: &Value, ctx: &mut AppContext) -> anyhow::Result<V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Config, AppContext};
+    use crate::TaskRepository;
     use tempfile::TempDir;
 
-    fn make_ctx() -> (TempDir, AppContext) {
+    fn make_ctx() -> (TempDir, TaskRepository) {
         let dir = tempfile::tempdir().unwrap();
         for args in [
             vec!["init", "-q"],
@@ -142,8 +142,8 @@ mod tests {
                 .status()
                 .unwrap();
         }
-        let (store, vcs) = crate::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = AppContext::with_parts(Config::default(), Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
+        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 

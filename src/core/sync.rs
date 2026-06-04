@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use crate::{store::PullResult, AppContext};
+use crate::core::{store::PullResult, TaskRepository};
 
 /// Result of a [`sync`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,7 +21,7 @@ pub enum SyncOutcome {
 /// pushes (unless `pull_only`). On pull conflicts, returns early without
 /// pushing and without rebuilding the cache (the working tree holds the
 /// conflict markers for the user to resolve).
-pub fn sync(ctx: &mut AppContext, push_only: bool, pull_only: bool) -> anyhow::Result<SyncOutcome> {
+pub fn sync(ctx: &mut TaskRepository, push_only: bool, pull_only: bool) -> anyhow::Result<SyncOutcome> {
     if !push_only {
         match ctx.vcs.pull()? {
             PullResult::Clean => {

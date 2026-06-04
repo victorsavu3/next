@@ -2,18 +2,18 @@ use chrono::Local;
 use serde_json::Value;
 
 use crate::core::FilterArgs;
-use crate::domain::{filter, scoring};
-use crate::AppContext;
+use crate::core::{domain::filter, scoring};
+use crate::TaskRepository;
 
 // ── get_forecast ──────────────────────────────────────────────────────────────
 
-pub fn get_forecast(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+pub fn get_forecast(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let today = Local::now().date_naive();
     let horizon: u32 = params
         .get("horizon_days")
         .and_then(|v| v.as_u64())
         .map(|n| n as u32)
-        .unwrap_or(ctx.config.forecast_horizon_days);
+        .unwrap_or(crate::core::config::DEFAULT_FORECAST_HORIZON_DAYS);
 
     let tokens: Vec<String> = params
         .get("filter_tokens")
@@ -39,7 +39,7 @@ pub fn get_forecast(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Valu
     let tag_metas = ctx.store.list_tag_metas()?;
 
     let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
-    let scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.config.scoring, &tag_metas);
+    let scored = scoring::score_and_sort(filtered, &all_tasks, today, &crate::core::scoring::ScoringConfig::default(), &tag_metas);
 
     let cutoff = today + chrono::Duration::days(horizon as i64);
     let due_tasks: Vec<_> = scored
@@ -53,10 +53,10 @@ pub fn get_forecast(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Valu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Config, AppContext};
+    use crate::TaskRepository;
     use tempfile::TempDir;
 
-    fn make_ctx() -> (TempDir, AppContext) {
+    fn make_ctx() -> (TempDir, TaskRepository) {
         let dir = tempfile::tempdir().unwrap();
         for args in [
             vec!["init", "-q"],
@@ -69,8 +69,8 @@ mod tests {
                 .status()
                 .unwrap();
         }
-        let (store, vcs) = crate::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = AppContext::with_parts(Config::default(), Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
+        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 
@@ -84,8 +84,8 @@ mod tests {
     #[test]
     fn forecast_includes_task_due_soon() {
         let (_dir, mut ctx) = make_ctx();
-        use crate::domain::task::Task;
-        use crate::storage;
+        use crate::core::domain::task::Task;
+        use crate::core::storage;
         let mut task = Task::new("Fix bug".to_owned());
         task.due = Some(Local::now().date_naive() + chrono::Duration::days(3));
         let path = storage::task_path(&ctx.repo_root, &task);

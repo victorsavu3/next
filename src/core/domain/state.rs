@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::tag;
+use crate::core::domain::tag;
 
 /// Global runtime state persisted in `state.toml` at the repository root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

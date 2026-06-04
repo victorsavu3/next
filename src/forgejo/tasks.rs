@@ -2,7 +2,7 @@
 //! (the plugin is in-crate, so no subprocess).
 //!
 //! [`TaskStore`] is the interface the reconcile logic uses; [`LibTaskStore`]
-//! wraps an [`AppContext`] and an in-memory fake is used in tests.
+//! wraps an [`TaskRepository`] and an in-memory fake is used in tests.
 
 use std::path::Path;
 
@@ -10,15 +10,13 @@ use anyhow::Result;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::{
-    domain::{
-        service::{complete_task, create_task, CreateTaskParams},
-        task::Task,
-    },
-    error::AppError,
+use crate::core::{
+    domain::task::Task,
+    error::TaskError,
     plugin::registry,
+    service::{complete_task, create_task, CreateTaskParams},
     storage,
-    AppContext,
+    TaskRepository,
 };
 
 use super::{issues::ForgejoIssue, keys, PLUGIN_NAME};
@@ -44,15 +42,18 @@ pub fn forgejo_link(task: &Task) -> Option<(String, i64)> {
     Some((repo, issue))
 }
 
-/// Real [`TaskStore`] backed by an [`AppContext`] on the `next` repository.
+/// Real [`TaskStore`] backed by an [`TaskRepository`] on the `next` repository.
 pub struct LibTaskStore {
-    ctx: AppContext,
+    ctx: TaskRepository,
 }
 
 impl LibTaskStore {
-    /// Opens the store on `repo` (or `next`'s configured/default repo if `None`).
+    /// Opens the store on `repo` (required — config-file resolution is CLI-only).
     pub fn open(repo: Option<&Path>) -> Result<Self> {
-        Ok(Self { ctx: AppContext::new(None, repo)? })
+        let root = repo.ok_or_else(|| {
+            anyhow::anyhow!("no next repository configured — set next_repo in the plugin config or NEXT_REPO")
+        })?;
+        Ok(Self { ctx: TaskRepository::open(root.to_path_buf())? })
     }
 
     /// The repository root this store operates on.
@@ -140,7 +141,7 @@ impl TaskStore for LibTaskStore {
     fn show(&self, id: Uuid) -> Result<Option<Task>> {
         match self.ctx.store.get_task(id) {
             Ok(t) => Ok(Some(t)),
-            Err(AppError::TaskNotFound(_)) => Ok(None),
+            Err(TaskError::TaskNotFound(_)) => Ok(None),
             Err(e) => Err(e.into()),
         }
     }

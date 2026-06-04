@@ -1,14 +1,10 @@
 use chrono::Local;
 use crate::cli::recurrence_parse::parse_recurrence;
-use crate::domain::{
-    date_parse::parse_date,
-    recurrence::parse_snap,
-    service::{apply_edits, validate_url, EditTaskParams},
-    tag,
-    task::Recurrence,
-};
+use crate::core::domain::{date_parse::parse_date, tag, task::Recurrence};
+use crate::core::recurrence::parse_snap;
+use crate::core::service::{apply_edits, validate_url, EditTaskParams};
 
-use crate::{resolve::resolve_task_id, AppContext};
+use crate::{core::resolve::resolve_task_id, AppContext};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -239,9 +235,9 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         id,
         edits,
         today,
-        &ctx.repo_root.clone(),
-        &mut *ctx.store,
-        &*ctx.vcs,
+        &ctx.repo.repo_root.clone(),
+        &mut *ctx.repo.store,
+        &*ctx.repo.vcs,
     )?;
     ctx.record_task_event("edit", task.id);
 

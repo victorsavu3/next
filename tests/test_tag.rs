@@ -1,8 +1,8 @@
 mod common;
 
-use next::store::Store as _;
+use next::core::store::Store as _;
 use next::cli::commands::{add, tag};
-use next::domain::task::Priority;
+use next::core::domain::task::Priority;
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -130,7 +130,7 @@ fn tag_description_survives_store_reload() {
     let mut env = common::setup();
     tag::run(describe("#vacation", "Away from keyboard"), &mut env.ctx).unwrap();
 
-    let (fresh_store, _) = next::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let (fresh_store, _) = next::core::storage::open(env.ctx.repo_root.clone()).unwrap();
     let desc = fresh_store.get_tag_description("#vacation").unwrap();
     assert_eq!(desc.as_deref(), Some("Away from keyboard"));
 }
@@ -531,7 +531,7 @@ fn tag_meta_all_fields_survives_reload() {
     )
     .unwrap();
 
-    let (fresh_store, _) = next::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let (fresh_store, _) = next::core::storage::open(env.ctx.repo_root.clone()).unwrap();
     let meta = fresh_store.get_tag_meta("@work").unwrap().unwrap();
     assert_eq!(meta.description.as_deref(), Some("Office"));
     assert_eq!(meta.url.as_deref(), Some("https://example.com"));

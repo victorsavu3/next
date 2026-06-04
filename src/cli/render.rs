@@ -1,4 +1,4 @@
-use crate::domain::scoring::ScoredTask;
+use crate::core::scoring::ScoredTask;
 
 /// Prints a human-readable table of scored tasks to stdout.
 pub fn render_task_list(tasks: &[ScoredTask]) {

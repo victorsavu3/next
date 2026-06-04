@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, Mutex, OwnedSemaphorePermit, Semaphore};
 
-use crate::store::PullResult;
-use crate::AppContext;
+use crate::core::store::PullResult;
+use crate::TaskRepository;
 
 #[derive(Debug)]
 enum DeferredSyncMsg {
@@ -50,7 +50,7 @@ impl SyncScheduler {
 
 /// Performs a pull+push using the VCS backend inside `ctx`.
 /// Errors are returned but not fatal — callers decide whether to surface them.
-pub fn do_sync(ctx: &mut AppContext) -> anyhow::Result<()> {
+pub fn do_sync(ctx: &mut TaskRepository) -> anyhow::Result<()> {
     match ctx.vcs.pull()? {
         PullResult::Clean => {
             tracing::info!(cmd = "sync", "pull: clean");
@@ -70,7 +70,7 @@ pub fn do_sync(ctx: &mut AppContext) -> anyhow::Result<()> {
 
 /// Spawns the background task that manages deferred syncs.
 /// Returns a `SyncScheduler` handle that callers use to schedule or cancel.
-pub fn spawn_deferred_sync(ctx: Arc<Mutex<AppContext>>, delay: Duration) -> SyncScheduler {
+pub fn spawn_deferred_sync(ctx: Arc<Mutex<TaskRepository>>, delay: Duration) -> SyncScheduler {
     let (tx, rx) = mpsc::channel(32);
     let semaphore = Arc::new(Semaphore::new(1));
     tokio::spawn(deferred_sync_task(rx, ctx, delay, Arc::clone(&semaphore)));
@@ -79,7 +79,7 @@ pub fn spawn_deferred_sync(ctx: Arc<Mutex<AppContext>>, delay: Duration) -> Sync
 
 async fn deferred_sync_task(
     mut rx: mpsc::Receiver<DeferredSyncMsg>,
-    ctx: Arc<Mutex<AppContext>>,
+    ctx: Arc<Mutex<TaskRepository>>,
     delay: Duration,
     semaphore: Arc<Semaphore>,
 ) {
@@ -117,7 +117,7 @@ async fn deferred_sync_task(
 
 /// Run sync in a background thread, acquiring the semaphore first.
 /// If the semaphore is already held (explicit sync in progress), skip silently.
-async fn run_sync_background(ctx: &Arc<Mutex<AppContext>>, semaphore: &Arc<Semaphore>) {
+async fn run_sync_background(ctx: &Arc<Mutex<TaskRepository>>, semaphore: &Arc<Semaphore>) {
     let permit = match Arc::clone(semaphore).try_acquire_owned() {
         Ok(p) => p,
         Err(_) => {
@@ -148,7 +148,7 @@ async fn run_sync_background(ctx: &Arc<Mutex<AppContext>>, semaphore: &Arc<Semap
 /// Spawns a periodic sync task that runs every `interval`.
 /// Shares the scheduler's semaphore so periodic syncs don't race with explicit ones.
 pub fn spawn_periodic_sync(
-    ctx: Arc<Mutex<AppContext>>,
+    ctx: Arc<Mutex<TaskRepository>>,
     interval: Duration,
     scheduler: &SyncScheduler,
 ) {
@@ -173,12 +173,12 @@ mod tests {
     use tokio::sync::Mutex;
 
     use super::*;
-    use crate::error::{AppError, Result};
-    use crate::store::{PullResult, Store, VcsBackend};
-    use crate::{AppContext, Config};
-    use crate::domain::state::GlobalState;
-    use crate::domain::tag::TagMeta;
-    use crate::domain::task::Task;
+    use crate::core::error::{TaskError, Result};
+    use crate::core::store::{PullResult, Store, VcsBackend};
+    use crate::TaskRepository;
+    use crate::core::domain::state::GlobalState;
+    use crate::core::domain::tag::TagMeta;
+    use crate::core::domain::task::Task;
     use uuid::Uuid;
 
     struct FakeStore;
@@ -220,7 +220,7 @@ mod tests {
 
         fn pull(&self) -> Result<PullResult> {
             if self.fail {
-                return Err(AppError::Other("fake pull error".to_owned()));
+                return Err(TaskError::Other("fake pull error".to_owned()));
             }
             self.sync_count.fetch_add(1, Ordering::SeqCst);
             Ok(PullResult::Clean)
@@ -228,14 +228,14 @@ mod tests {
 
         fn push(&self) -> Result<()> {
             if self.fail {
-                return Err(AppError::Other("fake push error".to_owned()));
+                return Err(TaskError::Other("fake push error".to_owned()));
             }
             Ok(())
         }
     }
 
-    fn make_ctx(vcs: FakeVcs) -> AppContext {
-        AppContext::with_parts(Config::default(), Box::new(FakeStore), Box::new(vcs), std::path::PathBuf::from("/tmp"))
+    fn make_ctx(vcs: FakeVcs) -> TaskRepository {
+        TaskRepository::with_parts(Box::new(FakeStore), Box::new(vcs), std::path::PathBuf::from("/tmp"))
     }
 
     #[test]

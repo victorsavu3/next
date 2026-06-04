@@ -2,8 +2,8 @@ mod common;
 
 use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
 use next::cli::commands::{add, cancel, done, edit};
-use next::domain::task::{Recurrence, Status};
-use next::store::Store as _;
+use next::core::domain::task::{Recurrence, Status};
+use next::core::store::Store as _;
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -39,7 +39,7 @@ fn done_args(id: &str) -> done::Args {
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 /// Returns all tasks regardless of status.
-fn all_tasks(env: &common::TestEnv) -> Vec<next::domain::task::Task> {
+fn all_tasks(env: &common::TestEnv) -> Vec<next::core::domain::task::Task> {
     env.ctx.store.list_tasks().unwrap()
 }
 
@@ -428,7 +428,7 @@ fn backward_compat_rule_alias_loads() {
     .unwrap();
 
     // Reload from a fresh store (exercises round-trip through TOML serialization).
-    let (fresh_store, _) = next::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let (fresh_store, _) = next::core::storage::open(env.ctx.repo_root.clone()).unwrap();
     let task = fresh_store
         .get_task_by_slug("legacy")
         .unwrap()
@@ -471,7 +471,7 @@ fn recur_schedule_next_occurrence_is_in_future() {
 /// Snap round-trips through TOML serialization (NextWeekday, NextWorkday, DayOfMonth).
 #[test]
 fn recur_snap_round_trips_toml() {
-    use next::domain::task::Snap;
+    use next::core::domain::task::Snap;
 
     let mut env = common::setup();
 
@@ -488,7 +488,7 @@ fn recur_snap_round_trips_toml() {
     )
     .unwrap();
 
-    let (fresh, _) = next::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let (fresh, _) = next::core::storage::open(env.ctx.repo_root.clone()).unwrap();
     let t = fresh.get_task_by_slug("sat-task").unwrap().unwrap();
     assert!(
         matches!(
@@ -511,7 +511,7 @@ fn recur_snap_round_trips_toml() {
     )
     .unwrap();
 
-    let (fresh2, _) = next::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let (fresh2, _) = next::core::storage::open(env.ctx.repo_root.clone()).unwrap();
     let t2 = fresh2.get_task_by_slug("workday-task").unwrap().unwrap();
     assert!(
         matches!(t2.recurrence, Some(Recurrence::Completion { snap: Some(Snap::NextWorkday), .. })),

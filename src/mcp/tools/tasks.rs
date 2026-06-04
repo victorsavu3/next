@@ -1,17 +1,13 @@
 use chrono::Local;
 use serde_json::{json, Value};
 
-use crate::domain::{
-    date_parse::parse_date,
-    filter,
-    recurrence::parse_snap,
-    scoring,
-    service::{apply_edits, complete_task, create_task, CreateTaskParams, EditTaskParams},
-    task::{Recurrence, Task},
-};
-use crate::resolve::resolve_task_id;
-use crate::storage;
-use crate::AppContext;
+use crate::core::domain::{date_parse::parse_date, filter, task::{Recurrence, Task}};
+use crate::core::recurrence::parse_snap;
+use crate::core::scoring;
+use crate::core::service::{apply_edits, complete_task, create_task, CreateTaskParams, EditTaskParams};
+use crate::core::resolve::resolve_task_id;
+use crate::core::storage;
+use crate::TaskRepository;
 
 fn str_param<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
     params.get(key).and_then(|v| v.as_str())
@@ -31,7 +27,7 @@ fn strings_param(params: &Value, key: &str) -> Vec<String> {
 
 // ── list_tasks ───────────────────────────────────────────────────────────────
 
-pub fn list_tasks(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let today = Local::now().date_naive();
     let tokens = strings_param(params, "filter_tokens");
     let include_all = bool_param(params, "include_all");
@@ -54,7 +50,7 @@ pub fn list_tasks(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value>
     let tag_metas = ctx.store.list_tag_metas()?;
 
     let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
-    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.config.scoring, &tag_metas);
+    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &crate::core::scoring::ScoringConfig::default(), &tag_metas);
 
     if let Some(n) = limit {
         scored.truncate(n);
@@ -65,7 +61,7 @@ pub fn list_tasks(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value>
 
 // ── get_task ─────────────────────────────────────────────────────────────────
 
-pub fn get_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+pub fn get_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let id_str = params
         .get("id")
         .and_then(|v| v.as_str())
@@ -78,7 +74,7 @@ pub fn get_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     let all_tasks = ctx.store.list_tasks()?;
     let tag_metas = ctx.store.list_tag_metas()?;
     let parent = task.parent_id.and_then(|pid| all_tasks.iter().find(|t| t.id == pid));
-    let breakdown = scoring::score_with_breakdown(&task, parent, today, &ctx.config.scoring, &tag_metas);
+    let breakdown = scoring::score_with_breakdown(&task, parent, today, &crate::core::scoring::ScoringConfig::default(), &tag_metas);
 
     let children: Vec<&Task> = all_tasks.iter().filter(|t| t.parent_id == Some(id)).collect();
 
@@ -92,7 +88,7 @@ pub fn get_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
 
 // ── add_task ─────────────────────────────────────────────────────────────────
 
-pub fn add_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+pub fn add_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let today = Local::now().date_naive();
 
     let title = params
@@ -153,7 +149,7 @@ pub fn add_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
 
 // ── update_task ───────────────────────────────────────────────────────────────
 
-pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+pub fn update_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let today = Local::now().date_naive();
     let id_str = params
         .get("id")
@@ -308,7 +304,7 @@ pub fn update_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
 
 // ── delete_task ───────────────────────────────────────────────────────────────
 
-pub fn delete_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+pub fn delete_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let id_str = params
         .get("id")
         .and_then(|v| v.as_str())
@@ -331,10 +327,10 @@ pub fn delete_task(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Config, AppContext};
+    use crate::TaskRepository;
     use tempfile::TempDir;
 
-    fn make_ctx() -> (TempDir, AppContext) {
+    fn make_ctx() -> (TempDir, TaskRepository) {
         let dir = tempfile::tempdir().unwrap();
         for args in [
             vec!["init", "-q"],
@@ -347,8 +343,8 @@ mod tests {
                 .status()
                 .unwrap();
         }
-        let (store, vcs) = crate::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = AppContext::with_parts(Config::default(), Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
+        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 

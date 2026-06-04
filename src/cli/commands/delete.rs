@@ -1,4 +1,4 @@
-use crate::{resolve::resolve_task_id, AppContext};
+use crate::{core::resolve::resolve_task_id, AppContext};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -27,7 +27,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 
     ctx.transaction(|store, vcs, root| {
         // Compute path before deleting so we can stage the removal.
-        let task_path = crate::storage::task_path(root, &task);
+        let task_path = crate::core::storage::task_path(root, &task);
         store.delete_task(id)?;
         vcs.commit(&[task_path], &format!("next: delete {}", task.title))?;
         Ok(())

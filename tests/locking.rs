@@ -6,15 +6,12 @@
 /// processes would.
 use std::{path::Path, process::Command, sync::Arc};
 
-use next::{
-    domain::{
-        service::{apply_edits, EditTaskParams},
-        state::GlobalState,
-        task::Task,
-    },
+use next::core::{
+    domain::{state::GlobalState, task::Task},
+    service::{apply_edits, EditTaskParams},
     store::{Store as _, VcsBackend as _},
 };
-use next::storage::{FileLock, GitBackend, TomlStore};
+use next::core::storage::{FileLock, GitBackend, TomlStore};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -139,7 +136,7 @@ fn concurrent_slug_conflict_detected() {
     let conflicts = results
         .iter()
         .filter(|r| {
-            matches!(r, Err(next::error::AppError::SlugConflict(_)))
+            matches!(r, Err(next::core::error::TaskError::SlugConflict(_)))
         })
         .count();
 
@@ -256,11 +253,11 @@ fn concurrent_tag_edits_do_not_lose_updates() {
 
     // Seed a single task and an initial commit so HEAD exists.
     let task_id = {
-        let (mut store, vcs) = next::storage::open(dir.path().to_path_buf()).unwrap();
+        let (mut store, vcs) = next::core::storage::open(dir.path().to_path_buf()).unwrap();
         let task = Task::new("Shared task");
         let id = task.id;
         store.save_task(&task).unwrap();
-        let path = next::storage::task_path(dir.path(), &task);
+        let path = next::core::storage::task_path(dir.path(), &task);
         vcs.commit(&[path], "seed task").unwrap();
         id
     };
@@ -274,7 +271,7 @@ fn concurrent_tag_edits_do_not_lose_updates() {
             let root = Arc::clone(&root);
             let barrier = Arc::clone(&barrier);
             std::thread::spawn(move || {
-                let (mut store, vcs) = next::storage::open((*root).clone()).unwrap();
+                let (mut store, vcs) = next::core::storage::open((*root).clone()).unwrap();
                 let edits = EditTaskParams {
                     add_tags: vec![format!("tag{i}")],
                     ..Default::default()
@@ -299,7 +296,7 @@ fn concurrent_tag_edits_do_not_lose_updates() {
     }
 
     // Re-open fresh and assert every tag survived.
-    let (store, _vcs) = next::storage::open(dir.path().to_path_buf()).unwrap();
+    let (store, _vcs) = next::core::storage::open(dir.path().to_path_buf()).unwrap();
     let task = store.get_task(task_id).unwrap();
     let mut tags: Vec<String> = task.tags.iter().filter(|t| t.starts_with("tag")).cloned().collect();
     tags.sort();
@@ -325,7 +322,7 @@ fn concurrent_state_edits_do_not_lose_updates() {
     // The state lock lives next to the state file; mirror what `TomlStore`
     // derives so the test transaction and `save_state` share one lock.
     let state_path = dir.path().join("state.toml");
-    let state_lock_path = next::storage::state_lock_path(&state_path);
+    let state_lock_path = next::core::storage::state_lock_path(&state_path);
 
     let root = Arc::new(dir.path().to_path_buf());
     let state_lock_path = Arc::new(state_lock_path);
@@ -371,7 +368,7 @@ fn concurrent_state_edits_do_not_lose_updates() {
 /// each other; with it, every subscription must survive.
 #[test]
 fn concurrent_plugin_watches_do_not_lose_updates() {
-    use next::plugin::registry;
+    use next::core::plugin::registry;
 
     let dir = TempDir::new().unwrap();
     let root = Arc::new(dir.path().to_path_buf());
@@ -435,7 +432,7 @@ fn concurrent_save_and_commit_no_errors() {
                 let task = Task::new(format!("Task {i}"));
                 store.save_task(&task).unwrap();
 
-                let task_path = next::storage::task_path(&root, &task);
+                let task_path = next::core::storage::task_path(&root, &task);
                 vcs.commit(&[task_path], &format!("add task {i}")).unwrap();
             })
         })
@@ -471,10 +468,10 @@ fn pull_and_task_save_do_not_trample() {
         .status()
         .unwrap();
 
-    let (mut store_a, vcs_a) = next::storage::open(repo_a.path().to_path_buf()).unwrap();
+    let (mut store_a, vcs_a) = next::core::storage::open(repo_a.path().to_path_buf()).unwrap();
     let task_a = Task::new("Remote task");
     store_a.save_task(&task_a).unwrap();
-    let path_a = next::storage::task_path(repo_a.path(), &task_a);
+    let path_a = next::core::storage::task_path(repo_a.path(), &task_a);
     vcs_a.commit(&[path_a], "add remote task").unwrap();
     vcs_a.push().unwrap();
 
@@ -486,7 +483,7 @@ fn pull_and_task_save_do_not_trample() {
         .current_dir(repo_b.path())
         .status()
         .unwrap();
-    next::storage::open(repo_b.path().to_path_buf()).unwrap(); // creates tasks/
+    next::core::storage::open(repo_b.path().to_path_buf()).unwrap(); // creates tasks/
 
     let root_b = Arc::new(repo_b.path().to_path_buf());
 

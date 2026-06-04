@@ -3,11 +3,119 @@ use std::collections::HashMap;
 use chrono::NaiveDate;
 use uuid::Uuid;
 
-use crate::{
-    config::ScoringConfig,
-    domain::tag::TagMeta,
-    domain::task::{Priority, Status, Task},
+use serde::{Deserialize, Serialize};
+
+use crate::core::domain::{
+    tag::TagMeta,
+    task::{Priority, Status, Task},
 };
+
+// ── Default scoring constants ─────────────────────────────────────────────────
+
+pub const DEFAULT_DUE_OVERDUE_BASE: f64 = 12.0;
+pub const DEFAULT_DUE_OVERDUE_PER_DAY: f64 = 0.3;
+pub const DEFAULT_DUE_WEEK_BASE: f64 = 6.0;
+pub const DEFAULT_DUE_WEEK_PER_DAY: f64 = 0.8;
+pub const DEFAULT_DUE_MONTH_BASE: f64 = 3.0;
+pub const DEFAULT_DUE_MONTH_PER_DAY: f64 = 0.1;
+pub const DEFAULT_PRIORITY_LOW: f64 = 0.0;
+pub const DEFAULT_PRIORITY_MEDIUM: f64 = 1.0;
+pub const DEFAULT_PRIORITY_HIGH: f64 = 2.0;
+pub const DEFAULT_PROJECT_LOW: f64 = -0.5;
+pub const DEFAULT_PROJECT_MEDIUM: f64 = 0.0;
+pub const DEFAULT_PROJECT_HIGH: f64 = 0.5;
+pub const DEFAULT_AGE_PER_DAY: f64 = 0.01;
+pub const DEFAULT_AGE_MAX: f64 = 2.0;
+pub const DEFAULT_TAG_LOW: f64 = -1.0;
+pub const DEFAULT_TAG_MEDIUM: f64 = 0.0;
+pub const DEFAULT_TAG_HIGH: f64 = 1.0;
+pub const DEFAULT_STARTED_BONUS: f64 = 4.0;
+
+fn default_due_overdue_base() -> f64 { DEFAULT_DUE_OVERDUE_BASE }
+fn default_due_overdue_per_day() -> f64 { DEFAULT_DUE_OVERDUE_PER_DAY }
+fn default_due_week_base() -> f64 { DEFAULT_DUE_WEEK_BASE }
+fn default_due_week_per_day() -> f64 { DEFAULT_DUE_WEEK_PER_DAY }
+fn default_due_month_base() -> f64 { DEFAULT_DUE_MONTH_BASE }
+fn default_due_month_per_day() -> f64 { DEFAULT_DUE_MONTH_PER_DAY }
+fn default_priority_low() -> f64 { DEFAULT_PRIORITY_LOW }
+fn default_priority_medium() -> f64 { DEFAULT_PRIORITY_MEDIUM }
+fn default_priority_high() -> f64 { DEFAULT_PRIORITY_HIGH }
+fn default_project_low() -> f64 { DEFAULT_PROJECT_LOW }
+fn default_project_medium() -> f64 { DEFAULT_PROJECT_MEDIUM }
+fn default_project_high() -> f64 { DEFAULT_PROJECT_HIGH }
+fn default_age_per_day() -> f64 { DEFAULT_AGE_PER_DAY }
+fn default_age_max() -> f64 { DEFAULT_AGE_MAX }
+fn default_tag_low() -> f64 { DEFAULT_TAG_LOW }
+fn default_tag_medium() -> f64 { DEFAULT_TAG_MEDIUM }
+fn default_tag_high() -> f64 { DEFAULT_TAG_HIGH }
+fn default_started_bonus() -> f64 { DEFAULT_STARTED_BONUS }
+
+/// Weights used in the urgency scoring formula. All fields are optional in the
+/// config file; omitted fields keep their default.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoringConfig {
+    #[serde(default = "default_due_overdue_base")]
+    pub due_overdue_base: f64,
+    #[serde(default = "default_due_overdue_per_day")]
+    pub due_overdue_per_day: f64,
+    #[serde(default = "default_due_week_base")]
+    pub due_week_base: f64,
+    #[serde(default = "default_due_week_per_day")]
+    pub due_week_per_day: f64,
+    #[serde(default = "default_due_month_base")]
+    pub due_month_base: f64,
+    #[serde(default = "default_due_month_per_day")]
+    pub due_month_per_day: f64,
+    #[serde(default = "default_priority_low")]
+    pub priority_low: f64,
+    #[serde(default = "default_priority_medium")]
+    pub priority_medium: f64,
+    #[serde(default = "default_priority_high")]
+    pub priority_high: f64,
+    #[serde(default = "default_project_low")]
+    pub project_low: f64,
+    #[serde(default = "default_project_medium")]
+    pub project_medium: f64,
+    #[serde(default = "default_project_high")]
+    pub project_high: f64,
+    #[serde(default = "default_age_per_day")]
+    pub age_per_day: f64,
+    #[serde(default = "default_age_max")]
+    pub age_max: f64,
+    #[serde(default = "default_tag_low")]
+    pub tag_low: f64,
+    #[serde(default = "default_tag_medium")]
+    pub tag_medium: f64,
+    #[serde(default = "default_tag_high")]
+    pub tag_high: f64,
+    #[serde(default = "default_started_bonus")]
+    pub started_bonus: f64,
+}
+
+impl Default for ScoringConfig {
+    fn default() -> Self {
+        Self {
+            due_overdue_base: default_due_overdue_base(),
+            due_overdue_per_day: default_due_overdue_per_day(),
+            due_week_base: default_due_week_base(),
+            due_week_per_day: default_due_week_per_day(),
+            due_month_base: default_due_month_base(),
+            due_month_per_day: default_due_month_per_day(),
+            priority_low: default_priority_low(),
+            priority_medium: default_priority_medium(),
+            priority_high: default_priority_high(),
+            project_low: default_project_low(),
+            project_medium: default_project_medium(),
+            project_high: default_project_high(),
+            age_per_day: default_age_per_day(),
+            age_max: default_age_max(),
+            tag_low: default_tag_low(),
+            tag_medium: default_tag_medium(),
+            tag_high: default_tag_high(),
+            started_bonus: default_started_bonus(),
+        }
+    }
+}
 
 /// A task paired with its computed urgency score.
 #[derive(Debug, Clone, serde::Serialize)]

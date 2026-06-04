@@ -1,6 +1,6 @@
 mod common;
 
-use next::domain::task::Status;
+use next::core::domain::task::Status;
 use next::cli::commands::{add, done};
 
 fn add_args(title: &str) -> add::Args {

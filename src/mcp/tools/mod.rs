@@ -8,9 +8,9 @@ use std::fmt::Write as _;
 
 use serde_json::{json, Value};
 
-use crate::domain::tag::TagMeta;
-use crate::error::AppError;
-use crate::AppContext;
+use crate::core::domain::tag::TagMeta;
+use crate::core::error::TaskError;
+use crate::TaskRepository;
 
 use self::tags::{CatalogEntry, TagCatalog};
 use super::protocol::{CallToolResult, Tool};
@@ -254,7 +254,7 @@ otherwise.";
 /// the active context/resource state and the known-tag catalog, so a client can
 /// inject the whole thing into the model's system prompt. Storage reads that
 /// fail are skipped rather than propagated — the guide is always returned.
-pub fn server_instructions(ctx: &AppContext) -> String {
+pub fn server_instructions(ctx: &TaskRepository) -> String {
     let mut out = String::from(TAGGING_GUIDE);
 
     if let Ok(state) = ctx.store.get_state() {
@@ -278,7 +278,7 @@ pub fn server_instructions(ctx: &AppContext) -> String {
             // Normalise to a single `#` prefix regardless of how the key was stored.
             let names: Vec<String> = unavailable
                 .iter()
-                .map(|n| format!("#{}", crate::domain::tag::bare_name(n)))
+                .map(|n| format!("#{}", crate::core::domain::tag::bare_name(n)))
                 .collect();
             let _ = writeln!(out, "- Unavailable resources: {}", names.join(", "));
         }
@@ -345,7 +345,7 @@ fn annotate_meta(meta: &TagMeta) -> String {
 pub fn dispatch(
     tool_name: &str,
     params: &Value,
-    ctx: &mut AppContext,
+    ctx: &mut TaskRepository,
     scheduler: &super::sync_manager::SyncScheduler,
 ) -> CallToolResult {
     let result = match call_tool(tool_name, params, ctx, scheduler) {
@@ -364,10 +364,10 @@ pub fn dispatch(
     let events = ctx.take_task_events();
     if !events.is_empty() {
         let repo_root = ctx.repo_root.clone();
-        crate::plugin::notify(&repo_root, &events, ctx.plugin_origin());
+        crate::core::plugin::notify(&repo_root, &events, ctx.plugin_origin());
         for ev in &events {
             if ev.verb == "delete" {
-                let _ = crate::plugin::registry::prune_task(&repo_root, ev.task_id);
+                let _ = crate::core::plugin::registry::prune_task(&repo_root, ev.task_id);
             }
         }
     }
@@ -382,18 +382,18 @@ pub fn dispatch(
 /// system details (file paths, git internals) that must not be disclosed; they
 /// are logged with full context and replaced by a short generic message.
 fn sanitize_error(err: &anyhow::Error, tool_name: &str) -> String {
-    // Attempt to downcast to the structured AppError type.
-    if let Some(app_err) = err.downcast_ref::<AppError>() {
+    // Attempt to downcast to the structured TaskError type.
+    if let Some(app_err) = err.downcast_ref::<TaskError>() {
         match app_err {
             // User-facing: safe to return verbatim.
-            AppError::TaskNotFound(_)
-            | AppError::InvalidDate(_, _)
-            | AppError::AmbiguousId(_, _)
-            | AppError::SlugConflict(_)
-            | AppError::GitConflict(_) => return app_err.to_string(),
+            TaskError::TaskNotFound(_)
+            | TaskError::InvalidDate(_, _)
+            | TaskError::AmbiguousId(_, _)
+            | TaskError::SlugConflict(_)
+            | TaskError::GitConflict(_) => return app_err.to_string(),
 
             // Internal: log and sanitize.
-            AppError::Io(_) | AppError::Other(_) => {
+            TaskError::Io(_) | TaskError::Other(_) => {
                 tracing::error!(cmd = %format!("mcp/{tool_name}"), "{err:#}");
                 return "storage error".to_owned();
             }
@@ -408,7 +408,7 @@ fn sanitize_error(err: &anyhow::Error, tool_name: &str) -> String {
 fn call_tool(
     tool_name: &str,
     params: &Value,
-    ctx: &mut AppContext,
+    ctx: &mut TaskRepository,
     scheduler: &super::sync_manager::SyncScheduler,
 ) -> anyhow::Result<Value> {
     let autosync = params.get("autosync").and_then(|v| v.as_bool()).unwrap_or(true);
@@ -488,7 +488,7 @@ fn call_tool(
 
 /// Runs sync inline (autosync=true) or schedules a deferred sync (autosync=false).
 /// Sync errors are logged but don't fail the tool call.
-fn run_autosync(autosync: bool, ctx: &mut AppContext, scheduler: &super::sync_manager::SyncScheduler) {
+fn run_autosync(autosync: bool, ctx: &mut TaskRepository, scheduler: &super::sync_manager::SyncScheduler) {
     if autosync {
         if let Err(e) = do_sync(ctx) {
             tracing::error!(cmd = "mcp/autosync", "{e}");
@@ -503,10 +503,10 @@ fn run_autosync(autosync: bool, ctx: &mut AppContext, scheduler: &super::sync_ma
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Config, AppContext};
+    use crate::TaskRepository;
     use tempfile::TempDir;
 
-    fn make_ctx() -> (TempDir, AppContext) {
+    fn make_ctx() -> (TempDir, TaskRepository) {
         let dir = tempfile::tempdir().unwrap();
         for args in [
             vec!["init", "-q"],
@@ -519,12 +519,12 @@ mod tests {
                 .status()
                 .unwrap();
         }
-        let (store, vcs) = crate::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = AppContext::with_parts(Config::default(), Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
+        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 
-    /// Internal errors (AppError::Io / AppError::Other with file paths) must be
+    /// Internal errors (TaskError::Io / TaskError::Other with file paths) must be
     /// sanitized — the client message must not contain filesystem paths.
     #[test]
     fn sanitize_error_strips_filesystem_path() {
@@ -532,7 +532,7 @@ mod tests {
             std::io::ErrorKind::PermissionDenied,
             "permission denied",
         );
-        let app_err = AppError::Io(io_err);
+        let app_err = TaskError::Io(io_err);
         let anyhow_err = anyhow::anyhow!(app_err)
             .context("reading /home/victor/tasks/foo.toml".to_string());
 
@@ -544,10 +544,10 @@ mod tests {
         );
     }
 
-    /// AppError::Other that embeds an absolute path must not reach the client.
+    /// TaskError::Other that embeds an absolute path must not reach the client.
     #[test]
     fn sanitize_error_other_strips_path() {
-        let app_err = AppError::Other(
+        let app_err = TaskError::Other(
             "path not inside repository: /home/victor/.config/task-manager/config.toml".into(),
         );
         let anyhow_err = anyhow::anyhow!(app_err);
@@ -561,16 +561,16 @@ mod tests {
     /// returned verbatim so the client can act on them.
     #[test]
     fn sanitize_error_preserves_user_facing_errors() {
-        let not_found = anyhow::anyhow!(AppError::TaskNotFound("abc123".into()));
+        let not_found = anyhow::anyhow!(TaskError::TaskNotFound("abc123".into()));
         let msg = sanitize_error(&not_found, "get_task");
         assert!(msg.contains("abc123"), "task-not-found should be verbatim: {msg}");
         assert!(msg.contains("task not found"), "expected 'task not found': {msg}");
 
-        let ambiguous = anyhow::anyhow!(AppError::AmbiguousId("ab".into(), 3));
+        let ambiguous = anyhow::anyhow!(TaskError::AmbiguousId("ab".into(), 3));
         let msg = sanitize_error(&ambiguous, "get_task");
         assert!(msg.contains("ambiguous"), "expected ambiguous id message: {msg}");
 
-        let slug = anyhow::anyhow!(AppError::SlugConflict("my-task".into()));
+        let slug = anyhow::anyhow!(TaskError::SlugConflict("my-task".into()));
         let msg = sanitize_error(&slug, "add_task");
         assert!(msg.contains("my-task"), "slug conflict should mention slug: {msg}");
     }

@@ -5,8 +5,8 @@ use std::{
 };
 
 use git2::{build::CheckoutBuilder, Repository};
-use crate::{
-    error::{AppError, Result},
+use crate::core::{
+    error::{TaskError, Result},
     store::{PullResult, VcsBackend},
 };
 
@@ -26,7 +26,7 @@ pub struct GitBackend {
 impl GitBackend {
     pub fn open(root: &Path) -> Result<Self> {
         let repo = Repository::open(root)
-            .map_err(|e| AppError::Other(format!("failed to open git repository: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("failed to open git repository: {e}")))?;
         Ok(Self {
             repo: Mutex::new(repo),
             lock_path: root.join(".next.lock"),
@@ -45,10 +45,10 @@ impl GitBackend {
 
     /// Acquires the repository-level exclusive lock shared with `TomlStore`.
     /// Released when the returned guard is dropped.  Re-entrant within a thread
-    /// via [`crate::storage::FileLock`], so a transaction holding the lock can
+    /// via [`crate::core::storage::FileLock`], so a transaction holding the lock can
     /// call `commit` / `pull` / `push` without self-deadlocking.
-    fn acquire_repo_lock(&self) -> Result<crate::storage::FileLock> {
-        crate::storage::FileLock::acquire(&self.lock_path)
+    fn acquire_repo_lock(&self) -> Result<crate::core::storage::FileLock> {
+        crate::core::storage::FileLock::acquire(&self.lock_path)
     }
 }
 
@@ -103,7 +103,7 @@ impl GitBackend {
             .args(["pull", "--no-edit"])
             .current_dir(&self.work_dir)
             .output()
-            .map_err(|e| AppError::Other(format!("spawn git pull: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("spawn git pull: {e}")))?;
 
         if output.status.success() {
             return Ok(PullResult::Clean);
@@ -117,7 +117,7 @@ impl GitBackend {
             return Ok(PullResult::Conflicts(vec![]));
         }
 
-        Err(AppError::Other(format!(
+        Err(TaskError::Other(format!(
             "git pull failed: {}",
             stderr.trim()
         )))
@@ -130,14 +130,14 @@ impl GitBackend {
             .args(["push"])
             .current_dir(&self.work_dir)
             .output()
-            .map_err(|e| AppError::Other(format!("spawn git push: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("spawn git push: {e}")))?;
 
         if output.status.success() {
             return Ok(());
         }
 
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(AppError::Other(format!(
+        Err(TaskError::Other(format!(
             "git push failed: {}",
             stderr.trim()
         )))
@@ -150,51 +150,51 @@ impl VcsBackend for GitBackend {
         let repo = self
             .repo
             .lock()
-            .map_err(|_| AppError::Other("git lock poisoned".into()))?;
+            .map_err(|_| TaskError::Other("git lock poisoned".into()))?;
 
         let workdir = repo
             .workdir()
-            .ok_or_else(|| AppError::Other("bare repository has no working directory".into()))?;
+            .ok_or_else(|| TaskError::Other("bare repository has no working directory".into()))?;
 
         let mut index = repo
             .index()
-            .map_err(|e| AppError::Other(format!("git index: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("git index: {e}")))?;
 
         for path in paths {
             let relative = path.strip_prefix(workdir).map_err(|_| {
-                AppError::Other(format!("path not inside repository: {}", path.display()))
+                TaskError::Other(format!("path not inside repository: {}", path.display()))
             })?;
             if path.exists() {
                 index
                     .add_path(relative)
-                    .map_err(|e| AppError::Other(format!("git add {}: {e}", path.display())))?;
+                    .map_err(|e| TaskError::Other(format!("git add {}: {e}", path.display())))?;
             } else {
                 index
                     .remove_path(relative)
-                    .map_err(|e| AppError::Other(format!("git rm {}: {e}", path.display())))?;
+                    .map_err(|e| TaskError::Other(format!("git rm {}: {e}", path.display())))?;
             }
         }
 
         index
             .write()
-            .map_err(|e| AppError::Other(format!("git index write: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("git index write: {e}")))?;
 
         let tree_oid = index
             .write_tree()
-            .map_err(|e| AppError::Other(format!("git write-tree: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("git write-tree: {e}")))?;
         let tree = repo
             .find_tree(tree_oid)
-            .map_err(|e| AppError::Other(format!("git find-tree: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("git find-tree: {e}")))?;
 
         let sig = repo
             .signature()
-            .map_err(|e| AppError::Other(format!("git signature: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("git signature: {e}")))?;
 
         let parent_commit = repo.head().and_then(|h| h.peel_to_commit()).ok();
         let parents: Vec<&git2::Commit> = parent_commit.iter().collect();
 
         repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
-            .map_err(|e| AppError::Other(format!("git commit: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("git commit: {e}")))?;
 
         Ok(())
     }
@@ -207,29 +207,29 @@ impl VcsBackend for GitBackend {
         let repo = self
             .repo
             .lock()
-            .map_err(|_| AppError::Other("git lock poisoned".into()))?;
+            .map_err(|_| TaskError::Other("git lock poisoned".into()))?;
 
         let mut remote = repo
             .find_remote("origin")
-            .map_err(|e| AppError::Other(format!("git remote 'origin': {e}")))?;
+            .map_err(|e| TaskError::Other(format!("git remote 'origin': {e}")))?;
 
         let mut fetch_opts = git2::FetchOptions::new();
         fetch_opts.remote_callbacks(remote_callbacks());
         remote
             .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
-            .map_err(|e| AppError::Other(format!("git fetch: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("git fetch: {e}")))?;
         drop(remote);
 
         let fetch_head = repo
             .find_reference("FETCH_HEAD")
-            .map_err(|e| AppError::Other(format!("FETCH_HEAD: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("FETCH_HEAD: {e}")))?;
         let fetch_commit = repo
             .reference_to_annotated_commit(&fetch_head)
-            .map_err(|e| AppError::Other(format!("annotated commit: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("annotated commit: {e}")))?;
 
         let (analysis, _) = repo
             .merge_analysis(&[&fetch_commit])
-            .map_err(|e| AppError::Other(format!("merge analysis: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("merge analysis: {e}")))?;
 
         if analysis.is_up_to_date() {
             return Ok(PullResult::Clean);
@@ -245,25 +245,25 @@ impl VcsBackend for GitBackend {
                     .and_then(|h| h.symbolic_target().map(str::to_owned))
                     .unwrap_or_else(|| "refs/heads/master".to_owned());
                 repo.reference(&refname, fetch_commit.id(), true, "pull: initial")
-                    .map_err(|e| AppError::Other(format!("create branch ref: {e}")))?;
+                    .map_err(|e| TaskError::Other(format!("create branch ref: {e}")))?;
             } else {
                 let refname = {
                     let head = repo
                         .head()
-                        .map_err(|e| AppError::Other(format!("git HEAD: {e}")))?;
+                        .map_err(|e| TaskError::Other(format!("git HEAD: {e}")))?;
                     head.name()
-                        .ok_or_else(|| AppError::Other("invalid HEAD reference".into()))?
+                        .ok_or_else(|| TaskError::Other("invalid HEAD reference".into()))?
                         .to_owned()
                 };
                 let mut reference = repo
                     .find_reference(&refname)
-                    .map_err(|e| AppError::Other(format!("find ref: {e}")))?;
+                    .map_err(|e| TaskError::Other(format!("find ref: {e}")))?;
                 reference
                     .set_target(fetch_commit.id(), "pull: fast-forward")
-                    .map_err(|e| AppError::Other(format!("fast-forward: {e}")))?;
+                    .map_err(|e| TaskError::Other(format!("fast-forward: {e}")))?;
             }
             repo.checkout_head(Some(CheckoutBuilder::default().force()))
-                .map_err(|e| AppError::Other(format!("checkout HEAD: {e}")))?;
+                .map_err(|e| TaskError::Other(format!("checkout HEAD: {e}")))?;
             return Ok(PullResult::Clean);
         }
 
@@ -272,24 +272,24 @@ impl VcsBackend for GitBackend {
             .head()
             .and_then(|h| h.peel_to_commit())
             .map(|c| c.id())
-            .map_err(|e| AppError::Other(format!("HEAD commit: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("HEAD commit: {e}")))?;
 
         repo.merge(&[&fetch_commit], None, None)
-            .map_err(|e| AppError::Other(format!("git merge: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("git merge: {e}")))?;
 
         let has_conflicts = repo
             .index()
-            .map_err(|e| AppError::Other(format!("git index after merge: {e}")))?
+            .map_err(|e| TaskError::Other(format!("git index after merge: {e}")))?
             .has_conflicts();
 
         if has_conflicts {
             let conflict_paths: Vec<PathBuf> = {
                 let index = repo
                     .index()
-                    .map_err(|e| AppError::Other(format!("git index: {e}")))?;
+                    .map_err(|e| TaskError::Other(format!("git index: {e}")))?;
                 let paths: Vec<PathBuf> = index
                     .conflicts()
-                    .map_err(|e| AppError::Other(format!("git conflicts: {e}")))?
+                    .map_err(|e| TaskError::Other(format!("git conflicts: {e}")))?
                     .filter_map(|c| {
                         c.ok().and_then(|conflict| {
                             conflict.our.or(conflict.their).map(|entry| {
@@ -301,7 +301,7 @@ impl VcsBackend for GitBackend {
                 paths
             };
             repo.cleanup_state()
-                .map_err(|e| AppError::Other(format!("cleanup state: {e}")))?;
+                .map_err(|e| TaskError::Other(format!("cleanup state: {e}")))?;
             return Ok(PullResult::Conflicts(conflict_paths));
         }
 
@@ -309,23 +309,23 @@ impl VcsBackend for GitBackend {
         let tree_oid = {
             let mut index = repo
                 .index()
-                .map_err(|e| AppError::Other(format!("git index: {e}")))?;
+                .map_err(|e| TaskError::Other(format!("git index: {e}")))?;
             index
                 .write_tree()
-                .map_err(|e| AppError::Other(format!("write-tree: {e}")))?
+                .map_err(|e| TaskError::Other(format!("write-tree: {e}")))?
         };
         let tree = repo
             .find_tree(tree_oid)
-            .map_err(|e| AppError::Other(format!("find tree: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("find tree: {e}")))?;
         let sig = repo
             .signature()
-            .map_err(|e| AppError::Other(format!("git signature: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("git signature: {e}")))?;
         let head_commit = repo
             .find_commit(head_oid)
-            .map_err(|e| AppError::Other(format!("find HEAD commit: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("find HEAD commit: {e}")))?;
         let fetch_commit_obj = repo
             .find_commit(fetch_commit.id())
-            .map_err(|e| AppError::Other(format!("find fetch commit: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("find fetch commit: {e}")))?;
 
         repo.commit(
             Some("HEAD"),
@@ -335,9 +335,9 @@ impl VcsBackend for GitBackend {
             &tree,
             &[&head_commit, &fetch_commit_obj],
         )
-        .map_err(|e| AppError::Other(format!("merge commit: {e}")))?;
+        .map_err(|e| TaskError::Other(format!("merge commit: {e}")))?;
         repo.cleanup_state()
-            .map_err(|e| AppError::Other(format!("cleanup state: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("cleanup state: {e}")))?;
 
         Ok(PullResult::Clean)
     }
@@ -350,26 +350,26 @@ impl VcsBackend for GitBackend {
         let repo = self
             .repo
             .lock()
-            .map_err(|_| AppError::Other("git lock poisoned".into()))?;
+            .map_err(|_| TaskError::Other("git lock poisoned".into()))?;
 
         let branch = {
             let head = repo
                 .head()
-                .map_err(|e| AppError::Other(format!("git HEAD: {e}")))?;
+                .map_err(|e| TaskError::Other(format!("git HEAD: {e}")))?;
             head.shorthand()
-                .ok_or_else(|| AppError::Other("no current branch".into()))?
+                .ok_or_else(|| TaskError::Other("no current branch".into()))?
                 .to_owned()
         };
         let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
 
         let mut remote = repo
             .find_remote("origin")
-            .map_err(|e| AppError::Other(format!("git remote 'origin': {e}")))?;
+            .map_err(|e| TaskError::Other(format!("git remote 'origin': {e}")))?;
         let mut push_opts = git2::PushOptions::new();
         push_opts.remote_callbacks(remote_callbacks());
         remote
             .push(&[refspec.as_str()], Some(&mut push_opts))
-            .map_err(|e| AppError::Other(format!("git push: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("git push: {e}")))?;
 
         Ok(())
     }
@@ -378,15 +378,15 @@ impl VcsBackend for GitBackend {
         let repo = self
             .repo
             .lock()
-            .map_err(|_| AppError::Other("git lock poisoned".into()))?;
+            .map_err(|_| TaskError::Other("git lock poisoned".into()))?;
         // Bind to a local so temporaries borrowing `repo` are dropped before `repo` is.
         let result: Result<String> = match repo.head() {
             Ok(head) => match head.peel_to_commit() {
                 Ok(commit) => Ok(commit.id().to_string()),
-                Err(e) => Err(AppError::Other(format!("peel HEAD: {e}"))),
+                Err(e) => Err(TaskError::Other(format!("peel HEAD: {e}"))),
             },
             Err(e) if e.code() == git2::ErrorCode::UnbornBranch => Ok("unborn".into()),
-            Err(e) => Err(AppError::Other(format!("git HEAD: {e}"))),
+            Err(e) => Err(TaskError::Other(format!("git HEAD: {e}"))),
         };
         result
     }

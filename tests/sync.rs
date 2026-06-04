@@ -1,10 +1,10 @@
 use std::{fs, path::Path, path::PathBuf, process::Command};
 
 use next::{
-    domain::task::Task,
-    store::{PullResult, Store, VcsBackend},
+    core::domain::task::Task,
+    core::store::{PullResult, Store, VcsBackend},
 };
-use next::storage::{CachedStore, GitBackend};
+use next::core::storage::{CachedStore, GitBackend};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ fn local_with_remote(remote_path: &Path) -> (TempDir, CachedStore, GitBackend) {
         dir.path(),
         &["remote", "add", "origin", remote_path.to_str().unwrap()],
     );
-    let (store, vcs) = next::storage::open(dir.path().to_path_buf()).unwrap();
+    let (store, vcs) = next::core::storage::open(dir.path().to_path_buf()).unwrap();
     (dir, store, vcs)
 }
 
@@ -55,7 +55,7 @@ fn clone_of(remote_path: &Path) -> (TempDir, PathBuf, CachedStore, GitBackend) {
         .unwrap();
     run_git(&clone_path, &["config", "user.email", "test@example.com"]);
     run_git(&clone_path, &["config", "user.name", "Test"]);
-    let (store, vcs) = next::storage::open(clone_path.clone()).unwrap();
+    let (store, vcs) = next::core::storage::open(clone_path.clone()).unwrap();
     (base, clone_path, store, vcs)
 }
 
@@ -68,14 +68,14 @@ fn commit_task(
 ) -> Task {
     let task = Task::new(title);
     store.save_task(&task).unwrap();
-    let path = next::storage::task_path(repo_root, &task);
+    let path = next::core::storage::task_path(repo_root, &task);
     vcs.commit(&[path], &format!("next: add \"{title}\"")).unwrap();
     task
 }
 
 /// Opens a fresh store from disk (bypasses any in-memory cache state).
 fn fresh_store(root: &Path) -> CachedStore {
-    next::storage::open(root.to_path_buf()).unwrap().0
+    next::core::storage::open(root.to_path_buf()).unwrap().0
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +122,7 @@ fn push_without_remote_errors() {
     run_git(dir.path(), &["init", "-q"]);
     run_git(dir.path(), &["config", "user.email", "test@example.com"]);
     run_git(dir.path(), &["config", "user.name", "Test"]);
-    let (mut store, vcs) = next::storage::open(dir.path().to_path_buf()).unwrap();
+    let (mut store, vcs) = next::core::storage::open(dir.path().to_path_buf()).unwrap();
 
     // Commit a task so HEAD exists; then push should fail because there's no remote.
     commit_task(&mut store, &vcs, dir.path(), "Orphan task");
@@ -245,7 +245,7 @@ fn pull_reports_conflicts() {
     let mut task = Task::new("Shared task");
     task.slug = Some("shared".into());
     a_store.save_task(&task).unwrap();
-    let task_path_a = next::storage::task_path(a_dir.path(), &task);
+    let task_path_a = next::core::storage::task_path(a_dir.path(), &task);
     a_vcs.commit(std::slice::from_ref(&task_path_a), "next: add \"Shared task\"").unwrap();
     a_vcs.push().unwrap();
 
@@ -289,7 +289,7 @@ fn push_then_pull_preserves_all_task_data() {
     task.url = Some("https://example.com/ticket".into());
     task.tags = vec!["@work".into(), "#laptop".into()];
     a_store.save_task(&task).unwrap();
-    let path = next::storage::task_path(a_dir.path(), &task);
+    let path = next::core::storage::task_path(a_dir.path(), &task);
     a_vcs.commit(&[path], "next: add \"Detailed task\"").unwrap();
     a_vcs.push().unwrap();
 

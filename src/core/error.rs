@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-pub type Result<T> = std::result::Result<T, AppError>;
+pub type Result<T> = std::result::Result<T, TaskError>;
 
 #[derive(Debug, Error)]
-pub enum AppError {
+pub enum TaskError {
     #[error("invalid date expression '{0}': {1}")]
     InvalidDate(String, String),
 

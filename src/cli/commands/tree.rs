@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{self, Write};
 
-use crate::domain::tag;
-use crate::domain::task::{Status, Task};
+use crate::core::domain::tag;
+use crate::core::domain::task::{Status, Task};
 use uuid::Uuid;
 
 use crate::AppContext;

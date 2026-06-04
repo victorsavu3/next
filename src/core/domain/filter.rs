@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use chrono::NaiveDate;
 use uuid::Uuid;
 
-use crate::domain::{
+use crate::core::domain::{
     state::GlobalState,
     tag,
     task::Task,
@@ -250,7 +250,7 @@ fn descendants_of(root_id: Uuid, tasks: &[Task]) -> HashSet<Uuid> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::task::Task;
+    use crate::core::domain::task::Task;
     use chrono::NaiveDate;
 
     fn today() -> NaiveDate {

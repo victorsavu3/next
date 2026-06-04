@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use uuid::Uuid;
 
-use crate::{
+use crate::core::{
     domain::{state::GlobalState, tag::TagMeta, task::Task},
     error::Result,
 };
@@ -92,7 +92,7 @@ pub trait Store: Send + Sync {
     fn delete_tag_description(&mut self, tag: &str) -> Result<()> {
         let mut meta = self
             .get_tag_meta(tag)?
-            .ok_or_else(|| crate::error::AppError::Other(format!("no description set for tag {tag:?}")))?;
+            .ok_or_else(|| crate::core::error::TaskError::Other(format!("no description set for tag {tag:?}")))?;
         meta.description = None;
         if meta == TagMeta::default() {
             self.delete_tag_meta(tag)

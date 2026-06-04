@@ -34,7 +34,7 @@ use std::thread::ThreadId;
 
 use fs4::FileExt;
 
-use crate::error::{AppError, Result};
+use crate::core::error::{TaskError, Result};
 
 /// In-process gate guarding one lock file's OS lock.
 struct Gate {
@@ -93,9 +93,9 @@ fn open_and_flock(lock_path: &Path) -> Result<File> {
         .create(true)
         .truncate(false)
         .open(lock_path)
-        .map_err(|e| AppError::Other(format!("open lock file {}: {e}", lock_path.display())))?;
+        .map_err(|e| TaskError::Other(format!("open lock file {}: {e}", lock_path.display())))?;
     file.lock_exclusive()
-        .map_err(|e| AppError::Other(format!("acquire lock {}: {e}", lock_path.display())))?;
+        .map_err(|e| TaskError::Other(format!("acquire lock {}: {e}", lock_path.display())))?;
     Ok(file)
 }
 

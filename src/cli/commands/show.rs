@@ -1,7 +1,7 @@
 use chrono::Local;
-use crate::domain::scoring;
+use crate::core::scoring;
 
-use crate::{resolve::resolve_task_id, AppContext};
+use crate::{core::resolve::resolve_task_id, AppContext};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -108,10 +108,10 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     }
     if let Some(ref rec) = task.recurrence {
         match rec {
-            crate::domain::task::Recurrence::Schedule { rrule, .. } => {
+            crate::core::domain::task::Recurrence::Schedule { rrule, .. } => {
                 println!("Recur:    schedule ({rrule})");
             }
-            crate::domain::task::Recurrence::Completion { interval_days, .. } => {
+            crate::core::domain::task::Recurrence::Completion { interval_days, .. } => {
                 println!("Recur:    {interval_days}d after completion");
             }
         }

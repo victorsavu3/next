@@ -3,10 +3,10 @@ mod common;
 use chrono::Local;
 use next::cli::commands::{add, done, start};
 use next::core::FilterArgs;
-use next::domain::{filter, scoring};
-use next::domain::scoring::ScoredTask;
-use next::domain::tag::TagMeta;
-use next::domain::task::Priority;
+use next::core::{domain::filter, scoring};
+use next::core::scoring::ScoredTask;
+use next::core::domain::tag::TagMeta;
+use next::core::domain::task::Priority;
 
 fn add_args(title: &str) -> add::Args {
     add::Args {

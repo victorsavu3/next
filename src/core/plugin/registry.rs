@@ -4,7 +4,7 @@
 //! `next` notifies the plugin (see [`super::notify`]).  The registry is stored
 //! as `plugins.toml` beside the state file under `$XDG_STATE_HOME` (never
 //! committed to git — plugin binaries are per-machine), guarded by its own
-//! re-entrant lock (`.plugins.toml.lock`) via [`crate::storage::lock_plugins`].
+//! re-entrant lock (`.plugins.toml.lock`) via [`crate::core::storage::lock_plugins`].
 
 use std::fs;
 use std::path::Path;
@@ -12,8 +12,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{
-    error::{AppError, Result},
+use crate::core::{
+    error::{TaskError, Result},
     storage,
 };
 
@@ -57,7 +57,7 @@ impl PluginRegistry {
             .plugins
             .iter_mut()
             .find(|p| p.name == name)
-            .ok_or_else(|| AppError::Other(format!("unknown plugin {name:?} — register it first")))?;
+            .ok_or_else(|| TaskError::Other(format!("unknown plugin {name:?} — register it first")))?;
         if !plugin.tasks.contains(&task_id) {
             plugin.tasks.push(task_id);
         }
@@ -70,7 +70,7 @@ impl PluginRegistry {
             .plugins
             .iter_mut()
             .find(|p| p.name == name)
-            .ok_or_else(|| AppError::Other(format!("unknown plugin {name:?}")))?;
+            .ok_or_else(|| TaskError::Other(format!("unknown plugin {name:?}")))?;
         plugin.tasks.retain(|t| *t != task_id);
         Ok(())
     }
@@ -104,7 +104,7 @@ pub(crate) fn load_from(path: &Path) -> Result<PluginRegistry> {
     }
     let content = fs::read_to_string(path)?;
     toml::from_str::<PluginRegistry>(&content)
-        .map_err(|e| AppError::Other(format!("parse plugins.toml: {e}")))
+        .map_err(|e| TaskError::Other(format!("parse plugins.toml: {e}")))
 }
 
 pub(crate) fn save_to(path: &Path, reg: &PluginRegistry) -> Result<()> {
@@ -112,7 +112,7 @@ pub(crate) fn save_to(path: &Path, reg: &PluginRegistry) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     let content = toml::to_string_pretty(reg)
-        .map_err(|e| AppError::Other(format!("serialize plugins.toml: {e}")))?;
+        .map_err(|e| TaskError::Other(format!("serialize plugins.toml: {e}")))?;
     storage::toml_store::atomic_write(path, &content)
 }
 

@@ -3,7 +3,7 @@ mod meta;
 
 use std::collections::BTreeSet;
 
-use crate::domain::tag::{self, TagKind, TagMeta};
+use crate::core::domain::tag::{self, TagKind, TagMeta};
 use crate::AppContext;
 
 pub use data::{DataArgs, DataGetArgs, DataListArgs, DataSetArgs, DataSubcommand, DataUnsetArgs};

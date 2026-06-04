@@ -1,7 +1,7 @@
 use anyhow::Context as _;
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
 
-use super::task::{Recurrence, Snap, Task};
+use crate::core::domain::task::{Recurrence, Snap, Task};
 
 // ─── snap ──────────────────────────────────────────────────────────────────
 

@@ -1,7 +1,7 @@
 use chrono::{Local, NaiveDate, NaiveTime, TimeZone};
 use interim::{parse_date_string, Dialect};
 
-use crate::error::{AppError, Result};
+use crate::core::error::{TaskError, Result};
 
 /// Parses a date expression into a [`NaiveDate`].
 ///
@@ -19,11 +19,11 @@ pub fn parse_date(expr: &str, today: NaiveDate) -> Result<NaiveDate> {
     let now = Local
         .from_local_datetime(&today.and_time(NaiveTime::MIN))
         .single()
-        .ok_or_else(|| AppError::Other(format!("cannot build datetime for {today}")))?;
+        .ok_or_else(|| TaskError::Other(format!("cannot build datetime for {today}")))?;
 
     parse_date_string(expr, now, Dialect::Uk)
         .map(|dt| dt.date_naive())
-        .map_err(|e| AppError::Other(format!("cannot parse date {expr:?}: {e}")))
+        .map_err(|e| TaskError::Other(format!("cannot parse date {expr:?}: {e}")))
 }
 
 #[cfg(test)]

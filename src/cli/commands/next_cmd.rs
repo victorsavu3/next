@@ -1,5 +1,5 @@
 use chrono::Local;
-use crate::domain::{filter, scoring};
+use crate::core::{domain::filter, scoring};
 
 use crate::{cli::render, core::FilterArgs};
 use crate::AppContext;

@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
 
-use crate::domain::tag::{self, TagKind, TagMeta};
-use crate::domain::task::Priority;
-use crate::storage;
-use crate::AppContext;
+use crate::core::domain::tag::{self, TagKind, TagMeta};
+use crate::core::domain::task::Priority;
+use crate::core::storage;
+use crate::TaskRepository;
 
 
 /// Unified tag metadata tool.
@@ -15,7 +15,7 @@ use crate::AppContext;
 ///   write: "describe", "clear_description", "set_url", "clear_url",
 ///          "set_priority", "clear_priority",
 ///          "set_no_time_urgency", "clear_no_time_urgency"
-pub fn manage_tag(params: &Value, ctx: &mut AppContext) -> anyhow::Result<(Value, bool)> {
+pub fn manage_tag(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<(Value, bool)> {
     let action = params
         .get("action")
         .and_then(|v| v.as_str())
@@ -63,7 +63,7 @@ pub struct TagCatalog {
 }
 
 /// Builds the tag catalog from tag metadata and the tags in use across tasks.
-pub fn tag_catalog(ctx: &AppContext) -> anyhow::Result<TagCatalog> {
+pub fn tag_catalog(ctx: &TaskRepository) -> anyhow::Result<TagCatalog> {
     let metas = ctx.store.list_tag_metas()?;
     let tasks = ctx.store.list_tasks()?;
 
@@ -86,7 +86,7 @@ pub fn tag_catalog(ctx: &AppContext) -> anyhow::Result<TagCatalog> {
     Ok(catalog)
 }
 
-fn list(ctx: &AppContext) -> anyhow::Result<Value> {
+fn list(ctx: &TaskRepository) -> anyhow::Result<Value> {
     let catalog = tag_catalog(ctx)?;
     let to_json = |entries: &[CatalogEntry]| -> Vec<Value> {
         entries
@@ -101,14 +101,14 @@ fn list(ctx: &AppContext) -> anyhow::Result<Value> {
     }))
 }
 
-fn show(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+fn show(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
     let meta = ctx.store.get_tag_meta(t)?.unwrap_or_default();
     Ok(json!({ "tag": t, "meta": meta }))
 }
 
-fn describe(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+fn describe(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
     let description = params
         .get("description")
@@ -124,7 +124,7 @@ fn describe(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     Ok(json!({ "tag": t, "description": description }))
 }
 
-fn clear_description(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+fn clear_description(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
     ctx.transaction(|store, vcs, root| {
         store.delete_tag_description(t)?;
@@ -135,7 +135,7 @@ fn clear_description(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Val
     Ok(json!({ "tag": t, "cleared": "description" }))
 }
 
-fn set_url(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+fn set_url(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
     let url = params
         .get("url")
@@ -153,7 +153,7 @@ fn set_url(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     Ok(json!({ "tag": t, "url": url }))
 }
 
-fn clear_url(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+fn clear_url(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
     ctx.transaction(|store, vcs, root| {
@@ -173,7 +173,7 @@ fn clear_url(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     Ok(json!({ "tag": t, "cleared": "url" }))
 }
 
-fn set_priority(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+fn set_priority(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
     let priority_str = params
         .get("priority")
@@ -192,7 +192,7 @@ fn set_priority(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     Ok(json!({ "tag": t, "priority": priority_str }))
 }
 
-fn clear_priority(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+fn clear_priority(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
     ctx.transaction(|store, vcs, root| {
@@ -212,7 +212,7 @@ fn clear_priority(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value>
     Ok(json!({ "tag": t, "cleared": "priority" }))
 }
 
-fn set_no_time_urgency(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+fn set_no_time_urgency(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
     ctx.transaction(|store, vcs, root| {
@@ -226,7 +226,7 @@ fn set_no_time_urgency(params: &Value, ctx: &mut AppContext) -> anyhow::Result<V
     Ok(json!({ "tag": t, "no_time_urgency": true }))
 }
 
-fn clear_no_time_urgency(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+fn clear_no_time_urgency(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
     ctx.transaction(|store, vcs, root| {
@@ -249,10 +249,10 @@ fn clear_no_time_urgency(params: &Value, ctx: &mut AppContext) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Config, AppContext};
+    use crate::TaskRepository;
     use tempfile::TempDir;
 
-    fn make_ctx() -> (TempDir, AppContext) {
+    fn make_ctx() -> (TempDir, TaskRepository) {
         let dir = tempfile::tempdir().unwrap();
         for args in [
             vec!["init", "-q"],
@@ -265,8 +265,8 @@ mod tests {
                 .status()
                 .unwrap();
         }
-        let (store, vcs) = crate::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = AppContext::with_parts(Config::default(), Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
+        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 

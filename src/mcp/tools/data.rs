@@ -1,10 +1,10 @@
 use serde_json::{json, Value};
 
 use crate::core::parse_value;
-use crate::domain::task::validate_key;
-use crate::resolve::resolve_task_id;
-use crate::storage;
-use crate::AppContext;
+use crate::core::domain::task::validate_key;
+use crate::core::resolve::resolve_task_id;
+use crate::core::storage;
+use crate::TaskRepository;
 
 /// Unified task data key-value tool.
 ///
@@ -13,7 +13,7 @@ use crate::AppContext;
 ///   write: "set", "unset"
 ///
 /// Returns `(result_value, is_mutation)`.
-pub fn manage_task_data(params: &Value, ctx: &mut AppContext) -> anyhow::Result<(Value, bool)> {
+pub fn manage_task_data(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<(Value, bool)> {
     let action = params
         .get("action")
         .and_then(|v| v.as_str())
@@ -35,7 +35,7 @@ fn require_id(params: &Value) -> anyhow::Result<&str> {
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: id"))
 }
 
-fn get(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+fn get(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let id_str = require_id(params)?;
     let key = params
         .get("key")
@@ -54,14 +54,14 @@ fn get(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     Ok(value.clone())
 }
 
-fn list(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+fn list(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let id_str = require_id(params)?;
     let id = resolve_task_id(&*ctx.store, id_str)?;
     let task = ctx.store.get_task(id)?;
     Ok(serde_json::to_value(&task.data)?)
 }
 
-fn set(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+fn set(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let id_str = require_id(params)?;
     let key = params
         .get("key")
@@ -91,7 +91,7 @@ fn set(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     Ok(json!({ "id": task_id.to_string(), "key": key, "value": value }))
 }
 
-fn unset(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
+fn unset(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let id_str = require_id(params)?;
     let key = params
         .get("key")
@@ -123,10 +123,10 @@ fn unset(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Config, AppContext};
+    use crate::TaskRepository;
     use tempfile::TempDir;
 
-    fn make_ctx() -> (TempDir, AppContext) {
+    fn make_ctx() -> (TempDir, TaskRepository) {
         let dir = tempfile::tempdir().unwrap();
         for args in [
             vec!["init", "-q"],
@@ -139,14 +139,14 @@ mod tests {
                 .status()
                 .unwrap();
         }
-        let (store, vcs) = crate::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = AppContext::with_parts(Config::default(), Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
+        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 
-    fn add_task_raw(title: &str, ctx: &mut AppContext) -> String {
-        use crate::domain::task::Task;
-        use crate::storage;
+    fn add_task_raw(title: &str, ctx: &mut TaskRepository) -> String {
+        use crate::core::domain::task::Task;
+        use crate::core::storage;
         let task = Task::new(title.to_owned());
         let path = storage::task_path(&ctx.repo_root, &task);
         ctx.store.save_task(&task).unwrap();
@@ -232,13 +232,13 @@ mod tests {
 
     #[test]
     fn validate_key_unit_rejects_empty() {
-        use crate::domain::task::validate_key;
+        use crate::core::domain::task::validate_key;
         assert!(validate_key("").is_err());
     }
 
     #[test]
     fn validate_key_unit_accepts_valid_keys() {
-        use crate::domain::task::validate_key;
+        use crate::core::domain::task::validate_key;
         assert!(validate_key("score").is_ok());
         assert!(validate_key("my-key_123").is_ok());
         assert!(validate_key(&"a".repeat(256)).is_ok());

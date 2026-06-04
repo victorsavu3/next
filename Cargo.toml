@@ -27,7 +27,7 @@ forgejo = [
 
 [[bin]]
 name = "next"
-path = "src/main.rs"
+path = "src/cli/main.rs"
 required-features = ["cli"]
 
 [[bin]]

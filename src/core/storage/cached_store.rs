@@ -1,8 +1,8 @@
 use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
-use crate::{
+use crate::core::{
     domain::{state::GlobalState, tag::TagMeta, task::Task},
-    error::{AppError, Result},
+    error::{TaskError, Result},
     store::Store,
 };
 use rusqlite::{params, Connection, OptionalExtension as _};
@@ -32,7 +32,7 @@ impl CachedStore {
     /// the TOML files before returning.
     pub fn open(inner: TomlStore, db_path: PathBuf, head_hash: &str) -> Result<Self> {
         let conn = Connection::open(&db_path)
-            .map_err(|e| AppError::Other(format!("sqlite open {}: {e}", db_path.display())))?;
+            .map_err(|e| TaskError::Other(format!("sqlite open {}: {e}", db_path.display())))?;
         configure_connection(&conn)?;
         setup_schema(&conn)?;
         let stored = get_meta(&conn, "head_hash")?;
@@ -53,7 +53,7 @@ impl CachedStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| AppError::Other("sqlite lock poisoned".into()))?;
+            .map_err(|_| TaskError::Other("sqlite lock poisoned".into()))?;
         f(&conn)
     }
 
@@ -62,12 +62,12 @@ impl CachedStore {
         let state = self.inner.get_state()?;
         self.with_conn(|conn| {
             conn.execute("DELETE FROM tasks", [])
-                .map_err(|e| AppError::Other(format!("sqlite clear tasks: {e}")))?;
+                .map_err(|e| TaskError::Other(format!("sqlite clear tasks: {e}")))?;
             for task in &tasks {
                 upsert_task(conn, task)?;
             }
             let state_json = serde_json::to_string(&state)
-                .map_err(|e| AppError::Other(format!("serialize state: {e}")))?;
+                .map_err(|e| TaskError::Other(format!("serialize state: {e}")))?;
             set_meta(conn, "state", &state_json)?;
             set_meta(conn, "head_hash", head_hash)?;
             Ok(())
@@ -89,8 +89,8 @@ impl Store for CachedStore {
                 |row| row.get::<_, String>(0),
             )
             .optional()
-            .map_err(|e| AppError::Other(format!("sqlite get task: {e}")))?
-            .ok_or_else(|| AppError::TaskNotFound(id_str.clone()))
+            .map_err(|e| TaskError::Other(format!("sqlite get task: {e}")))?
+            .ok_or_else(|| TaskError::TaskNotFound(id_str.clone()))
             .and_then(deserialize_task)
         })
     }
@@ -103,7 +103,7 @@ impl Store for CachedStore {
                 |row| row.get::<_, String>(0),
             )
             .optional()
-            .map_err(|e| AppError::Other(format!("sqlite get by slug: {e}")))?
+            .map_err(|e| TaskError::Other(format!("sqlite get by slug: {e}")))?
             .map(deserialize_task)
             .transpose()
         })
@@ -114,10 +114,10 @@ impl Store for CachedStore {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare("SELECT data FROM tasks WHERE id LIKE ?1")
-                .map_err(|e| AppError::Other(format!("sqlite prepare prefix: {e}")))?;
+                .map_err(|e| TaskError::Other(format!("sqlite prepare prefix: {e}")))?;
             let result = collect_task_rows(
                 stmt.query_map(params![pattern], |row| row.get::<_, String>(0))
-                    .map_err(|e| AppError::Other(format!("sqlite query prefix: {e}")))?,
+                    .map_err(|e| TaskError::Other(format!("sqlite query prefix: {e}")))?,
             );
             result
         })
@@ -127,10 +127,10 @@ impl Store for CachedStore {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare("SELECT data FROM tasks")
-                .map_err(|e| AppError::Other(format!("sqlite prepare list: {e}")))?;
+                .map_err(|e| TaskError::Other(format!("sqlite prepare list: {e}")))?;
             let result = collect_task_rows(
                 stmt.query_map([], |row| row.get::<_, String>(0))
-                    .map_err(|e| AppError::Other(format!("sqlite query list: {e}")))?,
+                    .map_err(|e| TaskError::Other(format!("sqlite query list: {e}")))?,
             );
             result
         })
@@ -146,7 +146,7 @@ impl Store for CachedStore {
         let id_str = id.to_string();
         self.with_conn(|conn| {
             conn.execute("DELETE FROM tasks WHERE id = ?1", params![id_str])
-                .map_err(|e| AppError::Other(format!("sqlite delete task: {e}")))?;
+                .map_err(|e| TaskError::Other(format!("sqlite delete task: {e}")))?;
             Ok(())
         })
     }
@@ -154,7 +154,7 @@ impl Store for CachedStore {
     fn get_state(&self) -> Result<GlobalState> {
         self.with_conn(|conn| match get_meta(conn, "state")? {
             Some(json) => serde_json::from_str(&json)
-                .map_err(|e| AppError::Other(format!("deserialize state: {e}"))),
+                .map_err(|e| TaskError::Other(format!("deserialize state: {e}"))),
             None => Ok(GlobalState::default()),
         })
     }
@@ -162,7 +162,7 @@ impl Store for CachedStore {
     fn save_state(&mut self, state: &GlobalState) -> Result<()> {
         self.inner.save_state(state)?;
         let json = serde_json::to_string(state)
-            .map_err(|e| AppError::Other(format!("serialize state: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("serialize state: {e}")))?;
         self.with_conn(|conn| set_meta(conn, "state", &json))
     }
 
@@ -211,9 +211,9 @@ fn configure_connection(conn: &Connection) -> Result<()> {
     // WAL persists in the database header; setting it on every open is
     // idempotent.  `synchronous=NORMAL` is the standard, safe companion to WAL.
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
-        .map_err(|e| AppError::Other(format!("sqlite pragma setup: {e}")))?;
+        .map_err(|e| TaskError::Other(format!("sqlite pragma setup: {e}")))?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
-        .map_err(|e| AppError::Other(format!("sqlite busy_timeout: {e}")))?;
+        .map_err(|e| TaskError::Other(format!("sqlite busy_timeout: {e}")))?;
     Ok(())
 }
 
@@ -232,7 +232,7 @@ fn setup_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_tasks_slug ON tasks(slug);
         ",
     )
-    .map_err(|e| AppError::Other(format!("sqlite schema setup: {e}")))
+    .map_err(|e| TaskError::Other(format!("sqlite schema setup: {e}")))
 }
 
 fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
@@ -242,7 +242,7 @@ fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
         |row| row.get(0),
     )
     .optional()
-    .map_err(|e| AppError::Other(format!("sqlite meta get '{key}': {e}")))
+    .map_err(|e| TaskError::Other(format!("sqlite meta get '{key}': {e}")))
 }
 
 fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
@@ -250,23 +250,23 @@ fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
         "INSERT OR REPLACE INTO meta(key, value) VALUES(?1, ?2)",
         params![key, value],
     )
-    .map_err(|e| AppError::Other(format!("sqlite meta set '{key}': {e}")))?;
+    .map_err(|e| TaskError::Other(format!("sqlite meta set '{key}': {e}")))?;
     Ok(())
 }
 
 fn upsert_task(conn: &Connection, task: &Task) -> Result<()> {
     let data = serde_json::to_string(task)
-        .map_err(|e| AppError::Other(format!("serialize task {}: {e}", task.id)))?;
+        .map_err(|e| TaskError::Other(format!("serialize task {}: {e}", task.id)))?;
     conn.execute(
         "INSERT OR REPLACE INTO tasks(id, slug, data) VALUES(?1, ?2, ?3)",
         params![task.id.to_string(), task.slug.as_deref(), data],
     )
-    .map_err(|e| AppError::Other(format!("sqlite upsert task {}: {e}", task.id)))?;
+    .map_err(|e| TaskError::Other(format!("sqlite upsert task {}: {e}", task.id)))?;
     Ok(())
 }
 
 fn deserialize_task(data: String) -> Result<Task> {
-    serde_json::from_str(&data).map_err(|e| AppError::Other(format!("deserialize task: {e}")))
+    serde_json::from_str(&data).map_err(|e| TaskError::Other(format!("deserialize task: {e}")))
 }
 
 fn collect_task_rows<'a>(
@@ -274,7 +274,7 @@ fn collect_task_rows<'a>(
 ) -> Result<Vec<Task>> {
     let mut tasks = Vec::new();
     for row in rows {
-        let data = row.map_err(|e| AppError::Other(format!("sqlite row: {e}")))?;
+        let data = row.map_err(|e| TaskError::Other(format!("sqlite row: {e}")))?;
         tasks.push(deserialize_task(data)?);
     }
     Ok(tasks)
@@ -288,14 +288,14 @@ fn collect_task_rows<'a>(
 mod tests {
     use std::fs;
 
-    use crate::{
+    use crate::core::{
         domain::task::{Priority, Status},
         store::VcsBackend as _,
     };
     use tempfile::TempDir;
 
     use super::*;
-    use crate::storage::GitBackend;
+    use crate::core::storage::GitBackend;
 
     fn setup() -> (TempDir, CachedStore, GitBackend) {
         let dir = TempDir::new().unwrap();
@@ -319,7 +319,7 @@ mod tests {
         let mode: String = store
             .with_conn(|conn| {
                 conn.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
-                    .map_err(|e| AppError::Other(e.to_string()))
+                    .map_err(|e| TaskError::Other(e.to_string()))
             })
             .unwrap();
         assert_eq!(mode.to_lowercase(), "wal", "cache must run in WAL mode");
@@ -351,7 +351,7 @@ mod tests {
     fn get_task_not_found() {
         let (_dir, store, _vcs) = setup();
         let err = store.get_task(Uuid::new_v4()).unwrap_err();
-        assert!(matches!(err, AppError::TaskNotFound(_)));
+        assert!(matches!(err, TaskError::TaskNotFound(_)));
     }
 
     #[test]
@@ -399,7 +399,7 @@ mod tests {
         store.delete_task(task.id).unwrap();
         assert!(matches!(
             store.get_task(task.id).unwrap_err(),
-            AppError::TaskNotFound(_)
+            TaskError::TaskNotFound(_)
         ));
     }
 
@@ -478,7 +478,7 @@ mod tests {
             store.save_task(&task).unwrap();
 
             // Commit the TOML file to advance HEAD.
-            let task_path = crate::storage::task_path(dir.path(), &task);
+            let task_path = crate::core::storage::task_path(dir.path(), &task);
             vcs.commit(&[task_path], "add task").unwrap();
         }
 

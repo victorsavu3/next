@@ -1,7 +1,7 @@
 /// Integration tests for the legacy `tag_descriptions` → per-tag-file migration.
 ///
 /// Each test writes a raw `state.toml` with the old format (a `[tag_descriptions]`
-/// table), then calls `next::storage::open()` to simulate a fresh process opening an
+/// table), then calls `next::core::storage::open()` to simulate a fresh process opening an
 /// existing repository.  The migration runs automatically during `open()`, so these
 /// tests verify the end-to-end behaviour through the full `CachedStore` stack.
 use std::{
@@ -11,8 +11,8 @@ use std::{
     process::Command,
 };
 
-use next::store::Store as _;
-use next::storage::CachedStore;
+use next::core::store::Store as _;
+use next::core::storage::CachedStore;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -43,7 +43,7 @@ fn write_legacy_state(root: &Path, descriptions: &HashMap<&str, &str>) {
 }
 
 fn open(dir: &TempDir) -> CachedStore {
-    let (store, _vcs) = next::storage::open(dir.path().to_path_buf()).unwrap();
+    let (store, _vcs) = next::core::storage::open(dir.path().to_path_buf()).unwrap();
     store
 }
 
@@ -96,7 +96,7 @@ fn migration_removes_tag_descriptions_from_state_toml() {
     );
 
     // Verify via the store's external state path.
-    let state_path = next::storage::state_path_for_repo(dir.path());
+    let state_path = next::core::storage::state_path_for_repo(dir.path());
     let state_content = fs::read_to_string(&state_path).unwrap();
     assert!(
         !state_content.contains("tag_descriptions"),

@@ -116,10 +116,10 @@ fn main() -> anyhow::Result<()> {
     if result.is_ok() {
         let events = ctx.take_task_events();
         let repo_root = ctx.repo_root.clone();
-        next::plugin::notify(&repo_root, &events, ctx.plugin_origin());
+        next::core::plugin::notify(&repo_root, &events, ctx.plugin_origin());
         for ev in &events {
             if ev.verb == "delete" {
-                let _ = next::plugin::registry::prune_task(&repo_root, ev.task_id);
+                let _ = next::core::plugin::registry::prune_task(&repo_root, ev.task_id);
             }
         }
     }

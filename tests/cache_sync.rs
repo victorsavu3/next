@@ -14,14 +14,11 @@ use std::{
     path::Path,
 };
 
-use next::{
-    domain::{
-        state::GlobalState,
-        task::{Priority, Status, Task},
-    },
+use next::core::{
+    domain::{state::GlobalState, task::{Priority, Status, Task}},
     store::{Store, VcsBackend},
 };
-use next::storage::{CachedStore, GitBackend, TomlStore};
+use next::core::storage::{CachedStore, GitBackend, TomlStore};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -173,12 +170,12 @@ fn delete_task_removes_from_both_stores() {
     assert_sync(dir.path(), &head);
 
     // TOML file must be gone.
-    let path = next::storage::task_path(dir.path(), &task);
+    let path = next::core::storage::task_path(dir.path(), &task);
     assert!(!path.exists(), "TOML file still present after delete");
 
     // SQLite must also not have it.
     let err = store.get_task(task.id).unwrap_err();
-    assert!(matches!(err, next::error::AppError::TaskNotFound(_)));
+    assert!(matches!(err, next::core::error::TaskError::TaskNotFound(_)));
 }
 
 #[test]
@@ -363,7 +360,7 @@ fn same_head_reuses_cache_does_not_see_bypass_writes() {
     store.save_task(&known).unwrap();
 
     // Commit the known task so there's a real HEAD.
-    let known_path = next::storage::task_path(dir.path(), &known);
+    let known_path = next::core::storage::task_path(dir.path(), &known);
     vcs.commit(&[known_path], "add known task").unwrap();
     let head = vcs.head_hash().unwrap();
 
@@ -404,14 +401,14 @@ fn pull_adds_new_task() {
     // Commit an initial task so we have a real HEAD.
     let existing = Task::new("Existing");
     store.save_task(&existing).unwrap();
-    let path = next::storage::task_path(dir.path(), &existing);
+    let path = next::core::storage::task_path(dir.path(), &existing);
     vcs.commit(&[path], "add existing").unwrap();
 
     // Simulate pull: a new TOML file appears and is committed.
     let mut pulled = Task::new("Pulled task");
     pulled.slug = Some("pulled".into());
     write_toml_task(dir.path(), &pulled);
-    let pulled_path = next::storage::task_path(dir.path(), &pulled);
+    let pulled_path = next::core::storage::task_path(dir.path(), &pulled);
     vcs.commit(&[pulled_path], "add pulled task").unwrap();
 
     let new_head = vcs.head_hash().unwrap();
@@ -435,13 +432,13 @@ fn pull_removes_task() {
     store.save_task(&keep).unwrap();
     store.save_task(&remove).unwrap();
 
-    let keep_path = next::storage::task_path(dir.path(), &keep);
-    let remove_path = next::storage::task_path(dir.path(), &remove);
+    let keep_path = next::core::storage::task_path(dir.path(), &keep);
+    let remove_path = next::core::storage::task_path(dir.path(), &remove);
     vcs.commit(&[keep_path, remove_path], "add both tasks").unwrap();
 
     // Simulate pull: the remove task is deleted from the working tree and committed.
-    fs::remove_file(next::storage::task_path(dir.path(), &remove)).unwrap();
-    let remove_path2 = next::storage::task_path(dir.path(), &remove);
+    fs::remove_file(next::core::storage::task_path(dir.path(), &remove)).unwrap();
+    let remove_path2 = next::core::storage::task_path(dir.path(), &remove);
     vcs.commit(&[remove_path2], "remove task").unwrap();
 
     let new_head = vcs.head_hash().unwrap();
@@ -462,7 +459,7 @@ fn pull_modifies_task_field() {
     let mut task = Task::new("Original title");
     task.slug = Some("my-task".into());
     store.save_task(&task).unwrap();
-    let path = next::storage::task_path(dir.path(), &task);
+    let path = next::core::storage::task_path(dir.path(), &task);
     vcs.commit(std::slice::from_ref(&path), "add task").unwrap();
 
     // Simulate pull: the TOML file is rewritten with a new title and priority.
@@ -490,7 +487,7 @@ fn pull_adds_multiple_tasks() {
     // Commit a seed task.
     let seed = Task::new("Seed");
     store.save_task(&seed).unwrap();
-    let seed_path = next::storage::task_path(dir.path(), &seed);
+    let seed_path = next::core::storage::task_path(dir.path(), &seed);
     vcs.commit(&[seed_path], "seed").unwrap();
 
     // Simulate a pull that added 5 tasks.
@@ -498,7 +495,7 @@ fn pull_adds_multiple_tasks() {
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
     for t in &new_tasks {
         write_toml_task(dir.path(), t);
-        paths.push(next::storage::task_path(dir.path(), t));
+        paths.push(next::core::storage::task_path(dir.path(), t));
     }
     vcs.commit(&paths, "bulk add via pull").unwrap();
 
@@ -519,7 +516,7 @@ fn pull_removes_multiple_tasks() {
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
     for t in &tasks {
         store.save_task(t).unwrap();
-        paths.push(next::storage::task_path(dir.path(), t));
+        paths.push(next::core::storage::task_path(dir.path(), t));
     }
     vcs.commit(&paths, "add all").unwrap();
 
@@ -528,7 +525,7 @@ fn pull_removes_multiple_tasks() {
     let kept = &tasks[3..];
     let mut del_paths = Vec::new();
     for t in removed {
-        let p = next::storage::task_path(dir.path(), t);
+        let p = next::core::storage::task_path(dir.path(), t);
         fs::remove_file(&p).unwrap();
         del_paths.push(p);
     }
@@ -564,9 +561,9 @@ fn pull_mixed_changes() {
     store.save_task(&existing_b).unwrap();
     store.save_task(&existing_c).unwrap();
 
-    let path_a = next::storage::task_path(dir.path(), &existing_a);
-    let path_b = next::storage::task_path(dir.path(), &existing_b);
-    let path_c = next::storage::task_path(dir.path(), &existing_c);
+    let path_a = next::core::storage::task_path(dir.path(), &existing_a);
+    let path_b = next::core::storage::task_path(dir.path(), &existing_b);
+    let path_c = next::core::storage::task_path(dir.path(), &existing_c);
     vcs.commit(&[path_a.clone(), path_b.clone(), path_c.clone()], "initial").unwrap();
 
     // Pull: modify A, remove B, add D.
@@ -579,7 +576,7 @@ fn pull_mixed_changes() {
 
     let task_d = Task::new("Task D");
     write_toml_task(dir.path(), &task_d);
-    let path_d = next::storage::task_path(dir.path(), &task_d);
+    let path_d = next::core::storage::task_path(dir.path(), &task_d);
 
     vcs.commit(&[path_a, path_b, path_d], "mixed pull").unwrap();
 
@@ -618,7 +615,7 @@ fn pull_updates_state() {
     // Commit a task to have a real HEAD.
     let task = Task::new("Anchor");
     store.save_task(&task).unwrap();
-    let task_path = next::storage::task_path(dir.path(), &task);
+    let task_path = next::core::storage::task_path(dir.path(), &task);
     vcs.commit(&[task_path], "anchor commit").unwrap();
 
     // Simulate pull: state.toml is replaced externally with new contexts.
@@ -654,7 +651,7 @@ fn pull_with_no_prior_cache() {
     let mut paths = Vec::new();
     for t in &tasks {
         write_toml_task(dir.path(), t);
-        paths.push(next::storage::task_path(dir.path(), t));
+        paths.push(next::core::storage::task_path(dir.path(), t));
     }
     vcs.commit(&paths, "initial commit from pull").unwrap();
 
@@ -673,7 +670,7 @@ fn pull_changes_are_queryable_by_slug() {
     let mut task = Task::new("Project X");
     task.slug = Some("project-x".into());
     write_toml_task(dir.path(), &task);
-    let path = next::storage::task_path(dir.path(), &task);
+    let path = next::core::storage::task_path(dir.path(), &task);
     vcs.commit(&[path], "add via pull").unwrap();
 
     let head = vcs.head_hash().unwrap();
@@ -692,7 +689,7 @@ fn pull_changes_are_queryable_by_prefix() {
 
     let task = Task::new("Find by prefix");
     write_toml_task(dir.path(), &task);
-    let path = next::storage::task_path(dir.path(), &task);
+    let path = next::core::storage::task_path(dir.path(), &task);
     vcs.commit(&[path], "add via pull").unwrap();
 
     let head = vcs.head_hash().unwrap();
@@ -715,7 +712,7 @@ fn successive_pulls_all_converge() {
     for round in 1u32..=3 {
         let task = Task::new(format!("Round {round} task"));
         write_toml_task(dir.path(), &task);
-        let path = next::storage::task_path(dir.path(), &task);
+        let path = next::core::storage::task_path(dir.path(), &task);
         vcs.commit(&[path], &format!("round {round}")).unwrap();
 
         let head = vcs.head_hash().unwrap();

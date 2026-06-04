@@ -1,4 +1,4 @@
-use crate::{resolve::resolve_task_id, AppContext};
+use crate::{core::resolve::resolve_task_id, AppContext};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {

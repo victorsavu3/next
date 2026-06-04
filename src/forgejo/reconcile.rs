@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::domain::task::Status;
+use crate::core::domain::task::Status;
 
 use super::{
     config::Mapping,
@@ -66,7 +66,7 @@ pub fn sync(
 
         let issue_list = issues.list_issues(owner, repo)?;
         let linked = tasks.list_linked(&repo_full)?;
-        let by_issue: HashMap<i64, &crate::domain::task::Task> = linked
+        let by_issue: HashMap<i64, &crate::core::domain::task::Task> = linked
             .iter()
             .filter_map(|t| forgejo_link(t).map(|(_, n)| (n, t)))
             .collect();
@@ -114,7 +114,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::domain::task::Task;
+    use crate::core::domain::task::Task;
     use crate::forgejo::issues::ForgejoIssue;
     use crate::forgejo::keys;
 

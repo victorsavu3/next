@@ -2,8 +2,8 @@ mod common;
 
 use chrono::Local;
 use next::cli::commands::{add, user};
-use next::store::Store as _;
-use next::domain::{filter, scoring};
+use next::core::store::Store as _;
+use next::core::{domain::filter, scoring};
 use next::core::FilterArgs;
 
 fn add_args(title: &str) -> add::Args {
@@ -194,7 +194,7 @@ fn user_state_survives_store_reload() {
     )
     .unwrap();
 
-    let (fresh_store, _) = next::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let (fresh_store, _) = next::core::storage::open(env.ctx.repo_root.clone()).unwrap();
     let state = fresh_store.get_state().unwrap();
     assert_eq!(state.active_users, vec!["carol".to_string()]);
 }

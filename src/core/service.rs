@@ -10,13 +10,12 @@ use chrono::NaiveDate;
 use uuid::Uuid;
 
 use crate::{
-    domain::{
+    core::{
+        domain::{tag, task::{Recurrence, Task}},
         recurrence::spawn_next,
-        tag,
-        task::{Recurrence, Task},
+        resolve::resolve_task_id,
+        storage::{self, FileLock},
     },
-    resolve::resolve_task_id,
-    storage::{self, FileLock},
     Store, VcsBackend,
 };
 
@@ -407,10 +406,10 @@ pub fn apply_edits(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AppContext, Config};
+    use crate::TaskRepository;
     use tempfile::TempDir;
 
-    fn make_ctx() -> (TempDir, AppContext) {
+    fn make_ctx() -> (TempDir, TaskRepository) {
         let dir = tempfile::tempdir().unwrap();
         for args in [
             vec!["init", "-q"],
@@ -423,8 +422,8 @@ mod tests {
                 .status()
                 .unwrap();
         }
-        let (store, vcs) = crate::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = AppContext::with_parts(Config::default(), Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
+        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 
@@ -559,13 +558,13 @@ mod tests {
         )
         .unwrap();
 
-        use crate::domain::task::Status;
+        use crate::core::domain::task::Status;
         assert_eq!(completed.status, Status::Done);
     }
 
     #[test]
     fn complete_task_spawns_recurrence_instance() {
-        use crate::domain::task::Recurrence;
+        use crate::core::domain::task::Recurrence;
 
         let (_dir, mut ctx) = make_ctx();
         let params = CreateTaskParams {

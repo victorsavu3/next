@@ -1,7 +1,7 @@
 mod common;
 
 use chrono::Local;
-use next::domain::{filter, scoring::ScoredTask, scoring};
+use next::core::{domain::filter, scoring::{self, ScoredTask}};
 use next::cli::commands::add;
 use next::core::FilterArgs;
 
@@ -350,7 +350,7 @@ fn project_filter_returns_descendants() {
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.store.get_state().unwrap();
     let all = env.ctx.store.list_tasks().unwrap();
-    let filtered = next::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
     let titles: Vec<&str> = filtered.iter().map(|t| t.title.as_str()).collect();
     assert!(titles.contains(&"Launch blog"), "root should be included");
     assert!(titles.contains(&"Write copy"));
@@ -388,7 +388,7 @@ fn project_filter_includes_grandchildren() {
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.store.get_state().unwrap();
     let all = env.ctx.store.list_tasks().unwrap();
-    let filtered = next::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
     let titles: Vec<&str> = filtered.iter().map(|t| t.title.as_str()).collect();
     assert!(titles.contains(&"Root"));
     assert!(titles.contains(&"Child"));
@@ -406,7 +406,7 @@ fn project_filter_unknown_slug_returns_empty() {
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.store.get_state().unwrap();
     let all = env.ctx.store.list_tasks().unwrap();
-    let filtered = next::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
     assert!(filtered.is_empty());
 }
 
@@ -421,7 +421,7 @@ fn apply_filter_all(env: &mut common::TestEnv, tokens: Vec<String>) -> Vec<Score
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.store.get_state().unwrap();
     let all = env.ctx.store.list_tasks().unwrap();
-    let filtered = next::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
     scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring, &std::collections::HashMap::new())
 }
 
@@ -496,7 +496,7 @@ fn parent_filter_only_returns_active_descendants_by_default() {
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.store.get_state().unwrap();
     let all = env.ctx.store.list_tasks().unwrap();
-    let filtered = next::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
     let titles: Vec<&str> = filtered.iter().map(|t| t.title.as_str()).collect();
     assert!(titles.contains(&"Open child"));
     assert!(!titles.contains(&"Done child"), "done task excluded without --all");

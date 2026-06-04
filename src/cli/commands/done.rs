@@ -1,4 +1,4 @@
-use crate::{domain::{date_parse::parse_date, service::complete_task}, resolve::resolve_task_id, AppContext};
+use crate::{core::{domain::date_parse::parse_date, resolve::resolve_task_id, service::complete_task}, AppContext};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -27,9 +27,9 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let task = complete_task(
         id,
         completion_date,
-        &ctx.repo_root.clone(),
-        &mut *ctx.store,
-        &*ctx.vcs,
+        &ctx.repo.repo_root.clone(),
+        &mut *ctx.repo.store,
+        &*ctx.repo.vcs,
     )?;
     ctx.record_task_event("done", task.id);
 

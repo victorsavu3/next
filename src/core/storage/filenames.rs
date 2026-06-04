@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::domain::task::Task;
+use crate::core::domain::task::Task;
 
 /// Converts a task title to a URL-safe slug component:
 /// lowercase, runs of non-alphanumeric chars collapsed to a single `-`.
@@ -43,7 +43,7 @@ pub fn task_path(repo_root: &Path, task: &Task) -> PathBuf {
 mod tests {
     use uuid::Uuid;
 
-    use crate::domain::task::Task;
+    use crate::core::domain::task::Task;
 
     use super::*;
 

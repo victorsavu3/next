@@ -1,4 +1,4 @@
-use crate::{resolve::resolve_task_id, AppContext};
+use crate::{core::resolve::resolve_task_id, AppContext};
 
 #[derive(clap::Args, Debug)]
 #[command(name = "move")]
@@ -32,7 +32,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         task.touch();
         store.save_task(&task)?;
 
-        let task_path = crate::storage::task_path(root, &task);
+        let task_path = crate::core::storage::task_path(root, &task);
         vcs.commit(&[task_path], &format!("next: move {}", task.title))?;
         Ok(task)
     })?;

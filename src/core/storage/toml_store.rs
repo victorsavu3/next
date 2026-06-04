@@ -4,9 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{
+use crate::core::{
     domain::{state::GlobalState, tag::TagMeta, task::Task},
-    error::{AppError, Result},
+    error::{TaskError, Result},
     store::Store,
 };
 use serde::{Deserialize, Serialize};
@@ -41,7 +41,7 @@ impl TomlStore {
         if let Some(state_dir) = state_path.parent() {
             fs::create_dir_all(state_dir)?;
         }
-        let state_lock_path = crate::storage::state_lock_path(&state_path);
+        let state_lock_path = crate::core::storage::state_lock_path(&state_path);
         let mut this = Self { root, state_path, state_lock_path };
         this.migrate_state_file()?;
         this.migrate_tag_descriptions()?;
@@ -54,7 +54,7 @@ impl TomlStore {
         let old = self.root.join("state.toml");
         if old.exists() && !self.state_path.exists() {
             fs::copy(&old, &self.state_path)
-                .map_err(|e| AppError::Other(format!("migrate state.toml: {e}")))?;
+                .map_err(|e| TaskError::Other(format!("migrate state.toml: {e}")))?;
             let _ = fs::remove_file(&old);
         }
         Ok(())
@@ -69,7 +69,7 @@ impl TomlStore {
         }
         let content = fs::read_to_string(state_path)?;
         let raw: toml::Value = toml::from_str(&content)
-            .map_err(|e| AppError::Other(format!("parse state.toml during migration: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("parse state.toml during migration: {e}")))?;
 
         let Some(toml::Value::Table(descs)) = raw.get("tag_descriptions") else {
             return Ok(());
@@ -117,18 +117,18 @@ impl TomlStore {
     /// Absolute path for the metadata file of `tag`.
     /// `@home/kitchen` → `<root>/tags/%40home/kitchen.toml`
     fn tag_file_path(&self, tag: &str) -> PathBuf {
-        self.tags_dir().join(format!("{}.toml", crate::storage::encode_tag_path(tag)))
+        self.tags_dir().join(format!("{}.toml", crate::core::storage::encode_tag_path(tag)))
     }
 
     /// Acquires the exclusive repository-level lock.
     ///
     /// The lock is released when the returned guard is dropped.  Both
     /// `TomlStore` (task writes) and `GitBackend` (commit/pull/push) use the
-    /// same `.next.lock` file via [`crate::storage::FileLock`], so they are
+    /// same `.next.lock` file via [`crate::core::storage::FileLock`], so they are
     /// mutually exclusive across processes and threads, and re-entrant within a
     /// thread (so a transaction may hold the lock across nested writes).
-    pub(crate) fn acquire_repo_lock(&self) -> Result<crate::storage::FileLock> {
-        crate::storage::FileLock::acquire(&self.repo_lock_path())
+    pub(crate) fn acquire_repo_lock(&self) -> Result<crate::core::storage::FileLock> {
+        crate::core::storage::FileLock::acquire(&self.repo_lock_path())
     }
 
     /// Acquires the exclusive state-file lock (`.state.toml.lock`).
@@ -136,7 +136,7 @@ impl TomlStore {
     /// This is a *separate* lock from the repository lock (`.next.lock`): the
     /// machine-local state file lives outside the git repository and is never
     /// committed, so it has its own lock.  Like the repo lock it is re-entrant
-    /// within a thread via [`crate::storage::FileLock`], so a state transaction
+    /// within a thread via [`crate::core::storage::FileLock`], so a state transaction
     /// can hold it across `get_state` → modify → `save_state` while those nested
     /// calls re-acquire it harmlessly.
     ///
@@ -144,8 +144,8 @@ impl TomlStore {
     /// mutations are infrequent and cheap, and atomic writes already guarantee a
     /// reader never observes a half-written file.  A single lock mode keeps the
     /// lock re-entrant, which is what the read-modify-write transaction needs.
-    pub(crate) fn acquire_state_lock(&self) -> Result<crate::storage::FileLock> {
-        crate::storage::FileLock::acquire(self.state_lock_path())
+    pub(crate) fn acquire_state_lock(&self) -> Result<crate::core::storage::FileLock> {
+        crate::core::storage::FileLock::acquire(self.state_lock_path())
     }
 
     /// Finds the current on-disk path for `id`, or `None` if not found.
@@ -199,7 +199,7 @@ impl TomlStore {
             }
             let content = fs::read_to_string(path.as_path())?;
             let task = toml::from_str::<Task>(&content).map_err(|e| {
-                AppError::Other(format!("parse error in {}: {e}", path.display()))
+                TaskError::Other(format!("parse error in {}: {e}", path.display()))
             })?;
             tasks.push(task);
         }
@@ -217,9 +217,9 @@ pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<()> {
     tmp_name.push(".tmp");
     let tmp_path = PathBuf::from(tmp_name);
     fs::write(&tmp_path, content)
-        .map_err(|e| AppError::Other(format!("write {}: {e}", tmp_path.display())))?;
+        .map_err(|e| TaskError::Other(format!("write {}: {e}", tmp_path.display())))?;
     fs::rename(&tmp_path, path)
-        .map_err(|e| AppError::Other(format!("rename to {}: {e}", path.display())))?;
+        .map_err(|e| TaskError::Other(format!("rename to {}: {e}", path.display())))?;
     Ok(())
 }
 
@@ -240,7 +240,7 @@ fn walk_tags_dir(dir: &Path, root: &Path, result: &mut HashMap<String, TagMeta>)
                 });
                 if let Ok(rel) = path.strip_prefix(root) {
                     if let Some(encoded) = rel.with_extension("").to_str() {
-                        let tag = crate::storage::decode_tag_path(encoded);
+                        let tag = crate::core::storage::decode_tag_path(encoded);
                         result.insert(tag, meta);
                     }
                 }
@@ -256,10 +256,10 @@ impl Store for TomlStore {
             Some(path) => {
                 let content = fs::read_to_string(path.as_path())?;
                 toml::from_str::<Task>(&content).map_err(|e| {
-                    AppError::Other(format!("parse error in {}: {e}", path.display()))
+                    TaskError::Other(format!("parse error in {}: {e}", path.display()))
                 })
             }
-            None => Err(AppError::TaskNotFound(id.to_string())),
+            None => Err(TaskError::TaskNotFound(id.to_string())),
         }
     }
 
@@ -297,12 +297,12 @@ impl Store for TomlStore {
         if let Some(ref slug) = task.slug {
             if let Some(existing) = self.get_task_by_slug(slug)? {
                 if existing.id != task.id {
-                    return Err(AppError::SlugConflict(slug.clone()));
+                    return Err(TaskError::SlugConflict(slug.clone()));
                 }
             }
         }
 
-        let new_filename = crate::storage::filenames::generate_filename(task);
+        let new_filename = crate::core::storage::filenames::generate_filename(task);
         let new_path = self.tasks_dir().join(&new_filename);
 
         if let Some(old_path) = self.find_task_file(task.id)? {
@@ -312,7 +312,7 @@ impl Store for TomlStore {
         }
 
         let content = toml::to_string_pretty(task)
-            .map_err(|e| AppError::Other(format!("TOML serialization error: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("TOML serialization error: {e}")))?;
         atomic_write(&new_path, &content)?;
         Ok(())
     }
@@ -321,7 +321,7 @@ impl Store for TomlStore {
         let _lock = self.acquire_repo_lock()?;
         match self.find_task_file(id)? {
             Some(path) => Ok(fs::remove_file(path)?),
-            None => Err(AppError::TaskNotFound(id.to_string())),
+            None => Err(TaskError::TaskNotFound(id.to_string())),
         }
     }
 
@@ -337,7 +337,7 @@ impl Store for TomlStore {
         }
         let content = fs::read_to_string(path)?;
         toml::from_str::<GlobalState>(&content)
-            .map_err(|e| AppError::Other(format!("parse error in state.toml: {e}")))
+            .map_err(|e| TaskError::Other(format!("parse error in state.toml: {e}")))
     }
 
     fn save_state(&mut self, state: &GlobalState) -> Result<()> {
@@ -347,7 +347,7 @@ impl Store for TomlStore {
         // depth and the write is part of the transaction's critical section.
         let _lock = self.acquire_state_lock()?;
         let content = toml::to_string_pretty(state)
-            .map_err(|e| AppError::Other(format!("TOML serialization error: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("TOML serialization error: {e}")))?;
         atomic_write(self.state_path(), &content)?;
         Ok(())
     }
@@ -373,7 +373,7 @@ impl Store for TomlStore {
             fs::create_dir_all(parent)?;
         }
         let content = toml::to_string_pretty(&meta)
-            .map_err(|e| AppError::Other(format!("TOML serialization error: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("TOML serialization error: {e}")))?;
         atomic_write(&path, &content)?;
         Ok(())
     }
@@ -382,7 +382,7 @@ impl Store for TomlStore {
         let _lock = self.acquire_repo_lock()?;
         let path = self.tag_file_path(tag);
         if !path.exists() {
-            return Err(AppError::Other(format!("no metadata set for tag {tag:?}")));
+            return Err(TaskError::Other(format!("no metadata set for tag {tag:?}")));
         }
         fs::remove_file(&path)?;
         // Remove empty parent directories up to (but not including) tags/.
@@ -415,7 +415,7 @@ impl Store for TomlStore {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::domain::task::{Priority, Recurrence, Status};
+    use crate::core::domain::task::{Priority, Recurrence, Status};
 
     use super::*;
 
@@ -530,7 +530,7 @@ mod tests {
     fn delete_nonexistent_task_errors() {
         let (_dir, mut store) = temp_store();
         let err = store.delete_task(Uuid::new_v4()).unwrap_err();
-        assert!(matches!(err, AppError::TaskNotFound(_)));
+        assert!(matches!(err, TaskError::TaskNotFound(_)));
     }
 
     #[test]
@@ -543,7 +543,7 @@ mod tests {
 
         store.save_task(&t1).unwrap();
         let err = store.save_task(&t2).unwrap_err();
-        assert!(matches!(err, AppError::SlugConflict(_)));
+        assert!(matches!(err, TaskError::SlugConflict(_)));
     }
 
     #[test]

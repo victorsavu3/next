@@ -1,105 +1,25 @@
+//! `AppContext` — the CLI's application context.
+//!
+//! It is a [`TaskRepository`] plus the loaded `config.toml`. **Config-file
+//! handling lives here and is CLI-only**; everything else is core
+//! `TaskRepository`. `AppContext` derefs to its `TaskRepository`, so command
+//! handlers keep using `ctx.store`, `ctx.transaction(...)`, etc., and read
+//! CLI config via `ctx.config`.
+
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
-use uuid::Uuid;
-use crate::{plugin::TaskEvent, Config, Store, VcsBackend};
+
+use crate::{core::TaskRepository, Config};
 
 pub struct AppContext {
     pub config: Config,
-    pub store: Box<dyn Store>,
-    pub vcs: Box<dyn VcsBackend>,
-    /// Absolute path to the repository root (contains `.git` and `state.toml`).
-    pub repo_root: PathBuf,
-    /// Task mutations performed this run, drained at the post-mutation
-    /// chokepoint to notify subscribed plugins.
-    task_events: Vec<TaskEvent>,
-    /// The plugin that owns this process, from `NEXT_PLUGIN_ORIGIN`.  Skipped
-    /// when dispatching notifications so a plugin is never notified of its own
-    /// changes (loop guard).
-    plugin_origin: Option<String>,
+    pub repo: TaskRepository,
 }
 
 impl AppContext {
-    /// Assembles a context from its parts, reading the `NEXT_PLUGIN_ORIGIN`
-    /// loop-guard env var.  Used by [`AppContext::new`] and by tests that wire
-    /// up a store directly.
-    pub fn with_parts(
-        config: Config,
-        store: Box<dyn Store>,
-        vcs: Box<dyn VcsBackend>,
-        repo_root: PathBuf,
-    ) -> Self {
-        Self {
-            config,
-            store,
-            vcs,
-            repo_root,
-            task_events: Vec::new(),
-            plugin_origin: std::env::var("NEXT_PLUGIN_ORIGIN").ok().filter(|s| !s.is_empty()),
-        }
-    }
-
-    /// Records a task mutation for later plugin notification.  Called by each
-    /// mutating handler after its transaction returns (lock released).
-    pub fn record_task_event(&mut self, verb: &'static str, task_id: Uuid) {
-        self.task_events.push(TaskEvent::new(verb, task_id));
-    }
-
-    /// Drains the buffered task events (called at the post-mutation chokepoint).
-    pub fn take_task_events(&mut self) -> Vec<TaskEvent> {
-        std::mem::take(&mut self.task_events)
-    }
-
-    /// The plugin origin of this process, if any (loop guard).
-    pub fn plugin_origin(&self) -> Option<&str> {
-        self.plugin_origin.as_deref()
-    }
-
-    /// Returns a shared reference to the task store.
-    pub fn store(&self) -> &dyn Store {
-        &*self.store
-    }
-
-    /// Returns an exclusive reference to the task store.
-    pub fn store_mut(&mut self) -> &mut dyn Store {
-        &mut *self.store
-    }
-
-    /// Runs `f` as a repository mutation transaction.
-    ///
-    /// Holds the re-entrant repository lock for the entire closure so the
-    /// read-modify-write-commit sequence cannot interleave with another
-    /// process, reconciles the cache with the on-disk git HEAD before `f` runs
-    /// (so reads see other processes' commits), and records the new HEAD
-    /// afterwards.  `f` receives the store, the VCS backend, and the repo root,
-    /// and is responsible for performing the read, mutation, save, and commit.
-    pub fn transaction<T>(
-        &mut self,
-        f: impl FnOnce(&mut dyn Store, &dyn VcsBackend, &Path) -> anyhow::Result<T>,
-    ) -> anyhow::Result<T> {
-        let _lock =
-            crate::domain::service::begin_mutation(&self.repo_root, &mut *self.store, &*self.vcs)?;
-        let out = f(&mut *self.store, &*self.vcs, &self.repo_root)?;
-        crate::domain::service::end_mutation(&mut *self.store, &*self.vcs)?;
-        Ok(out)
-    }
-
-    /// Runs `f` as a machine-local state mutation transaction.
-    ///
-    /// Holds the exclusive state-file lock (`.state.toml.lock`) — *separate* from
-    /// the repository lock — across the entire closure, so a `get_state` →
-    /// modify → `save_state` sequence cannot interleave with another process and
-    /// lose updates.  State is not committed to git, so unlike [`transaction`]
-    /// there is no HEAD reconciliation.
-    pub fn state_transaction<T>(
-        &mut self,
-        f: impl FnOnce(&mut dyn Store) -> anyhow::Result<T>,
-    ) -> anyhow::Result<T> {
-        let _lock = crate::storage::lock_state(&self.repo_root)?;
-        f(&mut *self.store)
-    }
-
-    /// Construct an application context.
+    /// Constructs the CLI context.
     ///
     /// * `config_path` — use this config file instead of the XDG default.
     /// * `repo` — use this repository root instead of the config value or the
@@ -117,13 +37,25 @@ impl AppContext {
                  or set `repository` in the config file",
             )?
         };
-        let (s, v) = crate::storage::open(root.clone())
-            .context("failed to open local task store")?;
-        let v = v.with_subprocess(config.sync.git_subprocess);
-        let store: Box<dyn Store> = Box::new(s);
-        let vcs: Box<dyn VcsBackend> = Box::new(v);
+        let (store, vcs) =
+            crate::core::storage::open(root.clone()).context("failed to open local task store")?;
+        let vcs = vcs.with_subprocess(config.sync.git_subprocess);
+        let repo = TaskRepository::with_parts(Box::new(store), Box::new(vcs), root);
 
-        Ok(Self::with_parts(config, store, vcs, root))
+        Ok(Self { config, repo })
+    }
+}
+
+impl Deref for AppContext {
+    type Target = TaskRepository;
+    fn deref(&self) -> &TaskRepository {
+        &self.repo
+    }
+}
+
+impl DerefMut for AppContext {
+    fn deref_mut(&mut self) -> &mut TaskRepository {
+        &mut self.repo
     }
 }
 

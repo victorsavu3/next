@@ -4,11 +4,11 @@
 
 mod common;
 
-use next::domain::task::Status;
+use next::core::domain::task::Status;
 use next::forgejo::issues::{ForgejoIssue, IssueState};
 use next::forgejo::keys;
 use next::forgejo::tasks::{forgejo_link, LibTaskStore, TaskStore};
-use next::plugin::registry;
+use next::core::plugin::registry;
 
 fn issue() -> ForgejoIssue {
     ForgejoIssue {

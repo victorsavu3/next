@@ -84,7 +84,7 @@ fn next_excludes_done_tasks() {
     let all = env.ctx.store.list_tasks().unwrap();
     let open_count = all
         .iter()
-        .filter(|t| t.status == next::domain::task::Status::Open)
+        .filter(|t| t.status == next::core::domain::task::Status::Open)
         .count();
     assert_eq!(open_count, 1);
 }

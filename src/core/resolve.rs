@@ -1,5 +1,5 @@
 use anyhow::bail;
-use crate::store::Store;
+use crate::core::store::Store;
 use uuid::Uuid;
 
 /// Resolves a user-supplied identifier to a task UUID.

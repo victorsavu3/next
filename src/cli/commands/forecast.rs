@@ -1,5 +1,5 @@
 use chrono::{Local, NaiveDate};
-use crate::domain::{filter, scoring};
+use crate::core::{domain::filter, scoring};
 
 use crate::core::FilterArgs;
 use crate::AppContext;
@@ -90,7 +90,7 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
 
 fn print_section(
     label: &str,
-    tasks: &[&&crate::domain::scoring::ScoredTask],
+    tasks: &[&&crate::core::scoring::ScoredTask],
     today: NaiveDate,
 ) {
     if tasks.is_empty() {

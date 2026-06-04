@@ -1,4 +1,4 @@
-use crate::domain::tag;
+use crate::core::domain::tag;
 use crate::AppContext;
 
 /// Top-level `next context` subcommand.

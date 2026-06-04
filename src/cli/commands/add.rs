@@ -1,9 +1,7 @@
 use chrono::Local;
 use crate::cli::recurrence_parse::parse_recurrence;
-use crate::domain::{
-    date_parse::parse_date,
-    service::{create_task, CreateTaskParams},
-};
+use crate::core::domain::date_parse::parse_date;
+use crate::core::service::{create_task, CreateTaskParams};
 
 use crate::AppContext;
 
@@ -117,9 +115,9 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         args.title,
         params,
         today,
-        &ctx.repo_root.clone(),
-        &mut *ctx.store,
-        &*ctx.vcs,
+        &ctx.repo.repo_root.clone(),
+        &mut *ctx.repo.store,
+        &*ctx.repo.vcs,
     )?;
     ctx.record_task_event("add", task.id);
 

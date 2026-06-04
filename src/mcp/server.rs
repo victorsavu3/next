@@ -11,7 +11,7 @@ use axum::{
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-use crate::AppContext;
+use crate::TaskRepository;
 
 use super::auth::{require_mcp_bearer, require_webhook_bearer};
 use super::protocol::{
@@ -24,7 +24,7 @@ use super::tools;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub ctx: Arc<Mutex<AppContext>>,
+    pub ctx: Arc<Mutex<TaskRepository>>,
     pub bearer_token: String,
     pub webhook_token: Option<String>,
     pub scheduler: SyncScheduler,

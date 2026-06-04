@@ -1,6 +1,6 @@
 use crate::core::parse_value;
-use crate::domain::task::validate_key;
-use crate::{resolve::resolve_task_id, AppContext};
+use crate::core::domain::task::validate_key;
+use crate::{core::resolve::resolve_task_id, AppContext};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -62,7 +62,7 @@ fn set(ctx: &mut AppContext, args: SetArgs) -> anyhow::Result<()> {
         task.data.insert(args.key.clone(), value.clone());
         task.touch();
 
-        let task_path = crate::storage::task_path(root, &task);
+        let task_path = crate::core::storage::task_path(root, &task);
         store.save_task(&task)?;
         vcs.commit(
             &[task_path],
@@ -88,7 +88,7 @@ fn unset(ctx: &mut AppContext, args: UnsetArgs) -> anyhow::Result<()> {
         task.data.remove(&args.key);
         task.touch();
 
-        let task_path = crate::storage::task_path(root, &task);
+        let task_path = crate::core::storage::task_path(root, &task);
         store.save_task(&task)?;
         vcs.commit(
             &[task_path],

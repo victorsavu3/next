@@ -11,8 +11,8 @@ pub use toml_store::TomlStore;
 
 use std::path::{Path, PathBuf};
 
-use crate::{domain::task::Task, error::{AppError, Result}};
-use crate::store::VcsBackend as _;
+use crate::core::{domain::task::Task, error::{TaskError, Result}};
+use crate::core::store::VcsBackend as _;
 
 /// Encodes a tag string to a filesystem-safe path component.
 ///
@@ -100,7 +100,7 @@ fn migrate_tag_paths(root: &Path, vcs: &GitBackend) -> Result<()> {
             to_stage.push(old.clone());
             to_stage.push(new.clone());
             std::fs::rename(&old, &new)
-                .map_err(|e| AppError::Other(format!("migrate tag path {}: {e}", old.display())))?;
+                .map_err(|e| TaskError::Other(format!("migrate tag path {}: {e}", old.display())))?;
         } else if old.is_dir() {
             let old_files = collect_toml_files(&old);
             for old_file in &old_files {
@@ -109,7 +109,7 @@ fn migrate_tag_paths(root: &Path, vcs: &GitBackend) -> Result<()> {
                 to_stage.push(new.join(rel));
             }
             std::fs::rename(&old, &new)
-                .map_err(|e| AppError::Other(format!("migrate tag dir {}: {e}", old.display())))?;
+                .map_err(|e| TaskError::Other(format!("migrate tag dir {}: {e}", old.display())))?;
         }
     }
 
@@ -250,7 +250,7 @@ pub fn lock_plugins(root: &Path) -> Result<FileLock> {
     // a file in a missing directory.
     if let Some(parent) = lock_path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| AppError::Other(format!("create plugins dir: {e}")))?;
+            .map_err(|e| TaskError::Other(format!("create plugins dir: {e}")))?;
     }
     FileLock::acquire(&lock_path)
 }

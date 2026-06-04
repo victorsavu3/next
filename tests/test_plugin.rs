@@ -4,8 +4,8 @@ mod common;
 
 use std::path::Path;
 
-use next::domain::service::{create_task, CreateTaskParams};
-use next::plugin::{notify, registry, TaskEvent};
+use next::core::service::{create_task, CreateTaskParams};
+use next::core::plugin::{notify, registry, TaskEvent};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -94,9 +94,9 @@ fn cli_mutation_handler_records_event() {
         "Watch me".into(),
         CreateTaskParams::default(),
         today,
-        &env.ctx.repo_root.clone(),
-        &mut *env.ctx.store,
-        &*env.ctx.vcs,
+        &env.ctx.repo.repo_root.clone(),
+        &mut *env.ctx.repo.store,
+        &*env.ctx.repo.vcs,
     )
     .unwrap();
     // create_task is the shared service fn (no AppContext) — it records nothing.

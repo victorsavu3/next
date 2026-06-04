@@ -13,7 +13,7 @@ use next::mcp::{
     server::{AppState, build_router},
     sync_manager::spawn_deferred_sync,
 };
-use next::{AppContext, Config};
+use next::TaskRepository;
 
 // ── Test server ───────────────────────────────────────────────────────────────
 
@@ -37,8 +37,8 @@ async fn start_test_server(
     repo_dir: &Path,
 ) -> SocketAddr {
     init_git_repo(repo_dir);
-    let (store, vcs) = next::storage::open(repo_dir.to_path_buf()).unwrap();
-    let ctx = AppContext::with_parts(Config::default(), Box::new(store), Box::new(vcs), repo_dir.to_path_buf());
+    let (store, vcs) = next::core::storage::open(repo_dir.to_path_buf()).unwrap();
+    let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), repo_dir.to_path_buf());
     let ctx = Arc::new(Mutex::new(ctx));
     let scheduler = spawn_deferred_sync(ctx.clone(), std::time::Duration::from_secs(30));
 

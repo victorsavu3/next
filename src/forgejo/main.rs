@@ -45,7 +45,7 @@ fn main() -> Result<()> {
 fn ensure_registered(repo_root: &Path) -> Result<()> {
     let exe = std::env::current_exe().context("resolve current executable")?;
     let command = vec![exe.to_string_lossy().into_owned(), "hook".to_owned()];
-    next::plugin::registry::register(repo_root, PLUGIN_NAME, command)?;
+    next::core::plugin::registry::register(repo_root, PLUGIN_NAME, command)?;
     Ok(())
 }
 

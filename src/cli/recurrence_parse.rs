@@ -1,6 +1,6 @@
 use chrono::NaiveDate;
 
-use crate::domain::{recurrence::parse_snap, task::Recurrence};
+use crate::core::{domain::task::Recurrence, recurrence::parse_snap};
 
 /// Parse recurrence arguments into a [`Recurrence`] value.
 ///
@@ -100,7 +100,7 @@ mod tests {
         .unwrap();
         match result {
             Some(Recurrence::Schedule { snap: Some(snap), .. }) => {
-                use crate::domain::task::Snap;
+                use crate::core::domain::task::Snap;
                 assert_eq!(snap, Snap::NextWeekday { weekday: 4 });
             }
             other => panic!("expected Schedule with snap, got {other:?}"),
@@ -126,7 +126,7 @@ mod tests {
         let result = parse_recurrence(None, Some(7), Some("next-workday"), anchor).unwrap();
         match result {
             Some(Recurrence::Completion { snap: Some(snap), .. }) => {
-                use crate::domain::task::Snap;
+                use crate::core::domain::task::Snap;
                 assert_eq!(snap, Snap::NextWorkday);
             }
             other => panic!("expected Completion with snap, got {other:?}"),
@@ -146,7 +146,7 @@ mod tests {
         let result = parse_recurrence(None, Some(30), Some("dom:15"), anchor).unwrap();
         match result {
             Some(Recurrence::Completion { snap: Some(snap), .. }) => {
-                use crate::domain::task::Snap;
+                use crate::core::domain::task::Snap;
                 assert_eq!(snap, Snap::DayOfMonth { day: 15 });
             }
             other => panic!("expected Completion with dom snap, got {other:?}"),

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::domain::task::Priority;
+use crate::core::domain::task::Priority;
 
 /// Metadata stored for a tag in `tags/<tag>.toml`.
 ///
@@ -82,7 +82,7 @@ pub fn bare_name(tag: &str) -> &str {
 ///
 /// Examples:
 /// ```
-/// use next::domain::tag::tag_matches;
+/// use next::core::domain::tag::tag_matches;
 /// assert!(tag_matches("abc",       "abc"));           // exact bare
 /// assert!(tag_matches("abc",       "abc/cde"));       // ancestor bare
 /// assert!(tag_matches("@work",     "@work/frontend")); // context hierarchy

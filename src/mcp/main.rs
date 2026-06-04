@@ -9,7 +9,7 @@ use next::mcp::{
     server::{AppState, build_router},
     sync_manager::{spawn_deferred_sync, spawn_periodic_sync},
 };
-use next::{AppContext, Config};
+use next::TaskRepository;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -23,15 +23,10 @@ async fn main() -> anyhow::Result<()> {
     let repo_path = clone_or_open(&config)?;
 
     // Open the task store.
-    let (store, vcs) = next::storage::open(repo_path.clone())
+    let (store, vcs) = next::core::storage::open(repo_path.clone())
         .map_err(|e| anyhow::anyhow!("failed to open task store: {e}"))?;
 
-    let ctx = AppContext::with_parts(
-        Config::default(),
-        Box::new(store),
-        Box::new(vcs),
-        repo_path,
-    );
+    let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), repo_path);
     let ctx = Arc::new(Mutex::new(ctx));
 
     // Background deferred-sync task.

@@ -1,4 +1,4 @@
-use crate::domain::filter::FilterSet;
+use crate::core::domain::filter::FilterSet;
 
 /// Shared filter arguments used across list-style commands.
 ///
