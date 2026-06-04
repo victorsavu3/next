@@ -87,7 +87,7 @@ next/                             # crate root (also git repo)
     plugin/                       # external plugin export hook (machine-local)
       registry.rs                 # PluginRegistry: plugins.toml store (subscriptions)
       notify.rs                   # TaskEvent + notify(): fire-and-forget plugin spawn
-    forgejo/                      # next-plugin-forgejo binary (feature = "forgejo")
+    forgejo/                      # next-forgejo binary (feature = "forgejo")
       main.rs config.rs issues.rs tasks.rs reconcile.rs hook.rs
     app_context.rs                # AppContext struct + ::new()
     log.rs                        # Logger: append-only next.log with rotation

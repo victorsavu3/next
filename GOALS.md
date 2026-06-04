@@ -110,7 +110,7 @@ All list commands accept filters that can be combined freely:
 - Git merge conflicts are resolved manually
 
 ### Forgejo integration (plugin — implemented)
-Provided by the bundled `next-plugin-forgejo` binary behind the off-by-default `forgejo`
+Provided by the bundled `next-forgejo` binary behind the off-by-default `forgejo`
 feature: maps Forgejo repos to contexts, imports open issues as tasks, and syncs
 resolution both ways. See REQUIREMENTS.md §10.3.
 

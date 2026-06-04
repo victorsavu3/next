@@ -578,10 +578,10 @@ default, like `mcp`) and link the `next` library directly.
 
 ### 10.3 Forgejo plugin (`forgejo` feature)
 
-The bundled `next-plugin-forgejo` binary (behind the off-by-default `forgejo` feature)
+The bundled `next-forgejo` binary (behind the off-by-default `forgejo` feature)
 links the `next` library directly and maps Forgejo repositories to contexts.
 
-- Config `~/.config/next-plugin-forgejo/config.toml`: `forgejo_url`, `forgejo_token`,
+- Config `~/.config/next-forgejo/config.toml`: `forgejo_url`, `forgejo_token`,
   optional `next_repo`, and `[[map]]` entries (`repo = "owner/repo"`, `context = "@ctx"`).
 - `sync` MUST import each **open** issue with no linked task as a task tagged with the
   mapped context (title, issue url, body → description), link it via task data attributes

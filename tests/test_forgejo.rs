@@ -26,7 +26,7 @@ fn create_from_issue_links_and_watches() {
     let dir = tempfile::tempdir().unwrap();
     common::setup_in(dir.path());
     // `sync` self-registers; mirror that so per-task watch succeeds.
-    registry::register(dir.path(), "next-plugin-forgejo", vec!["x".into(), "hook".into()]).unwrap();
+    registry::register(dir.path(), "next-forgejo", vec!["x".into(), "hook".into()]).unwrap();
     let mut store = LibTaskStore::open(Some(dir.path())).unwrap();
 
     let id = store.create_from_issue(&issue(), "@ai/x", "victor/x").unwrap();
@@ -54,7 +54,7 @@ fn create_from_issue_links_and_watches() {
     assert!(
         reg.plugins
             .iter()
-            .any(|p| p.name == "next-plugin-forgejo" && p.tasks.contains(&id)),
+            .any(|p| p.name == "next-forgejo" && p.tasks.contains(&id)),
         "new task is watched"
     );
 }
@@ -64,7 +64,7 @@ fn mark_done_resolves_the_task() {
     let dir = tempfile::tempdir().unwrap();
     common::setup_in(dir.path());
     // `sync` self-registers; mirror that so per-task watch succeeds.
-    registry::register(dir.path(), "next-plugin-forgejo", vec!["x".into(), "hook".into()]).unwrap();
+    registry::register(dir.path(), "next-forgejo", vec!["x".into(), "hook".into()]).unwrap();
     let mut store = LibTaskStore::open(Some(dir.path())).unwrap();
     let id = store.create_from_issue(&issue(), "@ai/x", "victor/x").unwrap();
 
@@ -79,7 +79,7 @@ fn list_linked_filters_by_repo() {
     let dir = tempfile::tempdir().unwrap();
     common::setup_in(dir.path());
     // `sync` self-registers; mirror that so per-task watch succeeds.
-    registry::register(dir.path(), "next-plugin-forgejo", vec!["x".into(), "hook".into()]).unwrap();
+    registry::register(dir.path(), "next-forgejo", vec!["x".into(), "hook".into()]).unwrap();
     let mut store = LibTaskStore::open(Some(dir.path())).unwrap();
     store.create_from_issue(&issue(), "@ai/x", "victor/x").unwrap();
 

@@ -1,4 +1,4 @@
-//! `next-plugin-forgejo` — Forgejo integration plugin binary.
+//! `next-forgejo` — Forgejo integration plugin binary.
 
 use std::path::Path;
 
@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use next::forgejo::{config, hook, issues::ForgejoApi, reconcile, tasks::LibTaskStore, PLUGIN_NAME};
 
 #[derive(Parser)]
-#[command(name = "next-plugin-forgejo", about = "Forgejo integration plugin for next")]
+#[command(name = "next-forgejo", about = "Forgejo integration plugin for next")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

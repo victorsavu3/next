@@ -387,13 +387,13 @@ mutations the plugin makes (which inherit that env) skip notifying that same plu
 
 The first bundled plugin maps Forgejo repositories to `next` contexts. It ships in this
 crate behind the `forgejo` Cargo feature (off by default, like `mcp`) as the
-`next-plugin-forgejo` binary:
+`next-forgejo` binary:
 
 ```sh
-cargo build --release --features forgejo   # builds next-plugin-forgejo
+cargo build --release --features forgejo   # builds next-forgejo
 ```
 
-Configure `~/.config/next-plugin-forgejo/config.toml`:
+Configure `~/.config/next-forgejo/config.toml`:
 
 ```toml
 forgejo_url   = "https://forgejo.victorsavu.eu"
@@ -408,10 +408,10 @@ context = "@ai/task-manager"      # imported tasks get this context tag
 Commands:
 
 ```sh
-next-plugin-forgejo register      # register the export hook (sync also does this)
-next-plugin-forgejo sync          # import issues + reconcile resolution (both ways)
-next-plugin-forgejo sync --dry-run
-next-plugin-forgejo hook          # internal: invoked by next's export hook
+next-forgejo register      # register the export hook (sync also does this)
+next-forgejo sync          # import issues + reconcile resolution (both ways)
+next-forgejo sync --dry-run
+next-forgejo hook          # internal: invoked by next's export hook
 ```
 
 `sync` imports each **open** issue with no task yet (title, issue url, the mapped

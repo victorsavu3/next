@@ -1,4 +1,4 @@
-//! Forgejo integration plugin (`next-plugin-forgejo`), gated by the `forgejo`
+//! Forgejo integration plugin (`next-forgejo`), gated by the `forgejo`
 //! feature.
 //!
 //! Maps Forgejo repositories to `next` contexts: imports open issues as tasks,
@@ -30,4 +30,4 @@ pub mod keys {
 
 /// The plugin name used for export-hook registration and as the loop-guard
 /// origin token.
-pub const PLUGIN_NAME: &str = "next-plugin-forgejo";
+pub const PLUGIN_NAME: &str = "next-forgejo";

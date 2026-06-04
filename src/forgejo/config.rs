@@ -1,6 +1,6 @@
 //! Configuration for the Forgejo plugin.
 //!
-//! Loaded from `~/.config/next-plugin-forgejo/config.toml`. Holds the Forgejo
+//! Loaded from `~/.config/next-forgejo/config.toml`. Holds the Forgejo
 //! connection and the repository → context mappings that drive imports.
 
 use std::path::{Path, PathBuf};
@@ -45,11 +45,11 @@ impl Mapping {
     }
 }
 
-/// Default config path: `$XDG_CONFIG_HOME/next-plugin-forgejo/config.toml`.
+/// Default config path: `$XDG_CONFIG_HOME/next-forgejo/config.toml`.
 pub fn config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("next-plugin-forgejo")
+        .join("next-forgejo")
         .join("config.toml")
 }
 
@@ -62,7 +62,7 @@ pub fn load() -> Result<Config> {
 pub fn load_from(path: &Path) -> Result<Config> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("read config {}", path.display()))?;
-    let cfg: Config = toml::from_str(&text).context("parse next-plugin-forgejo config")?;
+    let cfg: Config = toml::from_str(&text).context("parse next-forgejo config")?;
     anyhow::ensure!(!cfg.forgejo_url.is_empty(), "forgejo_url not set in {}", path.display());
     anyhow::ensure!(!cfg.forgejo_token.is_empty(), "forgejo_token not set in {}", path.display());
     Ok(cfg)

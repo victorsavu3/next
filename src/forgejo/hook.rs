@@ -1,7 +1,7 @@
 //! Export-hook handler: when a watched task is resolved locally, close its
 //! Forgejo issue.
 //!
-//! `next` spawns `next-plugin-forgejo hook` after a watched task changes,
+//! `next` spawns `next-forgejo hook` after a watched task changes,
 //! delivering the event on stdin and in `NEXT_PLUGIN_EVENT`, with `NEXT_REPO`
 //! pointing at the repository. This handler only reads the task (via the
 //! library) and mutates Forgejo, so it never loops.

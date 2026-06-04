@@ -183,14 +183,14 @@ mod tests {
         let path = dir.path().join("plugins.toml");
 
         let mut reg = PluginRegistry::default();
-        reg.set_command("forgejo", argv("next-plugin-forgejo sync"));
+        reg.set_command("forgejo", argv("next-forgejo sync"));
         let id = Uuid::new_v4();
         reg.watch("forgejo", id).unwrap();
         save_to(&path, &reg).unwrap();
 
         let loaded = load_from(&path).unwrap();
         assert_eq!(loaded, reg);
-        assert_eq!(loaded.plugins[0].command, vec!["next-plugin-forgejo", "sync"]);
+        assert_eq!(loaded.plugins[0].command, vec!["next-forgejo", "sync"]);
         assert_eq!(loaded.plugins[0].tasks, vec![id]);
     }
 

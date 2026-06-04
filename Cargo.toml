@@ -25,7 +25,7 @@ path = "src/mcp/main.rs"
 required-features = ["mcp"]
 
 [[bin]]
-name = "next-plugin-forgejo"
+name = "next-forgejo"
 path = "src/forgejo/main.rs"
 required-features = ["forgejo"]
 
