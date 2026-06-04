@@ -1,4 +1,5 @@
 pub mod app_context;
+#[cfg(feature = "cli")]
 pub mod cli;
 pub mod config;
 pub mod core;

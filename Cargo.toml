@@ -4,20 +4,31 @@ version = "1.1.0"
 edition = "2021"
 
 [features]
-default = []
+# With no features the crate is just the core library (domain, storage, store,
+# plugin, core, app_context, config) that other crates can link without the CLI
+# or its dependencies. The default build still includes the CLI.
+default = ["cli"]
+cli = [
+    "dep:clap",
+    "dep:tracing-subscriber",
+]
 mcp = [
     "dep:tokio",
     "dep:axum",
+    "dep:tracing-subscriber",
 ]
 forgejo = [
     "dep:tokio",
     "dep:forgejo-api",
     "dep:url",
+    "dep:clap",
+    "dep:tracing-subscriber",
 ]
 
 [[bin]]
 name = "next"
 path = "src/main.rs"
+required-features = ["cli"]
 
 [[bin]]
 name = "next-mcp"
@@ -42,13 +53,13 @@ toml = "0.8"
 fs4 = "0.8"
 git2 = "0.19"
 rusqlite = { version = "0.32", features = ["bundled"] }
-# CLI
-clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 dirs = "5"
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# CLI / binary deps (optional — enabled by the cli/mcp/forgejo features)
+clap = { version = "4", optional = true, features = ["derive"] }
+tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
 # MCP server (optional — enabled by the `mcp` feature)
 tokio = { version = "1", optional = true, features = ["full"] }
 axum  = { version = "0.8", optional = true }
