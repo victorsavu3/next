@@ -6,7 +6,7 @@ pub mod toml_store;
 
 pub use cached_store::CachedStore;
 pub use git_backend::GitBackend;
-pub use lock::RepoLock;
+pub use lock::FileLock;
 pub use toml_store::TomlStore;
 
 use std::path::{Path, PathBuf};
@@ -144,8 +144,28 @@ pub fn repo_lock_path(root: &Path) -> PathBuf {
 /// The returned guard holds the lock until dropped.  It is re-entrant within a
 /// single thread, so a transaction can hold it across a read-modify-write while
 /// the nested `save_task` / `commit` calls re-acquire it harmlessly.
-pub fn lock_repo(root: &Path) -> Result<RepoLock> {
-    RepoLock::acquire(&repo_lock_path(root))
+pub fn lock_repo(root: &Path) -> Result<FileLock> {
+    FileLock::acquire(&repo_lock_path(root))
+}
+
+/// Returns the path to the machine-local state lock file for the repo at `root`.
+///
+/// Co-located with the state file (`state.toml.lock` next to `state.toml`).
+/// This is a *separate* lock from [`repo_lock_path`]: the state file lives
+/// outside the git repository, so concurrent state writes are serialised on
+/// their own lock and never block (or are blocked by) repository mutations.
+pub fn state_lock_path_for_repo(root: &Path) -> PathBuf {
+    state_path_for_repo(root).with_extension("lock")
+}
+
+/// Acquires the exclusive state-file lock for the repo rooted at `root`.
+///
+/// Held across a state read-modify-write so concurrent state mutations
+/// (`next context`, `resource`, `user`) cannot lose each other's updates.
+/// Re-entrant within a thread, like [`lock_repo`], so the nested `get_state` /
+/// `save_state` calls re-acquire it harmlessly.
+pub fn lock_state(root: &Path) -> Result<FileLock> {
+    FileLock::acquire(&state_lock_path_for_repo(root))
 }
 
 /// Returns the full path where `task` is (or will be) stored under `root`.

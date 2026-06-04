@@ -72,34 +72,46 @@ fn validate_context_tags(tags: &[String]) -> anyhow::Result<()> {
 
 fn set(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
     validate_context_tags(&tags)?;
-    let mut state = ctx.store.get_state()?;
-    state.active_contexts = tags.clone();
-    ctx.store.save_state(&state)?;
+    ctx.state_transaction(|store| {
+        let mut state = store.get_state()?;
+        state.active_contexts = tags.clone();
+        store.save_state(&state)?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "context", "set {}", tags.join(" "));
     Ok(())
 }
 
 fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
-    let mut state = ctx.store.get_state()?;
-    state.active_contexts.clear();
-    ctx.store.save_state(&state)?;
+    ctx.state_transaction(|store| {
+        let mut state = store.get_state()?;
+        state.active_contexts.clear();
+        store.save_state(&state)?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "context", "cleared");
     Ok(())
 }
 
 fn exclude(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
     validate_context_tags(&tags)?;
-    let mut state = ctx.store.get_state()?;
-    state.excluded_contexts = tags.clone();
-    ctx.store.save_state(&state)?;
+    ctx.state_transaction(|store| {
+        let mut state = store.get_state()?;
+        state.excluded_contexts = tags.clone();
+        store.save_state(&state)?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "context", "exclude {}", tags.join(" "));
     Ok(())
 }
 
 fn clear_excluded(ctx: &mut AppContext) -> anyhow::Result<()> {
-    let mut state = ctx.store.get_state()?;
-    state.excluded_contexts.clear();
-    ctx.store.save_state(&state)?;
+    ctx.state_transaction(|store| {
+        let mut state = store.get_state()?;
+        state.excluded_contexts.clear();
+        store.save_state(&state)?;
+        Ok(())
+    })?;
     tracing::info!(cmd = "context", "cleared excluded");
     Ok(())
 }

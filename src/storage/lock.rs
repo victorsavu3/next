@@ -1,15 +1,20 @@
-//! Re-entrant, cross-process repository lock.
+//! Re-entrant, cross-process advisory file lock.
 //!
 //! `next`, `next-mcp`, and (in future) external plugin processes all mutate the
-//! same repository in parallel.  A single advisory `flock(2)` on
-//! `<repo>/.next.lock` serialises them across processes.  Within one process we
-//! additionally need the lock to be:
+//! same data in parallel.  [`FileLock`] is a generic advisory `flock(2)` over a
+//! given lock file, used for two *separate* locks: the repository lock
+//! (`<repo>/.next.lock`, guarding tasks/tags and all git operations) and the
+//! machine-local state lock (`state.toml.lock`).  Each lock file is an
+//! independent instance — they never block one another.
+//!
+//! Within one process the lock must be:
 //!
 //! * **mutually exclusive across threads** — two threads (two MCP requests, or
 //!   the test-suite's process simulations) must not both believe they hold it;
-//! * **re-entrant within a thread** — a mutation acquires the lock once at the
-//!   top of a read-modify-write-commit transaction and then calls `save_task` /
-//!   `commit`, which acquire it again; the nested calls must not deadlock.
+//! * **re-entrant within a thread** — a transaction acquires the lock once at
+//!   the top of a read-modify-write(-commit) and then calls `save_task` /
+//!   `commit` / `save_state`, which acquire it again; the nested calls must not
+//!   deadlock.
 //!
 //! `flock` alone cannot provide re-entrancy: locks are associated with the open
 //! file description, so a second `flock` from the same thread on a freshly
@@ -17,8 +22,9 @@
 //! layer an in-process gate (owner thread + recursion depth) over the OS lock
 //! and share one gate per lock-file path through a process-global registry.
 //!
-//! Lock ordering: the repo lock is always acquired *before* the state lock
-//! (`state.toml.lock`), never the other way round, so the two cannot deadlock.
+//! Lock ordering: when both are taken, the repo lock is always acquired
+//! *before* the state lock, never the other way round, so the two cannot
+//! deadlock.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -30,7 +36,7 @@ use fs4::FileExt;
 
 use crate::error::{AppError, Result};
 
-/// In-process gate guarding one repository's OS lock.
+/// In-process gate guarding one lock file's OS lock.
 struct Gate {
     state: Mutex<GateState>,
     cond: Condvar,
@@ -52,7 +58,7 @@ fn registry() -> &'static Mutex<HashMap<PathBuf, Arc<Gate>>> {
     REG.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Canonicalises the lock path so different spellings of the same repository
+/// Canonicalises the lock path so different spellings of the same lock file
 /// share one gate.  The lock file itself need not exist yet, so we canonicalise
 /// the parent directory and re-attach the file name.
 fn canonical_key(lock_path: &Path) -> PathBuf {
@@ -87,28 +93,28 @@ fn open_and_flock(lock_path: &Path) -> Result<File> {
         .create(true)
         .truncate(false)
         .open(lock_path)
-        .map_err(|e| AppError::Other(format!("open .next.lock: {e}")))?;
+        .map_err(|e| AppError::Other(format!("open lock file {}: {e}", lock_path.display())))?;
     file.lock_exclusive()
-        .map_err(|e| AppError::Other(format!("acquire repo lock: {e}")))?;
+        .map_err(|e| AppError::Other(format!("acquire lock {}: {e}", lock_path.display())))?;
     Ok(file)
 }
 
-/// An acquired repository lock.
+/// An acquired advisory file lock.
 ///
 /// Holds the lock until dropped.  Re-entrant acquisitions on the same thread
 /// share one underlying OS lock and release it only when the outermost guard is
 /// dropped.
-pub struct RepoLock {
+pub struct FileLock {
     gate: Arc<Gate>,
 }
 
-impl RepoLock {
-    /// Acquires the repository lock for `lock_path`, blocking until it is free.
+impl FileLock {
+    /// Acquires the exclusive lock on `lock_path`, blocking until it is free.
     ///
     /// Blocks while another *thread* in this process or another *process* holds
     /// it; returns immediately (bumping the recursion depth) when the current
     /// thread already holds it.
-    pub fn acquire(lock_path: &Path) -> Result<RepoLock> {
+    pub fn acquire(lock_path: &Path) -> Result<FileLock> {
         let gate = gate_for(lock_path);
         let me = std::thread::current().id();
 
@@ -118,7 +124,7 @@ impl RepoLock {
                 // Already ours on this thread — re-entrant acquisition.
                 Some(owner) if owner == me => {
                     state.depth += 1;
-                    return Ok(RepoLock {
+                    return Ok(FileLock {
                         gate: Arc::clone(&gate),
                     });
                 }
@@ -139,7 +145,7 @@ impl RepoLock {
                     match open_and_flock(lock_path) {
                         Ok(file) => {
                             gate.state.lock().expect("gate poisoned").file = Some(file);
-                            return Ok(RepoLock {
+                            return Ok(FileLock {
                                 gate: Arc::clone(&gate),
                             });
                         }
@@ -158,7 +164,7 @@ impl RepoLock {
     }
 }
 
-impl Drop for RepoLock {
+impl Drop for FileLock {
     fn drop(&mut self) {
         let mut state = self.gate.state.lock().expect("gate poisoned");
         state.depth -= 1;
@@ -191,15 +197,15 @@ mod tests {
     #[test]
     fn reentrant_same_thread_does_not_deadlock() {
         let (_dir, path) = lock_path();
-        let outer = RepoLock::acquire(&path).unwrap();
+        let outer = FileLock::acquire(&path).unwrap();
         // Nested acquisition on the same thread must return immediately.
-        let inner = RepoLock::acquire(&path).unwrap();
-        let innermost = RepoLock::acquire(&path).unwrap();
+        let inner = FileLock::acquire(&path).unwrap();
+        let innermost = FileLock::acquire(&path).unwrap();
         drop(innermost);
         drop(inner);
         drop(outer);
         // Lock is now free; a fresh acquire succeeds.
-        let _again = RepoLock::acquire(&path).unwrap();
+        let _again = FileLock::acquire(&path).unwrap();
     }
 
     #[test]
@@ -219,7 +225,7 @@ mod tests {
                 std::thread::spawn(move || {
                     barrier.wait();
                     for _ in 0..50 {
-                        let _lock = RepoLock::acquire(&path).unwrap();
+                        let _lock = FileLock::acquire(&path).unwrap();
                         // Inside the critical section the count must never
                         // exceed 1 if the lock is truly exclusive.
                         let now = counter.fetch_add(1, Ordering::SeqCst) + 1;
@@ -246,11 +252,11 @@ mod tests {
         let (_dir, path) = lock_path();
         let held = Arc::new(AtomicUsize::new(0));
 
-        let outer = RepoLock::acquire(&path).unwrap();
+        let outer = FileLock::acquire(&path).unwrap();
         let held2 = Arc::clone(&held);
         let path2 = path.clone();
         let waiter = std::thread::spawn(move || {
-            let _lock = RepoLock::acquire(&path2).unwrap();
+            let _lock = FileLock::acquire(&path2).unwrap();
             held2.store(1, Ordering::SeqCst);
         });
 

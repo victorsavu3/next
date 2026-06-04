@@ -75,9 +75,12 @@ fn set(ctx: &mut AppContext, resource: String, availability: Availability) -> an
     let available = matches!(availability, Availability::On);
     let bare = resource.trim_start_matches('#');
 
-    let mut state = ctx.store.get_state()?;
-    state.resources.insert(bare.to_owned(), available);
-    ctx.store.save_state(&state)?;
+    ctx.state_transaction(|store| {
+        let mut state = store.get_state()?;
+        state.resources.insert(bare.to_owned(), available);
+        store.save_state(&state)?;
+        Ok(())
+    })?;
 
     let label = if available { "available" } else { "unavailable" };
     tracing::info!(cmd = "resource", "{resource} marked as {label}");

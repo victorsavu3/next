@@ -16,7 +16,7 @@ use crate::{
         task::{Recurrence, Task},
     },
     resolve::resolve_task_id,
-    storage::{self, RepoLock},
+    storage::{self, FileLock},
     Store, VcsBackend,
 };
 
@@ -35,7 +35,7 @@ pub(crate) fn begin_mutation(
     repo_root: &Path,
     store: &mut dyn Store,
     vcs: &dyn VcsBackend,
-) -> anyhow::Result<RepoLock> {
+) -> anyhow::Result<FileLock> {
     let lock = storage::lock_repo(repo_root)?;
     let head = vcs.head_hash()?;
     store.after_pull(&head)?;

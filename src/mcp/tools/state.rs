@@ -53,21 +53,28 @@ pub fn set_context(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value
             anyhow::bail!("context tags must start with '@', got: {c}");
         }
     }
-    let mut state = ctx.store.get_state()?;
-    state.active_contexts = contexts;
-
     // Optional: also replace excluded_contexts if provided.
-    if params.get("excluded_contexts").is_some() {
+    let excluded = if params.get("excluded_contexts").is_some() {
         let excluded = strings_param(params, "excluded_contexts");
         for c in &excluded {
             if !c.starts_with('@') {
                 anyhow::bail!("excluded context tags must start with '@', got: {c}");
             }
         }
-        state.excluded_contexts = excluded;
-    }
+        Some(excluded)
+    } else {
+        None
+    };
 
-    ctx.store.save_state(&state)?;
+    let state = ctx.state_transaction(|store| {
+        let mut state = store.get_state()?;
+        state.active_contexts = contexts;
+        if let Some(excluded) = excluded {
+            state.excluded_contexts = excluded;
+        }
+        store.save_state(&state)?;
+        Ok(state)
+    })?;
     tracing::info!(cmd = "mcp/context", "active={:?} excluded={:?}", state.active_contexts, state.excluded_contexts);
     Ok(serde_json::to_value(&state)?)
 }
@@ -88,14 +95,16 @@ pub fn set_resource(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Valu
         anyhow::bail!("resource names must start with '#', got: {resource}");
     }
 
-    let mut state = ctx.store.get_state()?;
-    // Store the bare name (without `#`), matching the CLI and the key convention
-    // that `GlobalState::is_resource_available` looks up. Storing the prefixed
-    // form here meant MCP-set resources never actually filtered.
-    state
-        .resources
-        .insert(crate::domain::tag::bare_name(resource).to_owned(), available);
-    ctx.store.save_state(&state)?;
+    let bare = crate::domain::tag::bare_name(resource).to_owned();
+    let state = ctx.state_transaction(|store| {
+        let mut state = store.get_state()?;
+        // Store the bare name (without `#`), matching the CLI and the key
+        // convention that `GlobalState::is_resource_available` looks up. Storing
+        // the prefixed form here meant MCP-set resources never actually filtered.
+        state.resources.insert(bare, available);
+        store.save_state(&state)?;
+        Ok(state)
+    })?;
     tracing::info!(cmd = "mcp/resource", "set {resource}={available}");
     Ok(serde_json::to_value(&state)?)
 }
@@ -104,9 +113,12 @@ pub fn set_resource(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Valu
 
 pub fn set_user_filter(params: &Value, ctx: &mut AppContext) -> anyhow::Result<Value> {
     let users = strings_param(params, "users");
-    let mut state = ctx.store.get_state()?;
-    state.active_users = users;
-    ctx.store.save_state(&state)?;
+    let state = ctx.state_transaction(|store| {
+        let mut state = store.get_state()?;
+        state.active_users = users;
+        store.save_state(&state)?;
+        Ok(state)
+    })?;
     tracing::info!(cmd = "mcp/user", "set {:?}", state.active_users);
     Ok(serde_json::to_value(&state)?)
 }

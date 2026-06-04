@@ -1,10 +1,9 @@
 use std::{
     collections::HashMap,
-    fs::{self, File, OpenOptions},
+    fs,
     path::{Path, PathBuf},
 };
 
-use fs4::FileExt;
 use crate::{
     domain::{state::GlobalState, tag::TagMeta, task::Task},
     error::{AppError, Result},
@@ -125,39 +124,28 @@ impl TomlStore {
     ///
     /// The lock is released when the returned guard is dropped.  Both
     /// `TomlStore` (task writes) and `GitBackend` (commit/pull/push) use the
-    /// same `.next.lock` file via [`crate::storage::RepoLock`], so they are
+    /// same `.next.lock` file via [`crate::storage::FileLock`], so they are
     /// mutually exclusive across processes and threads, and re-entrant within a
     /// thread (so a transaction may hold the lock across nested writes).
-    pub(crate) fn acquire_repo_lock(&self) -> Result<crate::storage::RepoLock> {
-        crate::storage::RepoLock::acquire(&self.repo_lock_path())
+    pub(crate) fn acquire_repo_lock(&self) -> Result<crate::storage::FileLock> {
+        crate::storage::FileLock::acquire(&self.repo_lock_path())
     }
 
-    /// Acquires a shared (read) lock on the state lock file.
-    fn acquire_state_read_lock(&self) -> Result<File> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(self.state_lock_path())
-            .map_err(|e| AppError::Other(format!("open state.lock: {e}")))?;
-        file.lock_shared()
-            .map_err(|e| AppError::Other(format!("acquire state read lock: {e}")))?;
-        Ok(file)
-    }
-
-    /// Acquires an exclusive (write) lock on the state lock file.
-    fn acquire_state_write_lock(&self) -> Result<File> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(self.state_lock_path())
-            .map_err(|e| AppError::Other(format!("open state.lock: {e}")))?;
-        file.lock_exclusive()
-            .map_err(|e| AppError::Other(format!("acquire state write lock: {e}")))?;
-        Ok(file)
+    /// Acquires the exclusive state-file lock (`state.toml.lock`).
+    ///
+    /// This is a *separate* lock from the repository lock (`.next.lock`): the
+    /// machine-local state file lives outside the git repository and is never
+    /// committed, so it has its own lock.  Like the repo lock it is re-entrant
+    /// within a thread via [`crate::storage::FileLock`], so a state transaction
+    /// can hold it across `get_state` → modify → `save_state` while those nested
+    /// calls re-acquire it harmlessly.
+    ///
+    /// Reads take the same exclusive lock rather than a shared one: state
+    /// mutations are infrequent and cheap, and atomic writes already guarantee a
+    /// reader never observes a half-written file.  A single lock mode keeps the
+    /// lock re-entrant, which is what the read-modify-write transaction needs.
+    pub(crate) fn acquire_state_lock(&self) -> Result<crate::storage::FileLock> {
+        crate::storage::FileLock::acquire(self.state_lock_path())
     }
 
     /// Finds the current on-disk path for `id`, or `None` if not found.
@@ -338,12 +326,11 @@ impl Store for TomlStore {
     }
 
     fn get_state(&self) -> Result<GlobalState> {
-        // Acquire a shared (read) lock before reading so that a concurrent
-        // `save_state` call (which holds an exclusive lock) cannot be
-        // mid-write when we open the file.  Multiple concurrent readers are
-        // allowed; only a writer is mutually exclusive.  The lock is released
-        // automatically when `_lock` is dropped at the end of this scope.
-        let _lock = self.acquire_state_read_lock()?;
+        // Hold the state lock while reading so a state transaction's read and
+        // its later write are atomic with respect to other processes.  The lock
+        // is re-entrant, so calling this inside a held state transaction does
+        // not deadlock; it is released when `_lock` drops at end of scope.
+        let _lock = self.acquire_state_lock()?;
         let path = self.state_path();
         if !path.exists() {
             return Ok(GlobalState::default());
@@ -354,10 +341,11 @@ impl Store for TomlStore {
     }
 
     fn save_state(&mut self, state: &GlobalState) -> Result<()> {
-        // Acquire an exclusive (write) lock before writing so that concurrent
-        // readers (`get_state`) and writers are kept out until the atomic
-        // rename is complete.  The lock is released when `_lock` is dropped.
-        let _lock = self.acquire_state_write_lock()?;
+        // Hold the (re-entrant, exclusive) state lock until the atomic rename
+        // completes.  When called inside a state transaction the lock is already
+        // held by this thread, so this acquisition just bumps the recursion
+        // depth and the write is part of the transaction's critical section.
+        let _lock = self.acquire_state_lock()?;
         let content = toml::to_string_pretty(state)
             .map_err(|e| AppError::Other(format!("TOML serialization error: {e}")))?;
         atomic_write(self.state_path(), &content)?;

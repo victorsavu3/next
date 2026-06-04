@@ -45,10 +45,10 @@ impl GitBackend {
 
     /// Acquires the repository-level exclusive lock shared with `TomlStore`.
     /// Released when the returned guard is dropped.  Re-entrant within a thread
-    /// via [`crate::storage::RepoLock`], so a transaction holding the lock can
+    /// via [`crate::storage::FileLock`], so a transaction holding the lock can
     /// call `commit` / `pull` / `push` without self-deadlocking.
-    fn acquire_repo_lock(&self) -> Result<crate::storage::RepoLock> {
-        crate::storage::RepoLock::acquire(&self.lock_path)
+    fn acquire_repo_lock(&self) -> Result<crate::storage::FileLock> {
+        crate::storage::FileLock::acquire(&self.lock_path)
     }
 }
 

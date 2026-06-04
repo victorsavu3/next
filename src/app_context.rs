@@ -41,6 +41,21 @@ impl AppContext {
         Ok(out)
     }
 
+    /// Runs `f` as a machine-local state mutation transaction.
+    ///
+    /// Holds the exclusive state-file lock (`state.toml.lock`) — *separate* from
+    /// the repository lock — across the entire closure, so a `get_state` →
+    /// modify → `save_state` sequence cannot interleave with another process and
+    /// lose updates.  State is not committed to git, so unlike [`transaction`]
+    /// there is no HEAD reconciliation.
+    pub fn state_transaction<T>(
+        &mut self,
+        f: impl FnOnce(&mut dyn Store) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let _lock = crate::storage::lock_state(&self.repo_root)?;
+        f(&mut *self.store)
+    }
+
     /// Construct an application context.
     ///
     /// * `config_path` — use this config file instead of the XDG default.

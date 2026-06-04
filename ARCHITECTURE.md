@@ -377,34 +377,43 @@ Multiple `next` processes — CLI invocations, the long-running `next-mcp` serve
 (planned) external plugin processes — mutate the same repository in parallel. Three
 mechanisms keep this safe:
 
-1. **Re-entrant repository lock** (`storage::RepoLock`, `src/storage/lock.rs`). An
-   advisory `flock(2)` on `<repo>/.next.lock`, shared by `TomlStore` (task/tag writes)
-   and `GitBackend` (commit/pull/push). It is exclusive across processes and across
-   threads, but **re-entrant within a single thread** so a mutation transaction can hold
-   it while the nested `save_task` / `commit` calls re-acquire it. A process-global
-   registry maps each lock-file path to one in-process gate (owner thread + recursion
-   depth) layered over the OS lock — plain `flock` is per open-file-description and would
-   otherwise self-deadlock on the second acquire.
+1. **Re-entrant advisory lock** (`storage::FileLock`, `src/storage/lock.rs`). A generic
+   advisory `flock(2)` over a given lock file, exclusive across processes and threads but
+   **re-entrant within a single thread** so a transaction can hold it while the nested
+   `save_task` / `commit` / `save_state` calls re-acquire it. A process-global registry
+   maps each lock-file path to one in-process gate (owner thread + recursion depth)
+   layered over the OS lock — plain `flock` is per open-file-description and would
+   otherwise self-deadlock on the second acquire. Two *separate* instances are used: the
+   **repo lock** (`<repo>/.next.lock`, shared by `TomlStore` task/tag writes and
+   `GitBackend` commit/pull/push) and the **state lock** (see below).
 
-2. **Mutation transactions** (`AppContext::transaction`, built on
+2. **Repository mutation transactions** (`AppContext::transaction`, built on
    `service::begin_mutation` / `end_mutation`). Every task or tag mutation holds the repo
    lock across the *entire* read → modify → write → commit sequence, so two processes
    cannot interleave and lose each other's updates. On entry the transaction reconciles
    the cache with the on-disk git HEAD (`Store::after_pull`) so the read reflects other
    processes' commits; on exit it records the new HEAD (`Store::note_head`) so the next
-   transaction does not rebuild needlessly. `tests/locking.rs` covers lost-update
-   prevention, slug-conflict races, and pull/commit coordination.
+   transaction does not rebuild needlessly.
 
-3. **SQLite WAL + busy_timeout** (`CachedStore::configure_connection`). `.next.db` is a
+3. **State mutation transactions** (`AppContext::state_transaction`). Machine-local state
+   (active contexts, excluded contexts, active users, resource availability) lives outside
+   the git repository, so it has its own lock — `state.toml.lock` next to the state file.
+   Each `next context` / `resource` / `user` (and the matching MCP tool) holds this
+   exclusive lock across its `get_state` → modify → `save_state`, closing the same
+   lost-update window. No HEAD reconciliation, since state is never committed to git.
+
+4. **SQLite WAL + busy_timeout** (`CachedStore::configure_connection`). `.next.db` is a
    single file shared by all processes; WAL lets readers and a writer proceed
    concurrently and the 5 s `busy_timeout` waits out transient locks instead of failing
    with `SQLITE_BUSY` (e.g. `next list` running during an MCP mutation). The WAL sidecars
    (`.next.db-wal` / `.next.db-shm`) are git-ignored.
 
-State mutations (context, resource, user) are machine-local: they write only to the XDG
-state file under a separate `state.toml.lock` (shared-read / exclusive-write) and do not
-take the repo lock. Lock ordering is always repo-lock-before-state-lock, never the
-reverse, so the two cannot deadlock.
+The repo lock and the state lock are independent files and never block one another. When
+a path takes both (e.g. `create_task` reading active contexts while committing), the
+ordering is always repo-lock-before-state-lock, never the reverse, so they cannot
+deadlock. `tests/locking.rs` covers lost-update prevention for both task and state edits,
+slug-conflict races, and pull/commit coordination; re-entrant lock unit tests live in
+`src/storage/lock.rs`.
 
 ---
 

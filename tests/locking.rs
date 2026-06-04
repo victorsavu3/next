@@ -14,7 +14,7 @@ use next::{
     },
     store::{Store as _, VcsBackend as _},
 };
-use next::storage::{GitBackend, TomlStore};
+use next::storage::{FileLock, GitBackend, TomlStore};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -309,6 +309,59 @@ fn concurrent_tag_edits_do_not_lose_updates() {
     assert_eq!(
         tags, expected_sorted,
         "all {N} concurrent tag additions must survive; lost updates indicate a broken transaction"
+    );
+}
+
+/// N concurrent "processes" each append a distinct active user to the shared
+/// machine-local state, using the same read-modify-write transaction the
+/// `next user`/`context`/`resource` handlers use: hold the (re-entrant)
+/// state lock across `get_state` → modify → `save_state`.  Without the
+/// transaction the per-call locks let two writers read the same state and
+/// clobber each other; with it, every appended user must survive.
+#[test]
+fn concurrent_state_edits_do_not_lose_updates() {
+    let dir = TempDir::new().unwrap();
+    init_git(dir.path());
+    // The state lock lives next to the state file; mirror what `TomlStore`
+    // derives so the test transaction and `save_state` share one lock.
+    let state_path = dir.path().join("state.toml");
+    let state_lock_path = state_path.with_extension("lock");
+
+    let root = Arc::new(dir.path().to_path_buf());
+    let state_lock_path = Arc::new(state_lock_path);
+    const N: usize = 12;
+    let barrier = Arc::new(std::sync::Barrier::new(N));
+
+    let handles: Vec<_> = (0..N)
+        .map(|i| {
+            let root = Arc::clone(&root);
+            let state_lock_path = Arc::clone(&state_lock_path);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let mut store = TomlStore::open((*root).clone(), root.join("state.toml")).unwrap();
+                barrier.wait();
+                // Transaction: hold the re-entrant state lock across the whole
+                // read-modify-write. get_state / save_state re-acquire it.
+                let _lock = FileLock::acquire(&state_lock_path).unwrap();
+                let mut state = store.get_state().unwrap();
+                state.active_users.push(format!("user{i}"));
+                store.save_state(&state).unwrap();
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let store = TomlStore::open(dir.path().to_path_buf(), state_path).unwrap();
+    let mut users = store.get_state().unwrap().active_users;
+    users.sort();
+    let mut expected: Vec<String> = (0..N).map(|i| format!("user{i}")).collect();
+    expected.sort();
+    assert_eq!(
+        users, expected,
+        "all {N} concurrent state edits must survive; lost updates indicate a broken state transaction"
     );
 }
 
