@@ -3,6 +3,8 @@ pub mod cli;
 pub mod config;
 pub mod domain;
 pub mod error;
+#[cfg(feature = "forgejo")]
+pub mod forgejo;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod plugin;
