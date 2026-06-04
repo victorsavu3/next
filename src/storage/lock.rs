@@ -4,7 +4,7 @@
 //! same data in parallel.  [`FileLock`] is a generic advisory `flock(2)` over a
 //! given lock file, used for two *separate* locks: the repository lock
 //! (`<repo>/.next.lock`, guarding tasks/tags and all git operations) and the
-//! machine-local state lock (`state.toml.lock`).  Each lock file is an
+//! machine-local state lock (`.state.toml.lock`).  Each lock file is an
 //! independent instance — they never block one another.
 //!
 //! Within one process the lock must be:

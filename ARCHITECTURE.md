@@ -245,7 +245,7 @@ state stored in `state.toml`; they do not touch tag metadata.
 Machine-local state (active contexts, active users, resource availability) is stored at
 `$XDG_STATE_HOME/task-manager/<fnv1a-hash-of-canonical-repo-path>/state.toml`.  This
 path is computed by `next::storage::state_path_for_repo(root)` and is never committed to
-git.  A separate advisory lock file co-located with `state.toml` (`state.toml.lock`)
+git.  A separate advisory lock file co-located with `state.toml` (`.state.toml.lock`)
 guards concurrent writes.
 
 Two one-time migrations run on `TomlStore::open()`:
@@ -397,7 +397,7 @@ mechanisms keep this safe:
 
 3. **State mutation transactions** (`AppContext::state_transaction`). Machine-local state
    (active contexts, excluded contexts, active users, resource availability) lives outside
-   the git repository, so it has its own lock — `state.toml.lock` next to the state file.
+   the git repository, so it has its own lock — `.state.toml.lock` next to the state file.
    Each `next context` / `resource` / `user` (and the matching MCP tool) holds this
    exclusive lock across its `get_state` → modify → `save_state`, closing the same
    lost-update window. No HEAD reconciliation, since state is never committed to git.

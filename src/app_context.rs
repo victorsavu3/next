@@ -43,7 +43,7 @@ impl AppContext {
 
     /// Runs `f` as a machine-local state mutation transaction.
     ///
-    /// Holds the exclusive state-file lock (`state.toml.lock`) — *separate* from
+    /// Holds the exclusive state-file lock (`.state.toml.lock`) — *separate* from
     /// the repository lock — across the entire closure, so a `get_state` →
     /// modify → `save_state` sequence cannot interleave with another process and
     /// lose updates.  State is not committed to git, so unlike [`transaction`]

@@ -41,7 +41,7 @@ impl TomlStore {
         if let Some(state_dir) = state_path.parent() {
             fs::create_dir_all(state_dir)?;
         }
-        let state_lock_path = state_path.with_extension("lock");
+        let state_lock_path = crate::storage::state_lock_path(&state_path);
         let mut this = Self { root, state_path, state_lock_path };
         this.migrate_state_file()?;
         this.migrate_tag_descriptions()?;
@@ -131,7 +131,7 @@ impl TomlStore {
         crate::storage::FileLock::acquire(&self.repo_lock_path())
     }
 
-    /// Acquires the exclusive state-file lock (`state.toml.lock`).
+    /// Acquires the exclusive state-file lock (`.state.toml.lock`).
     ///
     /// This is a *separate* lock from the repository lock (`.next.lock`): the
     /// machine-local state file lives outside the git repository and is never

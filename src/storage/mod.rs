@@ -148,14 +148,30 @@ pub fn lock_repo(root: &Path) -> Result<FileLock> {
     FileLock::acquire(&repo_lock_path(root))
 }
 
+/// Returns the advisory lock-file path co-located with `state_path`.
+///
+/// The lock is a hidden sibling of the state file: `.../state.toml` →
+/// `.../.state.toml.lock`.  It is machine-local and never committed.
+pub fn state_lock_path(state_path: &Path) -> PathBuf {
+    let name = state_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("state.toml");
+    let lock_name = format!(".{name}.lock");
+    match state_path.parent() {
+        Some(parent) => parent.join(lock_name),
+        None => PathBuf::from(lock_name),
+    }
+}
+
 /// Returns the path to the machine-local state lock file for the repo at `root`.
 ///
-/// Co-located with the state file (`state.toml.lock` next to `state.toml`).
+/// Co-located with the state file (`.state.toml.lock` next to `state.toml`).
 /// This is a *separate* lock from [`repo_lock_path`]: the state file lives
 /// outside the git repository, so concurrent state writes are serialised on
 /// their own lock and never block (or are blocked by) repository mutations.
 pub fn state_lock_path_for_repo(root: &Path) -> PathBuf {
-    state_path_for_repo(root).with_extension("lock")
+    state_lock_path(&state_path_for_repo(root))
 }
 
 /// Acquires the exclusive state-file lock for the repo rooted at `root`.

@@ -325,7 +325,7 @@ fn concurrent_state_edits_do_not_lose_updates() {
     // The state lock lives next to the state file; mirror what `TomlStore`
     // derives so the test transaction and `save_state` share one lock.
     let state_path = dir.path().join("state.toml");
-    let state_lock_path = state_path.with_extension("lock");
+    let state_lock_path = next::storage::state_lock_path(&state_path);
 
     let root = Arc::new(dir.path().to_path_buf());
     let state_lock_path = Arc::new(state_lock_path);
