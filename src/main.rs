@@ -64,6 +64,7 @@ fn main() -> anyhow::Result<()> {
         Command::Sync(_) => "sync",
         Command::Tag(_) => "tag",
         Command::Tree(_) => "tree",
+        Command::Plugin(_) => "plugin",
         Command::Tutorial(_) => unreachable!("handled above"),
     };
 
@@ -94,6 +95,7 @@ fn main() -> anyhow::Result<()> {
         Command::Sync(args) => commands::sync::run(args, &mut ctx),
         Command::Tag(args) => commands::tag::run(args, &mut ctx),
         Command::Tree(args) => commands::tree::run(args, &ctx),
+        Command::Plugin(args) => commands::plugin::run(args, &mut ctx),
         Command::Tutorial(_) => unreachable!("handled above"),
     };
 

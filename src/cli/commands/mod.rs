@@ -10,6 +10,7 @@ pub mod init;
 pub mod list;
 pub mod move_cmd;
 pub mod next_cmd;
+pub mod plugin;
 pub mod open;
 pub mod resource;
 pub mod show;

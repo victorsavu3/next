@@ -124,6 +124,9 @@ pub enum Command {
     /// Show all tasks in a tree view.
     Tree(commands::tree::Args),
 
+    /// Manage export plugins (machine-local; not synced via git).
+    Plugin(commands::plugin::Args),
+
     /// Show the interactive tutorial.
     Tutorial(commands::tutorial::Args),
 }
