@@ -407,6 +407,38 @@ fn recur_chain_of_three_spawns() {
     assert_eq!(open.len(), 1, "exactly one open task in chain");
 }
 
+/// Re-running `done` on an already-completed recurring instance must error and
+/// must NOT spawn a second next instance (regression for issue #9).
+#[test]
+fn recur_double_done_spawns_exactly_one_instance() {
+    let mut env = common::setup();
+    let today = Local::now().date_naive();
+    add::run(
+        add::Args {
+            due: Some(today.to_string()),
+            recur_completion: Some(7),
+            ..add_args("Recurring chore")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let id = all_tasks(&env)[0].id.to_string();
+
+    // First done → marks done and spawns exactly one new instance.
+    done::run(done_args(&id), &mut env.ctx).unwrap();
+    assert_eq!(all_tasks(&env).len(), 2, "first done spawns one instance");
+
+    // Second done on the same (now Done) task → errors, spawns nothing.
+    let err = done::run(done_args(&id), &mut env.ctx).unwrap_err();
+    assert!(err.to_string().contains("already done"), "unexpected error: {err}");
+
+    let tasks = all_tasks(&env);
+    assert_eq!(tasks.len(), 2, "second done must not spawn a duplicate instance");
+    let open: Vec<_> = tasks.iter().filter(|t| t.status == Status::Open).collect();
+    assert_eq!(open.len(), 1, "still exactly one open instance");
+}
+
 /// Old TOML files using the `rule` field name (pre-rename alias) load correctly.
 ///
 /// The actual deserialization alias is verified by the storage unit test

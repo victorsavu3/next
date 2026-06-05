@@ -11,7 +11,8 @@ use uuid::Uuid;
 
 use crate::{
     core::{
-        domain::{tag, task::{Recurrence, Task}},
+        domain::{tag, task::{Recurrence, Status, Task}},
+        error::TaskError,
         recurrence::spawn_next,
         resolve::resolve_task_id,
         storage::{self, FileLock},
@@ -259,6 +260,20 @@ pub fn complete_task(
     let _txn = begin_mutation(repo_root, store, vcs)?;
 
     let mut task = store.get_task(id)?;
+
+    // Only active (Open/Started) tasks may be completed. Re-completing an
+    // already-resolved task would re-mark it done and spawn a duplicate
+    // recurrence instance, so reject it with a clear error instead.
+    if !task.is_active() {
+        let msg = match task.status {
+            Status::Done => format!("task {id} is already done"),
+            Status::Cancelled => format!("cannot complete task {id}: it is cancelled"),
+            // Unreachable: is_active() is true for Open/Started.
+            Status::Open | Status::Started => unreachable!(),
+        };
+        return Err(TaskError::Other(msg).into());
+    }
+
     task.mark_done();
 
     let task_path = storage::task_path(repo_root, &task);
