@@ -60,13 +60,30 @@ pub fn apply_snap(mut date: NaiveDate, snap: &Snap) -> NaiveDate {
             } else {
                 (date.year(), date.month() + 1)
             };
-            NaiveDate::from_ymd_opt(y, m, d).unwrap_or_else(|| {
-                // day doesn't exist in month m — clamp to the last day of that month
-                let (overflow_y, overflow_m) = if m == 12 { (y + 1, 1u32) } else { (y, m + 1) };
-                NaiveDate::from_ymd_opt(overflow_y, overflow_m, 1).unwrap() - Duration::days(1)
-            })
+            // day doesn't exist in month m — clamp to the last day of that month
+            clamped_date(y, m, d)
         }
     }
+}
+
+/// Last calendar day of `(year, month)` (e.g. 28/29 for February, 30/31 else).
+///
+/// Computed as the first of the following month minus one day, which handles
+/// leap years and the December → January wrap without a lookup table.
+fn last_day_of_month(year: i32, month: u32) -> NaiveDate {
+    let (ny, nm) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    NaiveDate::from_ymd_opt(ny, nm, 1).unwrap() - Duration::days(1)
+}
+
+/// Build the candidate date for `day` in `(year, month)`, clamping a
+/// nonexistent target day (e.g. the 31st of a 30-day month, or Feb 29 in a
+/// non-leap year) to the last day of that month rather than skipping it.
+fn clamped_date(year: i32, month: u32, day: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(year, month, day).unwrap_or_else(|| last_day_of_month(year, month))
 }
 
 // ─── RRULE parser ──────────────────────────────────────────────────────────
@@ -255,15 +272,16 @@ pub fn next_occurrence(
                     let month = (candidate_idx % 12 + 1) as u32;
 
                     // Pick the earliest valid date `> after` among all BYMONTHDAY
-                    // values in this month. `days` is sorted ascending, and a
-                    // nonexistent day (e.g. Feb 30) is skipped via from_ymd_opt,
-                    // so the first match found is the minimum (issue #11). Months
-                    // with no valid day fall through to the next iteration; the
-                    // existing month-skip behaviour for nonexistent days is
-                    // unchanged (tracked separately in #12).
+                    // values in this month. A target day that doesn't exist in
+                    // this month (e.g. the 31st of a 30-day month, or Feb 29 in
+                    // a non-leap year) is CLAMPED to the month's last day rather
+                    // than skipped (issue #12). Several days can clamp to the
+                    // same date (e.g. 30 and 31 both → Feb 28), so `min` over the
+                    // clamped candidates naturally dedupes and still yields the
+                    // earliest valid date `> after` (issue #11).
                     if let Some(d) = days
                         .iter()
-                        .filter_map(|&day| NaiveDate::from_ymd_opt(year, month, day))
+                        .map(|&day| clamped_date(year, month, day))
                         .filter(|&d| d > after)
                         .min()
                     {
@@ -300,9 +318,12 @@ pub fn next_occurrence(
                     let year = (candidate_idx / 12) as i32;
                     let month = (candidate_idx % 12 + 1) as u32;
 
+                    // Clamp a nonexistent target day to the month's last day
+                    // rather than skipping the year (issue #12); `min` over the
+                    // clamped candidates dedupes and picks the earliest > after.
                     if let Some(d) = days
                         .iter()
-                        .filter_map(|&day| NaiveDate::from_ymd_opt(year, month, day))
+                        .map(|&day| clamped_date(year, month, day))
                         .filter(|&d| d > after)
                         .min()
                     {
@@ -593,6 +614,63 @@ mod tests {
             next_occurrence("FREQ=YEARLY;BYMONTHDAY=15", anchor, d(2026, 3, 20)).unwrap(),
             d(2027, 3, 15)
         );
+    }
+
+    // ── month-end clamping (issue #12) ──────────────────────────────────────
+
+    #[test]
+    fn monthly_clamps_jan31_to_feb_end_then_keeps_mar31() {
+        // Anchor Jan 31, FREQ=MONTHLY. 2026 is not a leap year, so February has
+        // 28 days: after Jan 31 → Feb 28 (clamped, not skipped to March).
+        let anchor = d(2026, 1, 31);
+        let result = next_occurrence("FREQ=MONTHLY", anchor, d(2026, 1, 31)).unwrap();
+        assert_eq!(result, d(2026, 2, 28));
+        // After Feb 28 → Mar 31: March is a full month, so the day-31 target is
+        // kept exactly (clamp only applies to short months).
+        let result = next_occurrence("FREQ=MONTHLY", anchor, d(2026, 2, 28)).unwrap();
+        assert_eq!(result, d(2026, 3, 31));
+    }
+
+    #[test]
+    fn monthly_clamps_jan31_to_feb29_in_leap_year() {
+        // Anchor Jan 31 in a leap year (2028): after Jan 31 → Feb 29.
+        let anchor = d(2028, 1, 31);
+        let result = next_occurrence("FREQ=MONTHLY", anchor, d(2028, 1, 31)).unwrap();
+        assert_eq!(result, d(2028, 2, 29));
+    }
+
+    #[test]
+    fn monthly_bymonthday31_clamps_in_30day_month() {
+        // BYMONTHDAY=31 MONTHLY across April (30 days) → Apr 30.
+        let anchor = d(2026, 1, 31);
+        let result = next_occurrence("FREQ=MONTHLY;BYMONTHDAY=31", anchor, d(2026, 4, 1)).unwrap();
+        assert_eq!(result, d(2026, 4, 30));
+    }
+
+    #[test]
+    fn monthly_bymonthday_30_31_dedup_in_february() {
+        // BYMONTHDAY=30,31 in February (2026, 28 days): both clamp to Feb 28, so
+        // the result is a single Feb 28 (no double counting), and after Feb 28
+        // the next qualifying day is Mar 30 (the earliest of 30/31 in March).
+        let anchor = d(2026, 1, 30);
+        let result =
+            next_occurrence("FREQ=MONTHLY;BYMONTHDAY=30,31", anchor, d(2026, 1, 31)).unwrap();
+        assert_eq!(result, d(2026, 2, 28));
+        let result =
+            next_occurrence("FREQ=MONTHLY;BYMONTHDAY=30,31", anchor, d(2026, 2, 28)).unwrap();
+        assert_eq!(result, d(2026, 3, 30));
+    }
+
+    #[test]
+    fn yearly_clamps_feb29_to_feb28_in_non_leap_years() {
+        // Anchor Feb 29 2024, FREQ=YEARLY: after Feb 29 2024 → Feb 28 2025
+        // (clamped, year not skipped).
+        let anchor = d(2024, 2, 29);
+        let result = next_occurrence("FREQ=YEARLY", anchor, d(2024, 2, 29)).unwrap();
+        assert_eq!(result, d(2025, 2, 28));
+        // 2028 is a leap year, so Feb 29 2028 is kept exactly (not clamped).
+        let result = next_occurrence("FREQ=YEARLY", anchor, d(2027, 3, 1)).unwrap();
+        assert_eq!(result, d(2028, 2, 29));
     }
 
     #[test]

@@ -300,6 +300,8 @@ scoring while the project is in progress.
 
 The `anchor` is set once (on `next add`) to the task's `start` or `due` date, falling back to today. All future instances carry the same `anchor` so INTERVAL calculations stay aligned.
 
+For `MONTHLY`/`YEARLY` rules, a target day that does not exist in a given month is CLAMPED to that month's last day rather than skipping the month/year: the 31st becomes the month's last day (e.g. Apr 30, Feb 28), and Feb 29 becomes Feb 28 in non-leap years. When several `BYMONTHDAY` values clamp to the same date (e.g. 30 and 31 both → Feb 28), the occurrence is counted once.
+
 A schedule RRULE MUST be validated when it is set (on `next add`/`next edit`, and via the MCP `add_task`/`update_task` tools): the rule is parsed with the same parser used to compute occurrences, and an invalid or unsupported rule (missing `FREQ`, `INTERVAL` < 1, non-positive `BYMONTHDAY`, unknown `FREQ`, positional `BYDAY`, etc.) is rejected with a clear error at set time. A malformed rule MUST NOT be stored and MUST NOT be deferred to fail later on `next done`.
 
 ### 7.3 Snap values
