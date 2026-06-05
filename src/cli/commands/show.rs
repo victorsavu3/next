@@ -47,16 +47,14 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     println!("Priority: {}", task.priority);
 
     // Score line + compact breakdown of non-zero factors.
-    let mut parts: Vec<String> = Vec::new();
-    if bd.due       != 0.0 { parts.push(format!("due {:.2}", bd.due)); }
-    if bd.priority  != 0.0 { parts.push(format!("priority {:.2}", bd.priority)); }
-    if bd.project   != 0.0 { parts.push(format!("project {:.2}", bd.project)); }
-    if bd.age       != 0.0 { parts.push(format!("age {:.2}", bd.age)); }
-    if bd.tags      != 0.0 { parts.push(format!("tags {:.2}", bd.tags)); }
-    if bd.parent_tags != 0.0 { parts.push(format!("parent-tags {:.2}", bd.parent_tags)); }
-    if bd.started   != 0.0 { parts.push(format!("started {:.2}", bd.started)); }
-    if bd.adjustment != 0.0 { parts.push(format!("adj {:.2}", bd.adjustment)); }
-    if bd.no_time_urgency   { parts.push("no-time-urgency".to_string()); }
+    let mut parts: Vec<String> = bd
+        .nonzero_factors()
+        .into_iter()
+        .map(|(label, value)| format!("{label} {value:.2}"))
+        .collect();
+    if bd.no_time_urgency {
+        parts.push("no-time-urgency".to_string());
+    }
     if parts.is_empty() {
         println!("Score:    {:.2}", bd.total);
     } else {

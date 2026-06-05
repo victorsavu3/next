@@ -6,6 +6,8 @@
 //! separate steps lets later tasks add modes and actions without reshaping the
 //! event loop.
 
+use std::collections::HashMap;
+
 use chrono::NaiveDate;
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -13,12 +15,18 @@ use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
 use crate::core::domain::filter;
+use crate::core::domain::tag::TagMeta;
 use crate::core::domain::task::Task;
-use crate::core::scoring::{self, ScoredTask};
+use crate::core::scoring::{self, ScoreBreakdown, ScoredTask};
 use crate::core::{FilterArgs, TaskRepository};
 use crate::Config;
 
 use super::config::ConfigSource;
+
+/// How many lines a single PageUp/PageDown (or Ctrl-u/Ctrl-d) moves the detail
+/// pane. A fixed step keeps the action self-contained; the draw layer clamps it
+/// against the actual content height.
+const DETAIL_SCROLL_STEP: u16 = 10;
 
 /// Which interaction mode the UI is in.
 ///
@@ -65,6 +73,24 @@ pub enum Action {
     ToggleFuture,
     /// Toggle the `--all-users` filter flag and reload.
     ToggleAllUsers,
+    /// Scroll the detail pane down by one page.
+    DetailPageDown,
+    /// Scroll the detail pane up by one page.
+    DetailPageUp,
+}
+
+/// Everything the detail pane needs for one task, resolved from the cached
+/// full task list so the draw path makes no store calls.
+///
+/// `parent`, `children`, and `blockers` are pre-resolved `(short_id, title)`
+/// pairs (blockers fall back to the raw id string when unresolved). `breakdown`
+/// is recomputed from the cached tasks + tag metadata each frame (cheap).
+pub struct DetailData<'a> {
+    pub task: &'a Task,
+    pub parent: Option<(String, String)>,
+    pub children: Vec<(String, String)>,
+    pub blockers: Vec<String>,
+    pub breakdown: ScoreBreakdown,
 }
 
 /// The central application state.
@@ -78,6 +104,16 @@ pub struct App {
     tasks: Vec<ScoredTask>,
     /// Index of the selected task in `tasks`. Meaningless when `tasks` is empty.
     selected: usize,
+
+    /// The full, unfiltered task list from the last [`App::reload`]. Cached so
+    /// the detail pane can resolve parent/children/blockers without store calls.
+    all_tasks: Vec<Task>,
+    /// Tag metadata from the last reload, cached for the detail breakdown.
+    tag_metas: HashMap<String, TagMeta>,
+
+    /// Vertical scroll offset (in lines) of the detail pane. Reset to 0 whenever
+    /// the selection changes; clamped against the content by the draw layer.
+    detail_scroll: u16,
 
     /// Active filter tokens (`+tag`, `-tag`, `parent:`, `context:`, `user:`),
     /// threaded into [`FilterArgs`] on every [`App::reload`].
@@ -111,6 +147,9 @@ impl App {
             today,
             tasks: Vec::new(),
             selected: 0,
+            all_tasks: Vec::new(),
+            tag_metas: HashMap::new(),
+            detail_scroll: 0,
             filter_tokens: Vec::new(),
             filter_future: false,
             filter_all: false,
@@ -194,6 +233,75 @@ impl App {
         self.tasks.get(self.selected).map(|s| &s.task)
     }
 
+    /// The current detail-pane scroll offset, in lines.
+    pub fn detail_scroll(&self) -> u16 {
+        self.detail_scroll
+    }
+
+    /// The full task list cached at the last reload (for parent/tag pickers in
+    /// later tasks, and for the detail pane's reference resolution).
+    pub fn all_tasks(&self) -> &[Task] {
+        &self.all_tasks
+    }
+
+    /// The tag metadata cached at the last reload (for tag multiselect / scoring).
+    pub fn tag_metas(&self) -> &HashMap<String, TagMeta> {
+        &self.tag_metas
+    }
+
+    /// Bundles everything the detail pane renders for the selected task: the
+    /// task itself, its resolved parent/children/blockers, and its score
+    /// breakdown. Resolved from the cached vecs, so it makes no store calls.
+    /// Returns `None` when the list is empty.
+    pub fn selected_detail(&self) -> Option<DetailData<'_>> {
+        let task = self.selected_task()?;
+
+        let parent = task.parent_id.and_then(|pid| {
+            self.all_tasks
+                .iter()
+                .find(|t| t.id == pid)
+                .map(|p| (short_id(p), p.title.clone()))
+        });
+
+        let children: Vec<(String, String)> = self
+            .all_tasks
+            .iter()
+            .filter(|t| t.parent_id == Some(task.id))
+            .map(|c| (short_id(c), c.title.clone()))
+            .collect();
+
+        let blockers: Vec<String> = task
+            .blocked_by
+            .iter()
+            .map(|bid| {
+                self.all_tasks
+                    .iter()
+                    .find(|t| t.id == *bid)
+                    .map(|t| format!("[{}] {}", short_id(t), t.title))
+                    .unwrap_or_else(|| bid.to_string())
+            })
+            .collect();
+
+        let parent_task = task
+            .parent_id
+            .and_then(|pid| self.all_tasks.iter().find(|t| t.id == pid));
+        let breakdown = scoring::score_with_breakdown(
+            task,
+            parent_task,
+            self.today,
+            &self.repo.scoring,
+            &self.tag_metas,
+        );
+
+        Some(DetailData {
+            task,
+            parent,
+            children,
+            blockers,
+            breakdown,
+        })
+    }
+
     // ── Data loading ──────────────────────────────────────────────────────
 
     /// Re-runs the load + score pipeline (the same one `next list` uses) with
@@ -231,6 +339,9 @@ impl App {
         if let Some(n) = limit {
             self.tasks.truncate(n);
         }
+        // Keep the full task list + tag metadata for the detail pane.
+        self.all_tasks = all_tasks;
+        self.tag_metas = tag_metas;
         self.clamp_selection();
         Ok(())
     }
@@ -259,6 +370,14 @@ impl App {
             KeyCode::Char('A') => Some(Action::ToggleAll),
             KeyCode::Char('F') => Some(Action::ToggleFuture),
             KeyCode::Char('U') => Some(Action::ToggleAllUsers),
+            KeyCode::PageDown => Some(Action::DetailPageDown),
+            KeyCode::PageUp => Some(Action::DetailPageUp),
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::DetailPageDown)
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::DetailPageUp)
+            }
             _ => None,
         }
     }
@@ -299,6 +418,11 @@ impl App {
                 self.filter_all_users = !self.filter_all_users;
                 self.reload_with_status("reloaded");
             }
+            // A page is half the detail body height; the exact figure is
+            // unknown here (it depends on the rendered area), so use a sensible
+            // fixed step and let the draw layer clamp the offset to the content.
+            Action::DetailPageDown => self.detail_scroll_down(DETAIL_SCROLL_STEP),
+            Action::DetailPageUp => self.detail_scroll_up(DETAIL_SCROLL_STEP),
         }
     }
 
@@ -355,6 +479,7 @@ impl App {
         }
         if self.selected + 1 < self.tasks.len() {
             self.selected += 1;
+            self.detail_scroll = 0;
         }
     }
 
@@ -362,20 +487,55 @@ impl App {
         if self.tasks.is_empty() {
             return;
         }
+        let prev = self.selected;
         self.selected = self.selected.saturating_sub(1);
+        if self.selected != prev {
+            self.detail_scroll = 0;
+        }
     }
 
     fn select_first(&mut self) {
+        if self.selected != 0 {
+            self.detail_scroll = 0;
+        }
         self.selected = 0;
     }
 
     fn select_last(&mut self) {
-        if self.tasks.is_empty() {
-            self.selected = 0;
-        } else {
-            self.selected = self.tasks.len() - 1;
+        let last = self.tasks.len().saturating_sub(1);
+        if self.selected != last {
+            self.detail_scroll = 0;
+        }
+        self.selected = last;
+    }
+
+    // ── Detail scrolling ──────────────────────────────────────────────────
+
+    /// Scrolls the detail pane down by `lines`. Over-scroll is clamped by the
+    /// draw layer against the rendered content height, so we only guard the
+    /// `u16` arithmetic here.
+    fn detail_scroll_down(&mut self, lines: u16) {
+        self.detail_scroll = self.detail_scroll.saturating_add(lines);
+    }
+
+    /// Scrolls the detail pane up by `lines`, saturating at the top.
+    fn detail_scroll_up(&mut self, lines: u16) {
+        self.detail_scroll = self.detail_scroll.saturating_sub(lines);
+    }
+
+    /// Clamps the detail scroll so the offset never exceeds `max`. The draw
+    /// layer calls this once it knows the content height vs. the pane height.
+    pub fn clamp_detail_scroll(&mut self, max: u16) {
+        if self.detail_scroll > max {
+            self.detail_scroll = max;
         }
     }
+}
+
+/// The first 8 hex digits of a task's UUID (dashes stripped), matching the
+/// `[id]` form used by `next show`.
+fn short_id(task: &Task) -> String {
+    task.id.to_string().replace('-', "")[..8].to_owned()
 }
 
 #[cfg(test)]
@@ -593,5 +753,49 @@ mod tests {
         assert!(!app.should_quit());
         app.update(Action::Quit);
         assert!(app.should_quit());
+    }
+
+    #[test]
+    fn detail_scroll_clamps_to_content() {
+        let mut app = app_with_n_tasks(1);
+        app.update(Action::DetailPageDown);
+        app.update(Action::DetailPageDown);
+        assert!(app.detail_scroll() > 0);
+        // A short pane (max offset 3) clamps the larger accumulated offset.
+        app.clamp_detail_scroll(3);
+        assert_eq!(app.detail_scroll(), 3);
+        // Cannot go below zero.
+        app.update(Action::DetailPageUp);
+        app.update(Action::DetailPageUp);
+        assert_eq!(app.detail_scroll(), 0);
+    }
+
+    #[test]
+    fn detail_scroll_resets_on_selection_change() {
+        let mut app = app_with_n_tasks(3);
+        app.update(Action::DetailPageDown);
+        assert!(app.detail_scroll() > 0);
+        app.update(Action::SelectNext);
+        assert_eq!(app.detail_scroll(), 0);
+
+        // Scroll again, then jump to last / first.
+        app.update(Action::DetailPageDown);
+        assert!(app.detail_scroll() > 0);
+        app.update(Action::SelectLast);
+        assert_eq!(app.detail_scroll(), 0);
+
+        app.update(Action::DetailPageDown);
+        app.update(Action::SelectFirst);
+        assert_eq!(app.detail_scroll(), 0);
+    }
+
+    #[test]
+    fn detail_scroll_unchanged_when_selection_does_not_move() {
+        let mut app = app_with_n_tasks(2);
+        app.update(Action::DetailPageDown);
+        let before = app.detail_scroll();
+        // Already at first; SelectPrev is a no-op and must not reset scroll.
+        app.update(Action::SelectPrev);
+        assert_eq!(app.detail_scroll(), before);
     }
 }

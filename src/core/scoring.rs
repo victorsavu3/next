@@ -140,6 +140,42 @@ pub struct ScoreBreakdown {
     pub no_time_urgency: bool,
 }
 
+impl ScoreBreakdown {
+    /// The non-zero factors as `(label, value)` pairs, in display order, for a
+    /// compact breakdown such as `due 12.00  priority 1.00`. The trailing
+    /// `no-time-urgency` marker (value `0.0`) is appended when it applied.
+    ///
+    /// Shared by `next show` and the TUI detail pane so both stay in sync.
+    pub fn nonzero_factors(&self) -> Vec<(&'static str, f64)> {
+        let mut parts = Vec::new();
+        if self.due != 0.0 {
+            parts.push(("due", self.due));
+        }
+        if self.priority != 0.0 {
+            parts.push(("priority", self.priority));
+        }
+        if self.project != 0.0 {
+            parts.push(("project", self.project));
+        }
+        if self.age != 0.0 {
+            parts.push(("age", self.age));
+        }
+        if self.tags != 0.0 {
+            parts.push(("tags", self.tags));
+        }
+        if self.parent_tags != 0.0 {
+            parts.push(("parent-tags", self.parent_tags));
+        }
+        if self.started != 0.0 {
+            parts.push(("started", self.started));
+        }
+        if self.adjustment != 0.0 {
+            parts.push(("adj", self.adjustment));
+        }
+        parts
+    }
+}
+
 /// Due-date contribution to the urgency score.
 ///
 /// Returns 0.0 when no due date is set. Otherwise the score rises steeply as
@@ -649,5 +685,43 @@ mod tests {
         let orphan_score = scored.iter().find(|s| s.task.title == "no parent").unwrap().score;
         // child gets +1.0 from parent's @work tag
         assert!((child_score - orphan_score - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn nonzero_factors_lists_only_nonzero_in_order() {
+        let bd = ScoreBreakdown {
+            due: 12.0,
+            priority: 1.0,
+            project: 0.0,
+            age: 0.5,
+            tags: 0.0,
+            parent_tags: 0.0,
+            started: 0.0,
+            adjustment: -2.0,
+            total: 11.5,
+            no_time_urgency: false,
+        };
+        let factors = bd.nonzero_factors();
+        assert_eq!(
+            factors,
+            vec![("due", 12.0), ("priority", 1.0), ("age", 0.5), ("adj", -2.0)]
+        );
+    }
+
+    #[test]
+    fn nonzero_factors_empty_when_all_zero() {
+        let bd = ScoreBreakdown {
+            due: 0.0,
+            priority: 0.0,
+            project: 0.0,
+            age: 0.0,
+            tags: 0.0,
+            parent_tags: 0.0,
+            started: 0.0,
+            adjustment: 0.0,
+            total: 0.0,
+            no_time_urgency: true,
+        };
+        assert!(bd.nonzero_factors().is_empty());
     }
 }
