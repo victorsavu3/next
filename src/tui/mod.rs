@@ -5,10 +5,9 @@
 //! binary. The TUI deliberately does NOT depend on the `cli` module; it reuses
 //! the shared core (`crate::core`) directly.
 
-// The TUI carries its OWN version, deliberately decoupled from the crate
-// version (currently 1.1.0). The terminal UI evolves on its own cadence, so we
-// track it independently here and bump it as the TUI matures.
-pub const VERSION: &str = "0.1.0";
+// `next-tui` shares the crate version with the other binaries (`next`,
+// `next-mcp`, `next-forgejo`) — there is no independent TUI versioning.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod app;
 pub mod config;
