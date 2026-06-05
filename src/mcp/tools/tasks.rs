@@ -2,7 +2,7 @@ use chrono::Local;
 use serde_json::{json, Value};
 
 use crate::core::domain::{date_parse::parse_date, filter, task::{Recurrence, Task}};
-use crate::core::recurrence::parse_snap;
+use crate::core::recurrence::{parse_snap, validate_rrule};
 use crate::core::scoring;
 use crate::core::service::{apply_edits, complete_task, create_task, CreateTaskParams, EditTaskParams};
 use crate::core::resolve::resolve_task_id;
@@ -105,6 +105,8 @@ pub fn add_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
         .transpose()?;
 
     let recurrence = if let Some(rule) = str_param(params, "recur_schedule") {
+        validate_rrule(rule)
+            .map_err(|e| anyhow::anyhow!("invalid recurrence rule {rule:?}: {e}"))?;
         let anchor = start.or(due).unwrap_or(today);
         let snap = str_param(params, "recur_snap").map(parse_snap).transpose()?;
         Some(Recurrence::Schedule { rrule: rule.to_owned(), anchor, snap })
@@ -226,6 +228,8 @@ pub fn update_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<V
     let recurrence: Option<Recurrence> = if bool_param(params, "clear_recurrence") {
         None // handled via clear_recurrence flag
     } else if let Some(rule) = str_param(params, "recur_schedule") {
+        validate_rrule(rule)
+            .map_err(|e| anyhow::anyhow!("invalid recurrence rule {rule:?}: {e}"))?;
         let existing = ctx.store.get_task(id)?;
         let anchor = match &existing.recurrence {
             Some(Recurrence::Schedule { anchor, .. }) => *anchor,

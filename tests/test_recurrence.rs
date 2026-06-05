@@ -36,6 +36,40 @@ fn done_args(id: &str) -> done::Args {
     }
 }
 
+fn edit_args(id: &str) -> edit::Args {
+    edit::Args {
+        id: id.to_string(),
+        title: None,
+        due: None,
+        start: None,
+        priority: None,
+        slug: None,
+        assignee: None,
+        clear_assignee: false,
+        tags: vec![],
+        remove_tags: vec![],
+        parent: None,
+        blocked_by: vec![],
+        description: None,
+        clear_description: false,
+        url: None,
+        clear_url: false,
+        notes: None,
+        recur_schedule: None,
+        recur_completion: None,
+        recur_snap: None,
+        clear_recurrence: false,
+        long_term: false,
+        adjust: None,
+        clear_due: false,
+        clear_start: false,
+        clear_parent: false,
+        clear_blocked_by: false,
+        json: false,
+        tag_tokens: vec![],
+    }
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 /// Returns all tasks regardless of status.
@@ -698,5 +732,120 @@ fn recur_first_instance_has_recurrence_id() {
         task.recurrence_id,
         Some(task.id),
         "first instance should have recurrence_id == its own id"
+    );
+}
+
+// ── rrule validation at add/edit time (issue #13) ────────────────────────────
+
+/// Malformed schedule rules are rejected at `add` time, not silently stored.
+#[test]
+fn recur_add_rejects_malformed_rrule() {
+    // Each of these is rejected by parse_rrule and so must fail at add time.
+    let bad_rules = [
+        "",                  // empty string
+        "hello",             // garbage (no '=')
+        "INTERVAL=2",        // missing FREQ
+        "FREQ=DAILY;INTERVAL=0",   // INTERVAL must be >= 1
+        "FREQ=HOURLY",       // unsupported FREQ
+        "FREQ=MONTHLY;BYMONTHDAY=0", // BYMONTHDAY must be positive
+        "FREQ=MONTHLY;BYDAY=1MO",    // positional BYDAY not supported
+    ];
+
+    for rule in bad_rules {
+        let mut env = common::setup();
+        let result = add::run(
+            add::Args {
+                recur_schedule: Some(rule.to_string()),
+                ..add_args("Bad rule")
+            },
+            &mut env.ctx,
+        );
+        assert!(
+            result.is_err(),
+            "add should reject malformed rrule {rule:?} at add time"
+        );
+        // Nothing should have been stored.
+        assert!(
+            all_tasks(&env).is_empty(),
+            "no task should be created for malformed rrule {rule:?}"
+        );
+    }
+}
+
+/// A valid schedule rule still succeeds and round-trips unchanged.
+#[test]
+fn recur_add_accepts_valid_rrule_unchanged() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            recur_schedule: Some("FREQ=WEEKLY;BYDAY=MO,FR".into()),
+            slug: Some("valid-rule".into()),
+            ..add_args("Valid rule")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let task = env.ctx.repo.store.get_task_by_slug("valid-rule").unwrap().unwrap();
+    match &task.recurrence {
+        Some(Recurrence::Schedule { rrule, .. }) => {
+            assert_eq!(rrule, "FREQ=WEEKLY;BYDAY=MO,FR", "valid rule must round-trip unchanged");
+        }
+        other => panic!("expected schedule recurrence, got {other:?}"),
+    }
+}
+
+/// Editing a task to a malformed rule is rejected at `edit` time and leaves the
+/// existing (valid) rule untouched.
+#[test]
+fn recur_edit_rejects_malformed_rrule() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            start: Some("2026-06-01".into()),
+            recur_schedule: Some("FREQ=MONTHLY;BYMONTHDAY=1".into()),
+            slug: Some("editme".into()),
+            ..add_args("Edit me")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let result = edit::run(
+        edit::Args {
+            recur_schedule: Some("FREQ=HOURLY".into()),
+            ..edit_args("editme")
+        },
+        &mut env.ctx,
+    );
+    assert!(result.is_err(), "edit should reject malformed rrule at edit time");
+
+    // The original valid rule must be preserved.
+    let task = env.ctx.repo.store.get_task_by_slug("editme").unwrap().unwrap();
+    match &task.recurrence {
+        Some(Recurrence::Schedule { rrule, .. }) => {
+            assert_eq!(rrule, "FREQ=MONTHLY;BYMONTHDAY=1", "original rule must be unchanged");
+        }
+        other => panic!("expected schedule recurrence, got {other:?}"),
+    }
+}
+
+/// The error surfaces at add time, never deferred to `done`: since the bad
+/// task is never created, `done` has nothing to fail on.
+#[test]
+fn recur_invalid_rule_error_is_not_deferred_to_done() {
+    let mut env = common::setup();
+    let add_result = add::run(
+        add::Args {
+            recur_schedule: Some("FREQ=DAILY;INTERVAL=0".into()),
+            slug: Some("deferred".into()),
+            ..add_args("Deferred error")
+        },
+        &mut env.ctx,
+    );
+    assert!(add_result.is_err(), "invalid rule must fail at add time");
+    assert!(
+        env.ctx.repo.store.get_task_by_slug("deferred").unwrap().is_none(),
+        "no task should exist, so the error cannot be deferred to done"
     );
 }

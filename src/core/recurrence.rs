@@ -162,6 +162,17 @@ fn parse_rrule(rrule: &str) -> anyhow::Result<RRule> {
     })
 }
 
+/// Validate a schedule recurrence rule (RRULE) string.
+///
+/// Runs the rule through the authoritative parser ([`parse_rrule`]) and returns
+/// an error if it is malformed or uses an unsupported feature (missing `FREQ`,
+/// `INTERVAL` < 1, non-positive `BYMONTHDAY`, unknown `FREQ`, positional
+/// `BYDAY`, etc.). Used to reject invalid rules up front at `add`/`edit` time
+/// instead of failing later when the task is completed.
+pub fn validate_rrule(rrule: &str) -> anyhow::Result<()> {
+    parse_rrule(rrule).map(|_| ())
+}
+
 /// Returns the first occurrence of the rule strictly after `after`.
 pub fn next_occurrence(
     rrule: &str,

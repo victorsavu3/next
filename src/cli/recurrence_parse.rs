@@ -1,6 +1,9 @@
 use chrono::NaiveDate;
 
-use crate::core::{domain::task::Recurrence, recurrence::parse_snap};
+use crate::core::{
+    domain::task::Recurrence,
+    recurrence::{parse_snap, validate_rrule},
+};
 
 /// Parse recurrence arguments into a [`Recurrence`] value.
 ///
@@ -25,11 +28,18 @@ pub fn parse_recurrence(
                 "--recur-schedule and --recur-completion are mutually exclusive"
             );
         }
-        (Some(rule), None) => Ok(Some(Recurrence::Schedule {
-            rrule: rule,
-            anchor,
-            snap: snap_val,
-        })),
+        (Some(rule), None) => {
+            // Validate the rule up front so a malformed or unsupported RRULE is
+            // rejected at add/edit time rather than failing later on `done`.
+            validate_rrule(&rule).map_err(|e| {
+                anyhow::anyhow!("invalid recurrence rule {rule:?}: {e}")
+            })?;
+            Ok(Some(Recurrence::Schedule {
+                rrule: rule,
+                anchor,
+                snap: snap_val,
+            }))
+        }
         (None, Some(interval)) => Ok(Some(Recurrence::Completion {
             interval_days: interval,
             snap: snap_val,
