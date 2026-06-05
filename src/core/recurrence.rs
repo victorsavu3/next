@@ -228,30 +228,35 @@ pub fn next_occurrence(
             let mut candidate_idx = month_idx(after.year(), after.month());
             let limit = anchor_idx + 50 * 12;
 
+            // When BYMONTHDAY lists several days, the earliest valid date `> after`
+            // may be any of them, so sort ascending and pick the minimum match.
+            let mut days: Vec<u32> = if rule.by_month_day.is_empty() {
+                vec![anchor.day()]
+            } else {
+                rule.by_month_day.clone()
+            };
+            days.sort_unstable();
+
             loop {
                 let rel = candidate_idx - anchor_idx;
                 if rel >= 0 && rel % rule.interval == 0 {
                     let year = (candidate_idx / 12) as i32;
                     let month = (candidate_idx % 12 + 1) as u32;
-                    let days: &[u32] = if rule.by_month_day.is_empty() {
-                        &[]
-                    } else {
-                        &rule.by_month_day
-                    };
 
-                    // Collect valid candidates for this month
-                    let day_iter: Box<dyn Iterator<Item = u32>> = if days.is_empty() {
-                        Box::new(std::iter::once(anchor.day()))
-                    } else {
-                        Box::new(days.iter().copied())
-                    };
-
-                    for day in day_iter {
-                        if let Some(d) = NaiveDate::from_ymd_opt(year, month, day) {
-                            if d > after {
-                                return Ok(d);
-                            }
-                        }
+                    // Pick the earliest valid date `> after` among all BYMONTHDAY
+                    // values in this month. `days` is sorted ascending, and a
+                    // nonexistent day (e.g. Feb 30) is skipped via from_ymd_opt,
+                    // so the first match found is the minimum (issue #11). Months
+                    // with no valid day fall through to the next iteration; the
+                    // existing month-skip behaviour for nonexistent days is
+                    // unchanged (tracked separately in #12).
+                    if let Some(d) = days
+                        .iter()
+                        .filter_map(|&day| NaiveDate::from_ymd_opt(year, month, day))
+                        .filter(|&d| d > after)
+                        .min()
+                    {
+                        return Ok(d);
                     }
                 }
                 candidate_idx += 1;
@@ -269,20 +274,28 @@ pub fn next_occurrence(
             let mut candidate_idx = month_idx(after.year(), after.month());
             let limit = anchor_idx + 50 * 12;
 
+            // Honour every BYMONTHDAY value (not just the first) and pick the
+            // earliest valid date `> after` within the qualifying month (issue #11).
+            let mut days: Vec<u32> = if rule.by_month_day.is_empty() {
+                vec![anchor.day()]
+            } else {
+                rule.by_month_day.clone()
+            };
+            days.sort_unstable();
+
             loop {
                 let rel = candidate_idx - anchor_idx;
                 if rel >= 0 && rel % effective_interval == 0 {
                     let year = (candidate_idx / 12) as i32;
                     let month = (candidate_idx % 12 + 1) as u32;
-                    let day = if rule.by_month_day.is_empty() {
-                        anchor.day()
-                    } else {
-                        rule.by_month_day[0]
-                    };
-                    if let Some(d) = NaiveDate::from_ymd_opt(year, month, day) {
-                        if d > after {
-                            return Ok(d);
-                        }
+
+                    if let Some(d) = days
+                        .iter()
+                        .filter_map(|&day| NaiveDate::from_ymd_opt(year, month, day))
+                        .filter(|&d| d > after)
+                        .min()
+                    {
+                        return Ok(d);
                     }
                 }
                 candidate_idx += 1;
@@ -467,6 +480,108 @@ mod tests {
         let after = d(2026, 4, 5);
         let result = next_occurrence("FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=1", anchor, after).unwrap();
         assert_eq!(result, d(2026, 7, 1));
+    }
+
+    #[test]
+    fn monthly_multiple_bymonthday_sorted_and_unsorted_match() {
+        // FREQ=MONTHLY;BYMONTHDAY=1,15 and the unsorted 15,1 must agree.
+        // From mid-month (May 10) the next is the upcoming 15th (May 15).
+        let anchor = d(2026, 5, 1);
+        let after = d(2026, 5, 10);
+        let sorted = next_occurrence("FREQ=MONTHLY;BYMONTHDAY=1,15", anchor, after).unwrap();
+        let unsorted = next_occurrence("FREQ=MONTHLY;BYMONTHDAY=15,1", anchor, after).unwrap();
+        assert_eq!(sorted, d(2026, 5, 15));
+        assert_eq!(unsorted, d(2026, 5, 15));
+        assert_eq!(sorted, unsorted);
+    }
+
+    #[test]
+    fn monthly_multiple_bymonthday_picks_earliest_same_month() {
+        // OLD BUG: with unsorted BYMONTHDAY=15,1, after the 5th the code returned
+        // the FIRST candidate > after (the 15th) only by luck; but after a day
+        // before both, it must still pick the 15th (the earliest > after) here.
+        // After May 5, valid days this month are the 15th (1st already passed),
+        // so next is May 15 — earliest, not whatever comes first in the list.
+        let anchor = d(2026, 5, 1);
+        let after = d(2026, 5, 5);
+        let result = next_occurrence("FREQ=MONTHLY;BYMONTHDAY=15,1", anchor, after).unwrap();
+        assert_eq!(result, d(2026, 5, 15));
+    }
+
+    #[test]
+    fn monthly_multiple_bymonthday_rolls_to_next_month() {
+        // After May 20, both the 1st and 15th have passed this month, so the
+        // next occurrence is the 1st of next month (June 1) — the earliest
+        // qualifying day across the wrap, with unsorted input.
+        let anchor = d(2026, 5, 1);
+        let after = d(2026, 5, 20);
+        let result = next_occurrence("FREQ=MONTHLY;BYMONTHDAY=15,1", anchor, after).unwrap();
+        assert_eq!(result, d(2026, 6, 1));
+    }
+
+    #[test]
+    fn monthly_single_bymonthday_unchanged_regression() {
+        // Single-value BYMONTHDAY=15 must behave exactly as before.
+        let anchor = d(2026, 5, 1);
+        // After the 10th → upcoming 15th.
+        assert_eq!(
+            next_occurrence("FREQ=MONTHLY;BYMONTHDAY=15", anchor, d(2026, 5, 10)).unwrap(),
+            d(2026, 5, 15)
+        );
+        // After the 20th → 15th of next month.
+        assert_eq!(
+            next_occurrence("FREQ=MONTHLY;BYMONTHDAY=15", anchor, d(2026, 5, 20)).unwrap(),
+            d(2026, 6, 15)
+        );
+    }
+
+    #[test]
+    fn yearly_multiple_bymonthday_picks_earliest() {
+        // FREQ=YEARLY;BYMONTHDAY=1,15 — anchor in March so the qualifying month
+        // is March. From Feb 1 the next is Mar 1 (earliest of the two days).
+        // This proves YEARLY no longer ignores the extra (15) value.
+        let anchor = d(2026, 3, 1);
+        let after = d(2026, 2, 1);
+        let result = next_occurrence("FREQ=YEARLY;BYMONTHDAY=1,15", anchor, after).unwrap();
+        assert_eq!(result, d(2026, 3, 1));
+    }
+
+    #[test]
+    fn yearly_multiple_bymonthday_second_value_in_same_month() {
+        // From Mar 5 the 1st has passed, so the next is Mar 15 — the SECOND
+        // listed value. With the old code (by_month_day[0] only) this would
+        // have skipped the 15th and jumped to next year's Mar 1.
+        let anchor = d(2026, 3, 1);
+        let after = d(2026, 3, 5);
+        let result = next_occurrence("FREQ=YEARLY;BYMONTHDAY=1,15", anchor, after).unwrap();
+        assert_eq!(result, d(2026, 3, 15));
+    }
+
+    #[test]
+    fn yearly_multiple_bymonthday_unsorted_matches_sorted() {
+        // Unsorted 15,1 must agree with sorted 1,15.
+        let anchor = d(2026, 3, 1);
+        let after = d(2026, 3, 5);
+        let sorted = next_occurrence("FREQ=YEARLY;BYMONTHDAY=1,15", anchor, after).unwrap();
+        let unsorted = next_occurrence("FREQ=YEARLY;BYMONTHDAY=15,1", anchor, after).unwrap();
+        assert_eq!(sorted, unsorted);
+        assert_eq!(unsorted, d(2026, 3, 15));
+    }
+
+    #[test]
+    fn yearly_single_bymonthday_unchanged_regression() {
+        // Single-value BYMONTHDAY=15 YEARLY must behave as before.
+        let anchor = d(2026, 3, 1);
+        // After Mar 5 → Mar 15 same year.
+        assert_eq!(
+            next_occurrence("FREQ=YEARLY;BYMONTHDAY=15", anchor, d(2026, 3, 5)).unwrap(),
+            d(2026, 3, 15)
+        );
+        // After Mar 20 → Mar 15 next year.
+        assert_eq!(
+            next_occurrence("FREQ=YEARLY;BYMONTHDAY=15", anchor, d(2026, 3, 20)).unwrap(),
+            d(2027, 3, 15)
+        );
     }
 
     #[test]
