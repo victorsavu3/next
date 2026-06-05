@@ -319,8 +319,20 @@ After computing the raw next date, an optional snap advances it to a boundary:
 All instances of a series share the same `recurrence_id` UUID (equal to the first instance's `id`). Slugs are not propagated to spawned instances.
 
 `next forecast` MUST accept the same filter tokens as `next list` and MUST display the
-upcoming due dates for all matching recurrence series for a configurable horizon
-(default: 90 days).
+upcoming due dates for all matching recurrence series over a configurable horizon
+(`forecast_horizon_days`, default 90, overridable with `--days`).
+
+For each active (open/started) schedule-type recurring task, the forecast MUST project
+the series forward: starting after the current instance's date (`max(due, start, today)`),
+it repeatedly evaluates the RRULE (`next_occurrence`, then any snap) to enumerate the
+successive occurrences up to and including `today + horizon`. These projected,
+not-yet-spawned occurrences MUST be shown distinctly from concrete existing tasks (a
+`(projected)` marker in text output; a `projected: true` flag in `--json`).
+
+Completion-type recurrence is NOT projected: its next date is `completion_date +
+interval_days`, and future completion dates are unknown, so only the current instance is
+shown. Done/cancelled recurring tasks are not projected. Non-recurring tasks with a due
+date within the horizon appear unchanged.
 
 ---
 
@@ -511,10 +523,10 @@ See §2.2.
 ### 8.10 Forecasting
 
 ```
-next forecast [filters...]
+next forecast [filters...] [--days N]
 ```
 
-See §7.2.
+See §7.4.
 
 ---
 

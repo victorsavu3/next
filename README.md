@@ -193,7 +193,7 @@ All list commands accept filter tokens in any order:
 | `next resource [set]` | Manage resource availability |
 | `next user [set/clear/list]` | Manage user filter |
 | `next plugin [register/watch/unwatch/unregister/list]` | Manage export plugins (see [Plugins](#plugins)) |
-| `next forecast` | Show upcoming due dates grouped by time |
+| `next forecast` | Upcoming due dates grouped by time, including projected schedule-recurrence occurrences over the horizon |
 | `next sync` | Pull from remote, push local commits |
 Task IDs accept a full UUID, a slug, or any unambiguous 4+ character hex prefix.
 All commands support `--json` for pipe-friendly output.
