@@ -42,9 +42,9 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     filter_args.json = args.json;
 
     let filter_set = filter_args.to_filter_set()?;
-    let state = ctx.store().get_state()?;
-    let all_tasks = ctx.store().list_tasks()?;
-    let tag_metas = ctx.store().list_tag_metas()?;
+    let state = ctx.repo.store().get_state()?;
+    let all_tasks = ctx.repo.store().list_tasks()?;
+    let tag_metas = ctx.repo.store().list_tag_metas()?;
 
     let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
     let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.config.scoring, &tag_metas);

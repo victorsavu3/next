@@ -1,12 +1,11 @@
 //! `AppContext` — the CLI's application context.
 //!
-//! It is a [`TaskRepository`] plus the loaded `config.toml`. **Config-file
-//! handling lives here and is CLI-only**; everything else is core
-//! `TaskRepository`. `AppContext` derefs to its `TaskRepository`, so command
-//! handlers keep using `ctx.store`, `ctx.transaction(...)`, etc., and read
-//! CLI config via `ctx.config`.
+//! It is a [`TaskRepository`] (the field `repo`) plus the loaded `config.toml`.
+//! **Config-file handling lives here and is CLI-only**; everything else is core
+//! `TaskRepository`. Command handlers reach the repository via `ctx.repo`
+//! (e.g. `ctx.repo.store`, `ctx.repo.transaction(...)`) and CLI config via
+//! `ctx.config`.
 
-use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
@@ -43,19 +42,6 @@ impl AppContext {
         let repo = TaskRepository::with_parts(Box::new(store), Box::new(vcs), root);
 
         Ok(Self { config, repo })
-    }
-}
-
-impl Deref for AppContext {
-    type Target = TaskRepository;
-    fn deref(&self) -> &TaskRepository {
-        &self.repo
-    }
-}
-
-impl DerefMut for AppContext {
-    fn deref_mut(&mut self) -> &mut TaskRepository {
-        &mut self.repo
     }
 }
 

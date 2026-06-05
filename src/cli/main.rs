@@ -114,9 +114,9 @@ fn main() -> anyhow::Result<()> {
     // Notify subscribed plugins of any task changes, after the repo lock has
     // been released (and after autosync). Best-effort; never fails the command.
     if result.is_ok() {
-        let events = ctx.take_task_events();
-        let repo_root = ctx.repo_root.clone();
-        next::core::plugin::notify(&repo_root, &events, ctx.plugin_origin());
+        let events = ctx.repo.take_task_events();
+        let repo_root = ctx.repo.repo_root.clone();
+        next::core::plugin::notify(&repo_root, &events, ctx.repo.plugin_origin());
         for ev in &events {
             if ev.verb == "delete" {
                 let _ = next::core::plugin::registry::prune_task(&repo_root, ev.task_id);

@@ -29,7 +29,7 @@ fn add_args(title: &str) -> add::Args {
 fn show_by_id() {
     let mut env = common::setup();
     add::run(add_args("My task"), &mut env.ctx).unwrap();
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     show::run(show::Args { id: task.id.to_string(), json: false }, &env.ctx).unwrap();
 }
 
@@ -48,7 +48,7 @@ fn show_by_slug() {
 fn show_by_id_prefix() {
     let mut env = common::setup();
     add::run(add_args("Prefix task"), &mut env.ctx).unwrap();
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     let prefix = task.id.to_string().replace('-', "")[..8].to_string();
     show::run(show::Args { id: prefix, json: false }, &env.ctx).unwrap();
 }
@@ -57,7 +57,7 @@ fn show_by_id_prefix() {
 fn show_json_output() {
     let mut env = common::setup();
     add::run(add_args("JSON task"), &mut env.ctx).unwrap();
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     show::run(show::Args { id: task.id.to_string(), json: true }, &env.ctx).unwrap();
 }
 

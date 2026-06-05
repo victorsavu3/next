@@ -15,11 +15,11 @@ pub struct Args {
 
 pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
-    let id = resolve_task_id(ctx.store(), &args.id)?;
-    let task = ctx.store().get_task(id)?;
+    let id = resolve_task_id(ctx.repo.store(), &args.id)?;
+    let task = ctx.repo.store().get_task(id)?;
 
-    let all_tasks = ctx.store().list_tasks()?;
-    let tag_metas = ctx.store().list_tag_metas()?;
+    let all_tasks = ctx.repo.store().list_tasks()?;
+    let tag_metas = ctx.repo.store().list_tag_metas()?;
     let parent = task
         .parent_id
         .and_then(|pid| all_tasks.iter().find(|t| t.id == pid));

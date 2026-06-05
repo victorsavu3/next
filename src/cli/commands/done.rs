@@ -23,7 +23,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         None => today,
     };
 
-    let id = resolve_task_id(&*ctx.store, &args.id)?;
+    let id = resolve_task_id(&*ctx.repo.store, &args.id)?;
     let task = complete_task(
         id,
         completion_date,
@@ -31,7 +31,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         &mut *ctx.repo.store,
         &*ctx.repo.vcs,
     )?;
-    ctx.record_task_event("done", task.id);
+    ctx.repo.record_task_event("done", task.id);
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);

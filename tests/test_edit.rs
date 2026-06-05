@@ -77,7 +77,7 @@ fn edit_title() {
     )
     .unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(task.title, "New title");
 }
 
@@ -99,7 +99,7 @@ fn edit_add_tag_via_flag() {
     )
     .unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(task.tags.contains(&"@home".to_string()));
 }
 
@@ -121,7 +121,7 @@ fn edit_add_tag_via_trailing_plus() {
     )
     .unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(task.tags.contains(&"@work".to_string()));
 }
 
@@ -144,7 +144,7 @@ fn edit_remove_tag_via_trailing_minus() {
     )
     .unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(!task.tags.contains(&"@work".to_string()));
     assert!(task.tags.contains(&"@home".to_string()));
 }
@@ -168,7 +168,7 @@ fn edit_remove_tag_via_flag() {
     )
     .unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(!task.tags.contains(&"urgent".to_string()));
     assert!(task.tags.contains(&"review".to_string()));
 }
@@ -184,7 +184,7 @@ fn edit_clear_due_date() {
     add::run(a, &mut env.ctx).unwrap();
 
     {
-        let task = env.ctx.store.list_tasks().unwrap().remove(0);
+        let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
         assert!(task.due.is_some(), "due date should be set after add");
     }
 
@@ -197,7 +197,7 @@ fn edit_clear_due_date() {
     )
     .unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(task.due.is_none());
 }
 
@@ -243,7 +243,7 @@ fn edit_sets_description() {
     )
     .unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(task.description.as_deref(), Some("This is the detail."));
 }
 
@@ -266,7 +266,7 @@ fn edit_clears_description() {
     )
     .unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(task.description.is_none());
 }
 
@@ -288,7 +288,7 @@ fn edit_sets_url() {
     )
     .unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(task.url.as_deref(), Some("https://example.com/docs"));
 }
 
@@ -311,7 +311,7 @@ fn edit_clears_url() {
     )
     .unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(task.url.is_none());
 }
 
@@ -338,7 +338,7 @@ fn edit_rejects_invalid_url() {
         "unexpected error: {err}"
     );
     // URL on the task must remain unset.
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(task.url.is_none());
 }
 
@@ -362,7 +362,7 @@ fn edit_tag_deduplicates() {
     )
     .unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     let work_count = task.tags.iter().filter(|t| t.as_str() == "@work").count();
     assert_eq!(work_count, 1);
 }

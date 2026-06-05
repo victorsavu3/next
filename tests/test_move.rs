@@ -45,8 +45,8 @@ fn move_sets_parent() {
     )
     .unwrap();
 
-    let parent = env.ctx.store.get_task_by_slug("parent").unwrap().unwrap();
-    let child = env.ctx.store.get_task_by_slug("child").unwrap().unwrap();
+    let parent = env.ctx.repo.store.get_task_by_slug("parent").unwrap().unwrap();
+    let child = env.ctx.repo.store.get_task_by_slug("child").unwrap().unwrap();
     assert_eq!(child.parent_id, Some(parent.id));
 }
 
@@ -68,7 +68,7 @@ fn move_none_clears_parent() {
     )
     .unwrap();
 
-    let child_before = env.ctx.store.get_task_by_slug("child").unwrap().unwrap();
+    let child_before = env.ctx.repo.store.get_task_by_slug("child").unwrap().unwrap();
     assert!(child_before.parent_id.is_some());
 
     move_cmd::run(
@@ -77,7 +77,7 @@ fn move_none_clears_parent() {
     )
     .unwrap();
 
-    let child_after = env.ctx.store.get_task_by_slug("child").unwrap().unwrap();
+    let child_after = env.ctx.repo.store.get_task_by_slug("child").unwrap().unwrap();
     assert!(child_after.parent_id.is_none());
 }
 
@@ -96,7 +96,7 @@ fn move_no_parent_arg_is_noop() {
     )
     .unwrap();
 
-    let task = env.ctx.store.get_task_by_slug("task-a").unwrap().unwrap();
+    let task = env.ctx.repo.store.get_task_by_slug("task-a").unwrap().unwrap();
     assert!(task.parent_id.is_none());
 }
 

@@ -39,13 +39,13 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 }
 
 fn show(ctx: &mut AppContext) -> anyhow::Result<()> {
-    let state = ctx.store.get_state()?;
+    let state = ctx.repo.store.get_state()?;
     if state.active_contexts.is_empty() {
         println!("Active context: (none — all tasks visible)");
     } else {
         println!("Active contexts:");
         for c in &state.active_contexts {
-            match ctx.store.get_tag_description(c)? {
+            match ctx.repo.store.get_tag_description(c)? {
                 Some(desc) => println!("  {c:<28}  {desc}"),
                 None => println!("  {c}"),
             }
@@ -54,7 +54,7 @@ fn show(ctx: &mut AppContext) -> anyhow::Result<()> {
     if !state.excluded_contexts.is_empty() {
         println!("Excluded contexts:");
         for c in &state.excluded_contexts {
-            match ctx.store.get_tag_description(c)? {
+            match ctx.repo.store.get_tag_description(c)? {
                 Some(desc) => println!("  {c:<28}  {desc}"),
                 None => println!("  {c}"),
             }
@@ -72,7 +72,7 @@ fn validate_context_tags(tags: &[String]) -> anyhow::Result<()> {
 
 fn set(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
     validate_context_tags(&tags)?;
-    ctx.state_transaction(|store| {
+    ctx.repo.state_transaction(|store| {
         let mut state = store.get_state()?;
         state.active_contexts = tags.clone();
         store.save_state(&state)?;
@@ -83,7 +83,7 @@ fn set(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
 }
 
 fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
-    ctx.state_transaction(|store| {
+    ctx.repo.state_transaction(|store| {
         let mut state = store.get_state()?;
         state.active_contexts.clear();
         store.save_state(&state)?;
@@ -95,7 +95,7 @@ fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
 
 fn exclude(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
     validate_context_tags(&tags)?;
-    ctx.state_transaction(|store| {
+    ctx.repo.state_transaction(|store| {
         let mut state = store.get_state()?;
         state.excluded_contexts = tags.clone();
         store.save_state(&state)?;
@@ -106,7 +106,7 @@ fn exclude(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
 }
 
 fn clear_excluded(ctx: &mut AppContext) -> anyhow::Result<()> {
-    ctx.state_transaction(|store| {
+    ctx.repo.state_transaction(|store| {
         let mut state = store.get_state()?;
         state.excluded_contexts.clear();
         store.save_state(&state)?;

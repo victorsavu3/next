@@ -67,8 +67,8 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 }
 
 fn list(ctx: &mut AppContext) -> anyhow::Result<()> {
-    let metas = ctx.store.list_tag_metas()?;
-    let tasks = ctx.store.list_tasks()?;
+    let metas = ctx.repo.store.list_tag_metas()?;
+    let tasks = ctx.repo.store.list_tasks()?;
 
     let mut all_tags: BTreeSet<String> = BTreeSet::new();
     for task in &tasks {

@@ -11,8 +11,8 @@ pub struct Args {
 }
 
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
-    let id = resolve_task_id(&*ctx.store, &args.id)?;
-    let task = ctx.transaction(|store, vcs, root| {
+    let id = resolve_task_id(&*ctx.repo.store, &args.id)?;
+    let task = ctx.repo.transaction(|store, vcs, root| {
         let mut task = store.get_task(id)?;
         task.mark_cancelled();
         store.save_task(&task)?;
@@ -20,7 +20,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         vcs.commit(&[path], &format!("next: cancel {}", task.title))?;
         Ok(task)
     })?;
-    ctx.record_task_event("cancel", task.id);
+    ctx.repo.record_task_event("cancel", task.id);
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);
     } else {

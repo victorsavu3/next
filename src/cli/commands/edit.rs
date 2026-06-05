@@ -127,7 +127,7 @@ pub struct Args {
 
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
-    let id = resolve_task_id(&*ctx.store, &args.id)?;
+    let id = resolve_task_id(&*ctx.repo.store, &args.id)?;
 
     // Resolve dates.
     let due = if args.clear_due {
@@ -174,7 +174,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let recurrence: Option<Recurrence> = if args.clear_recurrence {
         None // handled via clear_recurrence flag
     } else if args.recur_schedule.is_some() || args.recur_completion.is_some() {
-        let existing = ctx.store.get_task(id)?;
+        let existing = ctx.repo.store.get_task(id)?;
         let anchor = match &existing.recurrence {
             Some(Recurrence::Schedule { anchor, .. }) => *anchor,
             _ => existing.start.or(existing.due).unwrap_or(today),
@@ -188,7 +188,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     } else if let Some(ref snap_str) = args.recur_snap {
         // Standalone --recur-snap: update the snap on an existing recurrence rule.
         let snap = Some(parse_snap(snap_str)?);
-        let existing = ctx.store.get_task(id)?;
+        let existing = ctx.repo.store.get_task(id)?;
         match existing.recurrence {
             Some(Recurrence::Schedule { rrule, anchor, .. }) => {
                 Some(Recurrence::Schedule { rrule, anchor, snap })
@@ -239,7 +239,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         &mut *ctx.repo.store,
         &*ctx.repo.vcs,
     )?;
-    ctx.record_task_event("edit", task.id);
+    ctx.repo.record_task_event("edit", task.id);
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);

@@ -31,8 +31,8 @@ fn add_args(title: &str) -> add::Args {
 
 fn visible_titles(env: &mut common::TestEnv) -> Vec<String> {
     let today = Local::now().date_naive();
-    let state = env.ctx.store.get_state().unwrap();
-    let all = env.ctx.store.list_tasks().unwrap();
+    let state = env.ctx.repo.store.get_state().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &FilterArgs::parse(vec![]).to_filter_set().unwrap(), &state, today);
     let scored = scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring, &std::collections::HashMap::new());
     scored.into_iter().map(|s| s.task.title).collect()
@@ -55,7 +55,7 @@ fn user_set_saves_active_users() {
     )
     .unwrap();
 
-    let state = env.ctx.store.get_state().unwrap();
+    let state = env.ctx.repo.store.get_state().unwrap();
     assert_eq!(state.active_users, vec!["alice".to_string()]);
 }
 
@@ -77,7 +77,7 @@ fn user_clear_removes_active_users() {
     )
     .unwrap();
 
-    let state = env.ctx.store.get_state().unwrap();
+    let state = env.ctx.repo.store.get_state().unwrap();
     assert!(state.active_users.is_empty());
 }
 
@@ -194,7 +194,7 @@ fn user_state_survives_store_reload() {
     )
     .unwrap();
 
-    let (fresh_store, _) = next::core::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let (fresh_store, _) = next::core::storage::open(env.ctx.repo.repo_root.clone()).unwrap();
     let state = fresh_store.get_state().unwrap();
     assert_eq!(state.active_users, vec!["carol".to_string()]);
 }

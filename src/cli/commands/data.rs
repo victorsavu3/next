@@ -54,10 +54,10 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 
 fn set(ctx: &mut AppContext, args: SetArgs) -> anyhow::Result<()> {
     validate_key(&args.key)?;
-    let id = resolve_task_id(&*ctx.store, &args.id)?;
+    let id = resolve_task_id(&*ctx.repo.store, &args.id)?;
     let value = parse_value(&args.value)?;
 
-    ctx.transaction(|store, vcs, root| {
+    ctx.repo.transaction(|store, vcs, root| {
         let mut task = store.get_task(id)?;
         task.data.insert(args.key.clone(), value.clone());
         task.touch();
@@ -71,15 +71,15 @@ fn set(ctx: &mut AppContext, args: SetArgs) -> anyhow::Result<()> {
         tracing::info!(cmd = "data", "[{}] set {}={}", &task.id.to_string()[..8], args.key, value);
         Ok(())
     })?;
-    ctx.record_task_event("data", id);
+    ctx.repo.record_task_event("data", id);
     Ok(())
 }
 
 fn unset(ctx: &mut AppContext, args: UnsetArgs) -> anyhow::Result<()> {
     validate_key(&args.key)?;
-    let id = resolve_task_id(&*ctx.store, &args.id)?;
+    let id = resolve_task_id(&*ctx.repo.store, &args.id)?;
 
-    ctx.transaction(|store, vcs, root| {
+    ctx.repo.transaction(|store, vcs, root| {
         let mut task = store.get_task(id)?;
 
         if !task.data.contains_key(&args.key) {
@@ -97,14 +97,14 @@ fn unset(ctx: &mut AppContext, args: UnsetArgs) -> anyhow::Result<()> {
         tracing::info!(cmd = "data", "[{}] unset {}", &task.id.to_string()[..8], args.key);
         Ok(())
     })?;
-    ctx.record_task_event("data", id);
+    ctx.repo.record_task_event("data", id);
     Ok(())
 }
 
 fn get(ctx: &mut AppContext, args: GetArgs) -> anyhow::Result<()> {
     validate_key(&args.key)?;
-    let id = resolve_task_id(&*ctx.store, &args.id)?;
-    let task = ctx.store.get_task(id)?;
+    let id = resolve_task_id(&*ctx.repo.store, &args.id)?;
+    let task = ctx.repo.store.get_task(id)?;
 
     let value = task
         .data

@@ -13,7 +13,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
-    match sync(ctx, args.push_only, args.pull_only)? {
+    match sync(&mut ctx.repo, args.push_only, args.pull_only)? {
         SyncOutcome::Clean => {
             tracing::info!(cmd = "sync", "ok");
         }

@@ -80,7 +80,7 @@ fn tree_shows_children_under_parent() {
     tree::run(tree_args(false), &env.ctx).unwrap();
 
     // Verify structure: parent has one child.
-    let all = env.ctx.store.list_tasks().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     let parent = all.iter().find(|t| t.title == "Parent").unwrap();
     let child = all.iter().find(|t| t.title == "Child").unwrap();
     assert_eq!(child.parent_id, Some(parent.id));
@@ -105,7 +105,7 @@ fn tree_excludes_done_tasks_by_default() {
     )
     .unwrap();
 
-    let all = env.ctx.store.list_tasks().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     let open_count = all
         .iter()
         .filter(|t| t.status == next::core::domain::task::Status::Open)
@@ -135,7 +135,7 @@ fn tree_all_includes_done_tasks() {
     // --all must not error and includes done tasks.
     tree::run(tree_args(true), &env.ctx).unwrap();
 
-    let all = env.ctx.store.list_tasks().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     assert_eq!(all.len(), 1);
 }
 

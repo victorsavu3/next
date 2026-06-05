@@ -32,8 +32,8 @@ fn apply_filter(env: &mut common::TestEnv, tokens: Vec<String>) -> Vec<ScoredTas
     let today = Local::now().date_naive();
     let filter_args = FilterArgs::parse(tokens);
     let filter_set = filter_args.to_filter_set().unwrap();
-    let state = env.ctx.store.get_state().unwrap();
-    let all = env.ctx.store.list_tasks().unwrap();
+    let state = env.ctx.repo.store.get_state().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &filter_set, &state, today);
     scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring, &std::collections::HashMap::new())
 }
@@ -162,8 +162,8 @@ fn apply_filter_with_future(env: &mut common::TestEnv, include_future: bool) -> 
     let mut filter_args = FilterArgs::parse(vec![]);
     filter_args.future = include_future;
     let filter_set = filter_args.to_filter_set().unwrap();
-    let state = env.ctx.store.get_state().unwrap();
-    let all = env.ctx.store.list_tasks().unwrap();
+    let state = env.ctx.repo.store.get_state().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &filter_set, &state, today);
     scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring, &std::collections::HashMap::new())
 }
@@ -256,8 +256,8 @@ fn all_flag_also_shows_future_start_tasks() {
     let mut filter_args = FilterArgs::parse(vec![]);
     filter_args.all = true;
     let filter_set = filter_args.to_filter_set().unwrap();
-    let state = env.ctx.store.get_state().unwrap();
-    let all = env.ctx.store.list_tasks().unwrap();
+    let state = env.ctx.repo.store.get_state().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &filter_set, &state, today);
     let tasks = scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring, &std::collections::HashMap::new());
     assert_eq!(tasks.len(), 1, "--all must reveal future-start tasks");
@@ -290,7 +290,7 @@ fn list_limit_truncates_results() {
 
     // With limit = 3 only three are returned.
     next::cli::commands::list::run(list_args_with_limit(Some(3)), &env.ctx).unwrap();
-    let store = &env.ctx.store;
+    let store = &env.ctx.repo.store;
     let tasks = store.list_tasks().unwrap();
     // Verify the store still has all five (limit only affects output, not storage).
     assert_eq!(tasks.len(), 5);
@@ -313,7 +313,7 @@ fn list_config_limit_applies_when_no_flag() {
     // run() should truncate to 2 without passing --limit
     next::cli::commands::list::run(list_args_with_limit(None), &env.ctx).unwrap();
     // The store still has five tasks.
-    assert_eq!(env.ctx.store.list_tasks().unwrap().len(), 5);
+    assert_eq!(env.ctx.repo.store.list_tasks().unwrap().len(), 5);
 }
 
 #[test]
@@ -326,7 +326,7 @@ fn project_filter_returns_descendants() {
         &mut env.ctx,
     )
     .unwrap();
-    let root = env.ctx.store.get_task_by_slug("launch").unwrap().unwrap();
+    let root = env.ctx.repo.store.get_task_by_slug("launch").unwrap().unwrap();
 
     // Two direct children
     add::run(
@@ -348,8 +348,8 @@ fn project_filter_returns_descendants() {
     let mut filter_args = FilterArgs::parse(vec!["parent:launch".into()]);
     filter_args.all = true;
     let filter_set = filter_args.to_filter_set().unwrap();
-    let state = env.ctx.store.get_state().unwrap();
-    let all = env.ctx.store.list_tasks().unwrap();
+    let state = env.ctx.repo.store.get_state().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
     let titles: Vec<&str> = filtered.iter().map(|t| t.title.as_str()).collect();
     assert!(titles.contains(&"Launch blog"), "root should be included");
@@ -367,14 +367,14 @@ fn project_filter_includes_grandchildren() {
         &mut env.ctx,
     )
     .unwrap();
-    let root = env.ctx.store.get_task_by_slug("project").unwrap().unwrap();
+    let root = env.ctx.repo.store.get_task_by_slug("project").unwrap().unwrap();
 
     add::run(
         add::Args { slug: Some("child".into()), parent: Some(root.id.to_string()), ..add_args("Child") },
         &mut env.ctx,
     )
     .unwrap();
-    let child = env.ctx.store.get_task_by_slug("child").unwrap().unwrap();
+    let child = env.ctx.repo.store.get_task_by_slug("child").unwrap().unwrap();
 
     add::run(
         add::Args { parent: Some(child.id.to_string()), ..add_args("Grandchild") },
@@ -386,8 +386,8 @@ fn project_filter_includes_grandchildren() {
     let mut filter_args = FilterArgs::parse(vec!["parent:project".into()]);
     filter_args.all = true;
     let filter_set = filter_args.to_filter_set().unwrap();
-    let state = env.ctx.store.get_state().unwrap();
-    let all = env.ctx.store.list_tasks().unwrap();
+    let state = env.ctx.repo.store.get_state().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
     let titles: Vec<&str> = filtered.iter().map(|t| t.title.as_str()).collect();
     assert!(titles.contains(&"Root"));
@@ -404,8 +404,8 @@ fn project_filter_unknown_slug_returns_empty() {
     let mut filter_args = FilterArgs::parse(vec!["parent:nonexistent".into()]);
     filter_args.all = true;
     let filter_set = filter_args.to_filter_set().unwrap();
-    let state = env.ctx.store.get_state().unwrap();
-    let all = env.ctx.store.list_tasks().unwrap();
+    let state = env.ctx.repo.store.get_state().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
     assert!(filtered.is_empty());
 }
@@ -419,8 +419,8 @@ fn apply_filter_all(env: &mut common::TestEnv, tokens: Vec<String>) -> Vec<Score
     let mut filter_args = FilterArgs::parse(tokens);
     filter_args.all = true;
     let filter_set = filter_args.to_filter_set().unwrap();
-    let state = env.ctx.store.get_state().unwrap();
-    let all = env.ctx.store.list_tasks().unwrap();
+    let state = env.ctx.repo.store.get_state().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
     scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring, &std::collections::HashMap::new())
 }
@@ -430,11 +430,11 @@ fn parent_filter_excludes_sibling_subtrees() {
     let mut env = common::setup();
 
     add::run(add::Args { slug: Some("alpha".into()), ..add_args("Alpha") }, &mut env.ctx).unwrap();
-    let alpha = env.ctx.store.get_task_by_slug("alpha").unwrap().unwrap();
+    let alpha = env.ctx.repo.store.get_task_by_slug("alpha").unwrap().unwrap();
     add::run(add::Args { parent: Some(alpha.id.to_string()), ..add_args("Alpha child") }, &mut env.ctx).unwrap();
 
     add::run(add::Args { slug: Some("beta".into()), ..add_args("Beta") }, &mut env.ctx).unwrap();
-    let beta = env.ctx.store.get_task_by_slug("beta").unwrap().unwrap();
+    let beta = env.ctx.repo.store.get_task_by_slug("beta").unwrap().unwrap();
     add::run(add::Args { parent: Some(beta.id.to_string()), ..add_args("Beta child") }, &mut env.ctx).unwrap();
 
     let tasks = apply_filter_all(&mut env, vec!["parent:alpha".into()]);
@@ -450,7 +450,7 @@ fn default_list_hides_parent_with_open_children() {
     let mut env = common::setup();
 
     add::run(add::Args { slug: Some("parent".into()), ..add_args("Parent task") }, &mut env.ctx).unwrap();
-    let parent = env.ctx.store.get_task_by_slug("parent").unwrap().unwrap();
+    let parent = env.ctx.repo.store.get_task_by_slug("parent").unwrap().unwrap();
     add::run(add::Args { parent: Some(parent.id.to_string()), ..add_args("Child task") }, &mut env.ctx).unwrap();
 
     let tasks = apply_filter(&mut env, vec![]);
@@ -464,7 +464,7 @@ fn default_list_shows_parent_when_all_children_done() {
     let mut env = common::setup();
 
     add::run(add::Args { slug: Some("parent".into()), ..add_args("Parent task") }, &mut env.ctx).unwrap();
-    let parent = env.ctx.store.get_task_by_slug("parent").unwrap().unwrap();
+    let parent = env.ctx.repo.store.get_task_by_slug("parent").unwrap().unwrap();
     add::run(
         add::Args { slug: Some("child".into()), parent: Some(parent.id.to_string()), ..add_args("Child task") },
         &mut env.ctx,
@@ -483,7 +483,7 @@ fn parent_filter_only_returns_active_descendants_by_default() {
     let mut env = common::setup();
 
     add::run(add::Args { slug: Some("proj".into()), ..add_args("Project") }, &mut env.ctx).unwrap();
-    let proj = env.ctx.store.get_task_by_slug("proj").unwrap().unwrap();
+    let proj = env.ctx.repo.store.get_task_by_slug("proj").unwrap().unwrap();
     add::run(add::Args { slug: Some("open-child".into()), parent: Some(proj.id.to_string()), ..add_args("Open child") }, &mut env.ctx).unwrap();
     add::run(add::Args { slug: Some("done-child".into()), parent: Some(proj.id.to_string()), ..add_args("Done child") }, &mut env.ctx).unwrap();
 
@@ -494,8 +494,8 @@ fn parent_filter_only_returns_active_descendants_by_default() {
     let today = chrono::Local::now().date_naive();
     let filter_args = FilterArgs::parse(vec!["parent:proj".into()]);
     let filter_set = filter_args.to_filter_set().unwrap();
-    let state = env.ctx.store.get_state().unwrap();
-    let all = env.ctx.store.list_tasks().unwrap();
+    let state = env.ctx.repo.store.get_state().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
     let titles: Vec<&str> = filtered.iter().map(|t| t.title.as_str()).collect();
     assert!(titles.contains(&"Open child"));
@@ -511,5 +511,5 @@ fn list_flag_overrides_config_limit() {
     env.ctx.config.list_limit = Some(1);
     // --limit 4 overrides config limit of 1
     next::cli::commands::list::run(list_args_with_limit(Some(4)), &env.ctx).unwrap();
-    assert_eq!(env.ctx.store.list_tasks().unwrap().len(), 5);
+    assert_eq!(env.ctx.repo.store.list_tasks().unwrap().len(), 5);
 }

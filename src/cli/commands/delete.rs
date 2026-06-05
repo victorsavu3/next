@@ -11,8 +11,8 @@ pub struct Args {
 }
 
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
-    let id = resolve_task_id(&*ctx.store, &args.id)?;
-    let task = ctx.store.get_task(id)?;
+    let id = resolve_task_id(&*ctx.repo.store, &args.id)?;
+    let task = ctx.repo.store.get_task(id)?;
 
     if !args.yes {
         eprint!("Delete {:?}? [y/N] ", task.title);
@@ -25,14 +25,14 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         }
     }
 
-    ctx.transaction(|store, vcs, root| {
+    ctx.repo.transaction(|store, vcs, root| {
         // Compute path before deleting so we can stage the removal.
         let task_path = crate::core::storage::task_path(root, &task);
         store.delete_task(id)?;
         vcs.commit(&[task_path], &format!("next: delete {}", task.title))?;
         Ok(())
     })?;
-    ctx.record_task_event("delete", id);
+    ctx.repo.record_task_event("delete", id);
 
     tracing::info!(cmd = "delete", "[{}] {}", &task.id.to_string()[..8], task.title);
     Ok(())

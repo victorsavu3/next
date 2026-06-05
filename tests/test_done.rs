@@ -31,12 +31,12 @@ fn done_marks_task_closed() {
     let mut env = common::setup();
     add::run(add_args("Finish report"), &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     let id = task.id.to_string();
 
     done::run(done::Args { id, completed_at: None, json: false }, &mut env.ctx).unwrap();
 
-    let updated = env.ctx.store.list_tasks().unwrap().remove(0);
+    let updated = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(updated.status, Status::Done);
 }
 
@@ -45,12 +45,12 @@ fn done_by_id_prefix() {
     let mut env = common::setup();
     add::run(add_args("Clean desk"), &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     let prefix = task.id.to_string().replace('-', "")[..8].to_string();
 
     done::run(done::Args { id: prefix, completed_at: None, json: false }, &mut env.ctx).unwrap();
 
-    let updated = env.ctx.store.list_tasks().unwrap().remove(0);
+    let updated = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(updated.status, Status::Done);
 }
 
@@ -73,7 +73,7 @@ fn done_by_slug() {
     )
     .unwrap();
 
-    let updated = env.ctx.store.list_tasks().unwrap().remove(0);
+    let updated = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(updated.status, Status::Done);
 }
 

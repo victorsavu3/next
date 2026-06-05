@@ -36,10 +36,10 @@ fn add_args(title: &str) -> add::Args {
 fn score_all(env: &mut common::TestEnv) -> Vec<ScoredTask> {
     let today = Local::now().date_naive();
     let filter_set = FilterArgs::default().to_filter_set().unwrap();
-    let state = env.ctx.store.get_state().unwrap();
-    let all = env.ctx.store.list_tasks().unwrap();
+    let state = env.ctx.repo.store.get_state().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &filter_set, &state, today);
-    let tag_metas = env.ctx.store.list_tag_metas().unwrap();
+    let tag_metas = env.ctx.repo.store.list_tag_metas().unwrap();
     scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring, &tag_metas)
 }
 
@@ -154,7 +154,7 @@ fn child_of_high_priority_parent_outranks_child_of_low_priority_parent() {
         add::Args { slug: Some("hi-parent".into()), priority: Some("high".into()), ..add_args("High parent") },
         &mut env.ctx,
     ).unwrap();
-    let hi = env.ctx.store.get_task_by_slug("hi-parent").unwrap().unwrap();
+    let hi = env.ctx.repo.store.get_task_by_slug("hi-parent").unwrap().unwrap();
     add::run(
         add::Args { slug: Some("hi-child".into()), parent: Some(hi.id.to_string()), ..add_args("Child of high") },
         &mut env.ctx,
@@ -164,7 +164,7 @@ fn child_of_high_priority_parent_outranks_child_of_low_priority_parent() {
         add::Args { slug: Some("lo-parent".into()), priority: Some("low".into()), ..add_args("Low parent") },
         &mut env.ctx,
     ).unwrap();
-    let lo = env.ctx.store.get_task_by_slug("lo-parent").unwrap().unwrap();
+    let lo = env.ctx.repo.store.get_task_by_slug("lo-parent").unwrap().unwrap();
     add::run(
         add::Args { slug: Some("lo-child".into()), parent: Some(lo.id.to_string()), ..add_args("Child of low") },
         &mut env.ctx,
@@ -197,7 +197,7 @@ fn high_priority_tag_boosts_task_rank() {
 
     // Give the tag high priority in the store.
     let meta = TagMeta { priority: Some(Priority::High), ..Default::default() };
-    env.ctx.store.set_tag_meta("urgent", meta).unwrap();
+    env.ctx.repo.store.set_tag_meta("urgent", meta).unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
@@ -217,7 +217,7 @@ fn low_priority_tag_penalises_task_rank() {
     ).unwrap();
 
     let meta = TagMeta { priority: Some(Priority::Low), ..Default::default() };
-    env.ctx.store.set_tag_meta("someday", meta).unwrap();
+    env.ctx.repo.store.set_tag_meta("someday", meta).unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
@@ -291,7 +291,7 @@ fn no_time_urgency_tag_suppresses_overdue_factor() {
     ).unwrap();
 
     let meta = TagMeta { no_time_urgency: true, ..Default::default() };
-    env.ctx.store.set_tag_meta("wishlist", meta).unwrap();
+    env.ctx.repo.store.set_tag_meta("wishlist", meta).unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
@@ -315,7 +315,7 @@ fn low_priority_tag_reduces_score_by_one() {
 
     // Tag with low priority → tag_low default = -1.0; combined with priority_medium=1.0 → base 0.
     let meta = TagMeta { priority: Some(Priority::Low), ..Default::default() };
-    env.ctx.store.set_tag_meta("wishlist", meta).unwrap();
+    env.ctx.repo.store.set_tag_meta("wishlist", meta).unwrap();
 
     let ranked = score_all(&mut env);
     // Plain task score ≈ 1.0 (medium priority + small age).

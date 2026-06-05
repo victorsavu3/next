@@ -29,12 +29,12 @@ fn add_args(title: &str) -> add::Args {
 fn delete_removes_task_with_yes() {
     let mut env = common::setup();
     add::run(add_args("Temp task"), &mut env.ctx).unwrap();
-    assert_eq!(env.ctx.store.list_tasks().unwrap().len(), 1);
+    assert_eq!(env.ctx.repo.store.list_tasks().unwrap().len(), 1);
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     delete::run(delete::Args { id: task.id.to_string(), yes: true }, &mut env.ctx).unwrap();
 
-    assert!(env.ctx.store.list_tasks().unwrap().is_empty());
+    assert!(env.ctx.repo.store.list_tasks().unwrap().is_empty());
 }
 
 #[test]
@@ -42,13 +42,13 @@ fn delete_without_yes_errors() {
     let mut env = common::setup();
     add::run(add_args("Protected task"), &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     let err = delete::run(delete::Args { id: task.id.to_string(), yes: false }, &mut env.ctx)
         .unwrap_err();
     assert!(err.to_string().contains("aborted"), "unexpected error: {err}");
 
     // Task must still exist.
-    assert_eq!(env.ctx.store.list_tasks().unwrap().len(), 1);
+    assert_eq!(env.ctx.repo.store.list_tasks().unwrap().len(), 1);
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn delete_by_slug() {
     .unwrap();
 
     delete::run(delete::Args { id: "delete-me".into(), yes: true }, &mut env.ctx).unwrap();
-    assert!(env.ctx.store.list_tasks().unwrap().is_empty());
+    assert!(env.ctx.repo.store.list_tasks().unwrap().is_empty());
 }
 
 #[test]
@@ -86,9 +86,9 @@ fn delete_by_id_prefix() {
     let mut env = common::setup();
     add::run(add_args("Prefix delete"), &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     let prefix = task.id.to_string().replace('-', "")[..8].to_string();
 
     delete::run(delete::Args { id: prefix, yes: true }, &mut env.ctx).unwrap();
-    assert!(env.ctx.store.list_tasks().unwrap().is_empty());
+    assert!(env.ctx.repo.store.list_tasks().unwrap().is_empty());
 }

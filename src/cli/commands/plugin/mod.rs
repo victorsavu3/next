@@ -51,19 +51,19 @@ pub struct NameArgs {
 }
 
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
-    let root = ctx.repo_root.clone();
+    let root = ctx.repo.repo_root.clone();
     match args.subcommand {
         PluginSubcommand::Register(a) => {
             registry::register(&root, &a.name, a.command.clone())?;
             tracing::info!(cmd = "plugin", "registered {} -> {}", a.name, a.command.join(" "));
         }
         PluginSubcommand::Watch(a) => {
-            let id = resolve_task_id(&*ctx.store, &a.task)?;
+            let id = resolve_task_id(&*ctx.repo.store, &a.task)?;
             registry::watch(&root, &a.name, id)?;
             tracing::info!(cmd = "plugin", "{} now watches {}", a.name, id);
         }
         PluginSubcommand::Unwatch(a) => {
-            let id = resolve_task_id(&*ctx.store, &a.task)?;
+            let id = resolve_task_id(&*ctx.repo.store, &a.task)?;
             registry::unwatch(&root, &a.name, id)?;
             tracing::info!(cmd = "plugin", "{} no longer watches {}", a.name, id);
         }
@@ -80,7 +80,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 }
 
 fn list(ctx: &AppContext) -> anyhow::Result<()> {
-    let reg = registry::load(&ctx.repo_root)?;
+    let reg = registry::load(&ctx.repo.repo_root)?;
     if reg.plugins.is_empty() {
         println!("No plugins registered.");
         return Ok(());
@@ -92,7 +92,7 @@ fn list(ctx: &AppContext) -> anyhow::Result<()> {
         } else {
             for id in &plugin.tasks {
                 // Show the title when the task still exists; bare id otherwise.
-                match ctx.store.get_task(*id) {
+                match ctx.repo.store.get_task(*id) {
                     Ok(task) => println!("  {}  {}", &id.to_string()[..8], task.title),
                     Err(_) => println!("  {}  (unknown task)", &id.to_string()[..8]),
                 }

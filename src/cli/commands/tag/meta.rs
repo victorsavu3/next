@@ -61,7 +61,7 @@ pub struct NoTimeUrgencyArgs {
 
 pub fn show(ctx: &mut AppContext, args: ShowArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let meta = ctx.store.get_tag_meta(&args.tag)?.unwrap_or_default();
+    let meta = ctx.repo.store.get_tag_meta(&args.tag)?.unwrap_or_default();
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&meta)?);
@@ -94,7 +94,7 @@ pub fn show(ctx: &mut AppContext, args: ShowArgs) -> anyhow::Result<()> {
 
 pub fn describe(ctx: &mut AppContext, args: DescribeArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    ctx.transaction(|store, vcs, root| {
+    ctx.repo.transaction(|store, vcs, root| {
         store.set_tag_description(&args.tag, &args.description)?;
         let tag_path = crate::core::storage::tag_meta_path(root, &args.tag);
         vcs.commit(&[tag_path], &format!("next: tag describe {}", args.tag))?;
@@ -105,7 +105,7 @@ pub fn describe(ctx: &mut AppContext, args: DescribeArgs) -> anyhow::Result<()> 
 }
 
 pub fn clear_description(ctx: &mut AppContext, args: ClearDescriptionArgs) -> anyhow::Result<()> {
-    ctx.transaction(|store, vcs, root| {
+    ctx.repo.transaction(|store, vcs, root| {
         store.delete_tag_description(&args.tag)?;
         let tag_path = crate::core::storage::tag_meta_path(root, &args.tag);
         vcs.commit(
@@ -120,7 +120,7 @@ pub fn clear_description(ctx: &mut AppContext, args: ClearDescriptionArgs) -> an
 
 pub fn set_url(ctx: &mut AppContext, args: SetUrlArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    ctx.transaction(|store, vcs, root| {
+    ctx.repo.transaction(|store, vcs, root| {
         let mut meta = store.get_tag_meta(&args.tag)?.unwrap_or_default();
         meta.url = Some(args.url.clone());
         store.set_tag_meta(&args.tag, meta)?;
@@ -134,7 +134,7 @@ pub fn set_url(ctx: &mut AppContext, args: SetUrlArgs) -> anyhow::Result<()> {
 
 pub fn clear_url(ctx: &mut AppContext, args: ClearUrlArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    ctx.transaction(|store, vcs, root| {
+    ctx.repo.transaction(|store, vcs, root| {
         let mut meta = store
             .get_tag_meta(&args.tag)?
             .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {:?}", args.tag))?;
@@ -155,7 +155,7 @@ pub fn clear_url(ctx: &mut AppContext, args: ClearUrlArgs) -> anyhow::Result<()>
 pub fn set_priority(ctx: &mut AppContext, args: SetPriorityArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
     let priority: Priority = args.priority.parse()?;
-    ctx.transaction(|store, vcs, root| {
+    ctx.repo.transaction(|store, vcs, root| {
         let mut meta = store.get_tag_meta(&args.tag)?.unwrap_or_default();
         meta.priority = Some(priority);
         store.set_tag_meta(&args.tag, meta)?;
@@ -169,7 +169,7 @@ pub fn set_priority(ctx: &mut AppContext, args: SetPriorityArgs) -> anyhow::Resu
 
 pub fn clear_priority(ctx: &mut AppContext, args: ClearPriorityArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    ctx.transaction(|store, vcs, root| {
+    ctx.repo.transaction(|store, vcs, root| {
         let mut meta = store
             .get_tag_meta(&args.tag)?
             .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {:?}", args.tag))?;
@@ -189,7 +189,7 @@ pub fn clear_priority(ctx: &mut AppContext, args: ClearPriorityArgs) -> anyhow::
 
 pub fn set_no_time_urgency(ctx: &mut AppContext, args: NoTimeUrgencyArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    ctx.transaction(|store, vcs, root| {
+    ctx.repo.transaction(|store, vcs, root| {
         let mut meta = store.get_tag_meta(&args.tag)?.unwrap_or_default();
         meta.no_time_urgency = true;
         store.set_tag_meta(&args.tag, meta)?;
@@ -203,7 +203,7 @@ pub fn set_no_time_urgency(ctx: &mut AppContext, args: NoTimeUrgencyArgs) -> any
 
 pub fn clear_no_time_urgency(ctx: &mut AppContext, args: NoTimeUrgencyArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    ctx.transaction(|store, vcs, root| {
+    ctx.repo.transaction(|store, vcs, root| {
         let mut meta = store
             .get_tag_meta(&args.tag)?
             .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {:?}", args.tag))?;

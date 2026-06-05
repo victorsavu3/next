@@ -70,7 +70,7 @@ fn forecast_shows_tasks_due_within_horizon() {
     .unwrap();
     forecast::run(forecast_args(Some(30)), &env.ctx).unwrap();
     // Task with due date within horizon must be in the store.
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(task.due.is_some());
 }
 

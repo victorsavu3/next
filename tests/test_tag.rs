@@ -79,7 +79,7 @@ fn tag_describe_stores_description() {
     let mut env = common::setup();
     tag::run(describe("@work", "Tasks done at the office"), &mut env.ctx).unwrap();
 
-    let desc = env.ctx.store.get_tag_description("@work").unwrap();
+    let desc = env.ctx.repo.store.get_tag_description("@work").unwrap();
     assert_eq!(desc.as_deref(), Some("Tasks done at the office"));
 }
 
@@ -89,7 +89,7 @@ fn tag_describe_updates_existing_description() {
     tag::run(describe("@home", "first"), &mut env.ctx).unwrap();
     tag::run(describe("@home", "second"), &mut env.ctx).unwrap();
 
-    let desc = env.ctx.store.get_tag_description("@home").unwrap();
+    let desc = env.ctx.repo.store.get_tag_description("@home").unwrap();
     assert_eq!(desc.as_deref(), Some("second"));
 }
 
@@ -110,7 +110,7 @@ fn tag_clear_removes_description() {
     tag::run(describe("python", "Python tasks"), &mut env.ctx).unwrap();
     tag::run(clear_description("python"), &mut env.ctx).unwrap();
 
-    let desc = env.ctx.store.get_tag_description("python").unwrap();
+    let desc = env.ctx.repo.store.get_tag_description("python").unwrap();
     assert!(desc.is_none());
 }
 
@@ -130,7 +130,7 @@ fn tag_description_survives_store_reload() {
     let mut env = common::setup();
     tag::run(describe("#vacation", "Away from keyboard"), &mut env.ctx).unwrap();
 
-    let (fresh_store, _) = next::core::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let (fresh_store, _) = next::core::storage::open(env.ctx.repo.repo_root.clone()).unwrap();
     let desc = fresh_store.get_tag_description("#vacation").unwrap();
     assert_eq!(desc.as_deref(), Some("Away from keyboard"));
 }
@@ -144,7 +144,7 @@ fn tag_describe_hierarchical_tag() {
     let mut env = common::setup();
     tag::run(describe("@home/kitchen", "Tasks in the kitchen"), &mut env.ctx).unwrap();
 
-    let desc = env.ctx.store.get_tag_description("@home/kitchen").unwrap();
+    let desc = env.ctx.repo.store.get_tag_description("@home/kitchen").unwrap();
     assert_eq!(desc.as_deref(), Some("Tasks in the kitchen"));
 }
 
@@ -155,7 +155,7 @@ fn list_tag_descriptions_returns_all() {
     tag::run(describe("#printer", "Office printer"), &mut env.ctx).unwrap();
     tag::run(describe("python", "Python projects"), &mut env.ctx).unwrap();
 
-    let all = env.ctx.store.list_tag_descriptions().unwrap();
+    let all = env.ctx.repo.store.list_tag_descriptions().unwrap();
     assert_eq!(all.get("@work").map(String::as_str), Some("Work tasks"));
     assert_eq!(all.get("#printer").map(String::as_str), Some("Office printer"));
     assert_eq!(all.get("python").map(String::as_str), Some("Python projects"));
@@ -215,7 +215,7 @@ fn tag_set_url_stores_url() {
     )
     .unwrap();
 
-    let meta = env.ctx.store.get_tag_meta("@work").unwrap().unwrap();
+    let meta = env.ctx.repo.store.get_tag_meta("@work").unwrap().unwrap();
     assert_eq!(meta.url.as_deref(), Some("https://example.com/work"));
 }
 
@@ -234,7 +234,7 @@ fn tag_set_url_preserves_description() {
     )
     .unwrap();
 
-    let meta = env.ctx.store.get_tag_meta("@work").unwrap().unwrap();
+    let meta = env.ctx.repo.store.get_tag_meta("@work").unwrap().unwrap();
     assert_eq!(meta.description.as_deref(), Some("Office work"));
     assert_eq!(meta.url.as_deref(), Some("https://example.com"));
 }
@@ -262,7 +262,7 @@ fn tag_clear_url_removes_url() {
     )
     .unwrap();
 
-    let meta = env.ctx.store.get_tag_meta("python").unwrap();
+    let meta = env.ctx.repo.store.get_tag_meta("python").unwrap();
     assert!(meta.map(|m| m.url.is_none()).unwrap_or(true));
 }
 
@@ -284,7 +284,7 @@ fn tag_set_priority_stores_priority() {
     )
     .unwrap();
 
-    let meta = env.ctx.store.get_tag_meta("@work").unwrap().unwrap();
+    let meta = env.ctx.repo.store.get_tag_meta("@work").unwrap().unwrap();
     assert_eq!(meta.priority, Some(Priority::High));
 }
 
@@ -326,7 +326,7 @@ fn tag_clear_priority_removes_priority() {
     )
     .unwrap();
 
-    let meta = env.ctx.store.get_tag_meta("python").unwrap();
+    let meta = env.ctx.repo.store.get_tag_meta("python").unwrap();
     assert!(meta.map(|m| m.priority.is_none()).unwrap_or(true));
 }
 
@@ -351,7 +351,7 @@ fn tag_data_set_stores_value() {
     )
     .unwrap();
 
-    let meta = env.ctx.store.get_tag_meta("@work").unwrap().unwrap();
+    let meta = env.ctx.repo.store.get_tag_meta("@work").unwrap().unwrap();
     assert_eq!(
         meta.data.get("team"),
         Some(&serde_json::Value::String("engineering".into()))
@@ -375,7 +375,7 @@ fn tag_data_set_json_value() {
     )
     .unwrap();
 
-    let meta = env.ctx.store.get_tag_meta("python").unwrap().unwrap();
+    let meta = env.ctx.repo.store.get_tag_meta("python").unwrap().unwrap();
     assert_eq!(
         meta.data.get("count"),
         Some(&serde_json::Value::Number(42.into()))
@@ -458,7 +458,7 @@ fn tag_data_unset_removes_key() {
     )
     .unwrap();
 
-    let meta = env.ctx.store.get_tag_meta("rust").unwrap();
+    let meta = env.ctx.repo.store.get_tag_meta("rust").unwrap();
     assert!(meta.map(|m| m.data.is_empty()).unwrap_or(true));
 }
 
@@ -531,7 +531,7 @@ fn tag_meta_all_fields_survives_reload() {
     )
     .unwrap();
 
-    let (fresh_store, _) = next::core::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let (fresh_store, _) = next::core::storage::open(env.ctx.repo.repo_root.clone()).unwrap();
     let meta = fresh_store.get_tag_meta("@work").unwrap().unwrap();
     assert_eq!(meta.description.as_deref(), Some("Office"));
     assert_eq!(meta.url.as_deref(), Some("https://example.com"));
@@ -551,11 +551,11 @@ fn legacy_description_file_reads_as_tag_meta() {
     use std::fs;
     let env = common::setup();
     // Write a legacy single-field TOML file directly (using encoded path).
-    let tags_dir = env.ctx.repo_root.join("tags");
+    let tags_dir = env.ctx.repo.repo_root.join("tags");
     fs::create_dir_all(&tags_dir).unwrap();
     fs::write(tags_dir.join("__context__work.toml"), "description = \"Office tasks\"\n").unwrap();
 
-    let meta = env.ctx.store.get_tag_meta("@work").unwrap().unwrap();
+    let meta = env.ctx.repo.store.get_tag_meta("@work").unwrap().unwrap();
     assert_eq!(meta.description.as_deref(), Some("Office tasks"));
     assert!(meta.url.is_none());
     assert!(meta.data.is_empty());

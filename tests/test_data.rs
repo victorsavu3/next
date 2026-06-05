@@ -60,7 +60,7 @@ fn data_set_string_value() {
 
     data::run(set("t", "source", "github"), &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(task.data["source"], serde_json::json!("github"));
 }
 
@@ -71,7 +71,7 @@ fn data_set_number_value() {
 
     data::run(set("t", "score", "42"), &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(task.data["score"], serde_json::json!(42));
 }
 
@@ -82,7 +82,7 @@ fn data_set_bool_value() {
 
     data::run(set("t", "urgent", "true"), &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(task.data["urgent"], serde_json::json!(true));
 }
 
@@ -94,7 +94,7 @@ fn data_set_updates_existing_key() {
     data::run(set("t", "phase", "alpha"), &mut env.ctx).unwrap();
     data::run(set("t", "phase", "beta"), &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(task.data["phase"], serde_json::json!("beta"));
     assert_eq!(task.data.len(), 1);
 }
@@ -107,7 +107,7 @@ fn data_set_multiple_independent_keys() {
     data::run(set("t", "key1", "a"), &mut env.ctx).unwrap();
     data::run(set("t", "key2", "b"), &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(task.data["key1"], serde_json::json!("a"));
     assert_eq!(task.data["key2"], serde_json::json!("b"));
 }
@@ -121,7 +121,7 @@ fn data_unset_removes_key() {
     data::run(set("t", "keep-me", "yes"), &mut env.ctx).unwrap();
     data::run(unset("t", "remove-me"), &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(!task.data.contains_key("remove-me"));
     assert!(task.data.contains_key("keep-me"));
 }

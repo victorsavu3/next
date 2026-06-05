@@ -30,7 +30,7 @@ fn add_basic_task() {
     let mut env = common::setup();
     add::run(args("Buy milk"), &mut env.ctx).unwrap();
 
-    let tasks = env.ctx.store.list_tasks().unwrap();
+    let tasks = env.ctx.repo.store.list_tasks().unwrap();
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].title, "Buy milk");
 }
@@ -46,6 +46,7 @@ fn add_with_slug_resolves_by_slug() {
 
     let found = env
         .ctx
+        .repo
         .store
         .get_task_by_slug("water-plants")
         .unwrap()
@@ -62,7 +63,7 @@ fn add_with_due_date() {
     };
     add::run(a, &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(task.due.is_some());
     assert_eq!(task.due.unwrap().to_string(), "2026-12-31");
 }
@@ -76,7 +77,7 @@ fn add_with_context_tag() {
     };
     add::run(a, &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(task.tags.contains(&"@work".to_string()));
 }
 
@@ -89,7 +90,7 @@ fn add_with_resource_tag() {
     };
     add::run(a, &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(task.tags.contains(&"#printer".to_string()));
 }
 
@@ -102,7 +103,7 @@ fn add_with_freeform_tag() {
     };
     add::run(a, &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(task.tags.contains(&"urgent".to_string()));
 }
 
@@ -120,7 +121,7 @@ fn add_with_invalid_tag_is_rejected() {
     );
 
     // No task should have been saved.
-    assert!(env.ctx.store.list_tasks().unwrap().is_empty());
+    assert!(env.ctx.repo.store.list_tasks().unwrap().is_empty());
 }
 
 #[test]
@@ -138,11 +139,12 @@ fn add_with_parent() {
     };
     add::run(child_args, &mut env.ctx).unwrap();
 
-    let all = env.ctx.store.list_tasks().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     assert_eq!(all.len(), 2);
 
     let parent = env
         .ctx
+        .repo
         .store
         .get_task_by_slug("parent-task")
         .unwrap()
@@ -160,7 +162,7 @@ fn add_with_description() {
     };
     add::run(a, &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(
         task.description.as_deref(),
         Some("Pick up 2% milk from the corner store.")
@@ -176,7 +178,7 @@ fn add_with_url() {
     };
     add::run(a, &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(task.url.as_deref(), Some("https://example.com/ticket/42"));
 }
 
@@ -192,7 +194,7 @@ fn add_with_invalid_url_is_rejected() {
         err.to_string().contains("http://") || err.to_string().contains("https://"),
         "unexpected error: {err}"
     );
-    assert!(env.ctx.store.list_tasks().unwrap().is_empty());
+    assert!(env.ctx.repo.store.list_tasks().unwrap().is_empty());
 }
 
 #[test]
@@ -202,7 +204,7 @@ fn multiple_tasks_stored_independently() {
     add::run(args("Task B"), &mut env.ctx).unwrap();
     add::run(args("Task C"), &mut env.ctx).unwrap();
 
-    let all = env.ctx.store.list_tasks().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     assert_eq!(all.len(), 3);
 
     let titles: std::collections::HashSet<&str> = all.iter().map(|t| t.title.as_str()).collect();
@@ -222,11 +224,11 @@ fn add_auto_applies_active_context_when_no_context_tag() {
 
     // Set @work as the active context.
     let state = GlobalState { active_contexts: vec!["@work".to_string()], ..Default::default() };
-    env.ctx.store.save_state(&state).unwrap();
+    env.ctx.repo.store.save_state(&state).unwrap();
 
     add::run(args("No-context task"), &mut env.ctx).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(
         task.tags.contains(&"@work".to_string()),
         "active context @work should be auto-applied: {:?}",
@@ -240,14 +242,14 @@ fn add_does_not_auto_apply_when_context_tag_already_present() {
     let mut env = common::setup();
 
     let state = GlobalState { active_contexts: vec!["@work".to_string()], ..Default::default() };
-    env.ctx.store.save_state(&state).unwrap();
+    env.ctx.repo.store.save_state(&state).unwrap();
 
     add::run(
         add::Args { tags: vec!["@home".to_string()], ..args("Home task") },
         &mut env.ctx,
     ).unwrap();
 
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(task.tags.contains(&"@home".to_string()), "explicit tag kept");
     assert!(!task.tags.contains(&"@work".to_string()), "@work must not be auto-applied when user already has a context tag");
 }
@@ -256,7 +258,7 @@ fn add_does_not_auto_apply_when_context_tag_already_present() {
 fn add_no_auto_apply_when_no_active_context() {
     let mut env = common::setup();
     add::run(args("Plain task"), &mut env.ctx).unwrap();
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(
         task.tags.iter().all(|t| !t.starts_with('@')),
         "no context tags should be added when no active context is set"

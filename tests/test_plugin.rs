@@ -100,7 +100,7 @@ fn cli_mutation_handler_records_event() {
     )
     .unwrap();
     // create_task is the shared service fn (no AppContext) — it records nothing.
-    assert!(env.ctx.take_task_events().is_empty());
+    assert!(env.ctx.repo.take_task_events().is_empty());
 
     next::cli::commands::start::run(
         next::cli::commands::start::Args { id: task.id.to_string(), json: false },
@@ -108,7 +108,7 @@ fn cli_mutation_handler_records_event() {
     )
     .unwrap();
 
-    let events = env.ctx.take_task_events();
+    let events = env.ctx.repo.take_task_events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].verb, "start");
     assert_eq!(events[0].task_id, task.id);

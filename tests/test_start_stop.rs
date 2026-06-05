@@ -30,11 +30,11 @@ fn add_args(title: &str) -> add::Args {
 fn start_sets_started_status() {
     let mut env = common::setup();
     add::run(add_args("My task"), &mut env.ctx).unwrap();
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
 
     start::run(start::Args { id: task.id.to_string(), json: false }, &mut env.ctx).unwrap();
 
-    let updated = env.ctx.store.get_task(task.id).unwrap();
+    let updated = env.ctx.repo.store.get_task(task.id).unwrap();
     assert_eq!(updated.status, Status::Started);
 }
 
@@ -42,11 +42,11 @@ fn start_sets_started_status() {
 fn start_logs_time_event() {
     let mut env = common::setup();
     add::run(add_args("Timed task"), &mut env.ctx).unwrap();
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
 
     start::run(start::Args { id: task.id.to_string(), json: false }, &mut env.ctx).unwrap();
 
-    let updated = env.ctx.store.get_task(task.id).unwrap();
+    let updated = env.ctx.repo.store.get_task(task.id).unwrap();
     let log = updated.data.get("time_log").expect("time_log should exist");
     let arr = log.as_array().expect("time_log should be an array");
     assert_eq!(arr.len(), 1);
@@ -58,12 +58,12 @@ fn start_logs_time_event() {
 fn stop_returns_to_open_and_logs_event() {
     let mut env = common::setup();
     add::run(add_args("Stoppable task"), &mut env.ctx).unwrap();
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
 
     start::run(start::Args { id: task.id.to_string(), json: false }, &mut env.ctx).unwrap();
     stop::run(stop::Args { id: task.id.to_string(), json: false }, &mut env.ctx).unwrap();
 
-    let updated = env.ctx.store.get_task(task.id).unwrap();
+    let updated = env.ctx.repo.store.get_task(task.id).unwrap();
     assert_eq!(updated.status, Status::Open);
 
     let arr = updated.data["time_log"].as_array().unwrap();
@@ -76,12 +76,12 @@ fn stop_returns_to_open_and_logs_event() {
 fn started_task_appears_in_default_list() {
     let mut env = common::setup();
     add::run(add_args("Active task"), &mut env.ctx).unwrap();
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
 
     start::run(start::Args { id: task.id.to_string(), json: false }, &mut env.ctx).unwrap();
 
     // Default list should include started tasks.
-    let listed = env.ctx.store.list_tasks().unwrap();
+    let listed = env.ctx.repo.store.list_tasks().unwrap();
     assert!(listed.iter().any(|t| t.id == task.id && t.status == Status::Started));
 }
 
@@ -89,14 +89,14 @@ fn started_task_appears_in_default_list() {
 fn multiple_start_stop_cycles_accumulate_log() {
     let mut env = common::setup();
     add::run(add_args("Multi-cycle"), &mut env.ctx).unwrap();
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
 
     start::run(start::Args { id: task.id.to_string(), json: false }, &mut env.ctx).unwrap();
     stop::run(stop::Args { id: task.id.to_string(), json: false }, &mut env.ctx).unwrap();
     start::run(start::Args { id: task.id.to_string(), json: false }, &mut env.ctx).unwrap();
     stop::run(stop::Args { id: task.id.to_string(), json: false }, &mut env.ctx).unwrap();
 
-    let updated = env.ctx.store.get_task(task.id).unwrap();
+    let updated = env.ctx.repo.store.get_task(task.id).unwrap();
     let arr = updated.data["time_log"].as_array().unwrap();
     assert_eq!(arr.len(), 4);
     assert_eq!(arr[0]["event"], "start");
@@ -109,11 +109,11 @@ fn multiple_start_stop_cycles_accumulate_log() {
 fn started_task_can_be_marked_done() {
     let mut env = common::setup();
     add::run(add_args("Finish me"), &mut env.ctx).unwrap();
-    let task = env.ctx.store.list_tasks().unwrap().remove(0);
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
 
     start::run(start::Args { id: task.id.to_string(), json: false }, &mut env.ctx).unwrap();
     done::run(done::Args { id: task.id.to_string(), completed_at: None, json: false }, &mut env.ctx).unwrap();
 
-    let updated = env.ctx.store.get_task(task.id).unwrap();
+    let updated = env.ctx.repo.store.get_task(task.id).unwrap();
     assert_eq!(updated.status, Status::Done);
 }

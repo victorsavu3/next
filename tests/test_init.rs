@@ -127,5 +127,5 @@ fn init_then_add_task_works() {
     )
     .unwrap();
 
-    assert_eq!(ctx.store.list_tasks().unwrap().len(), 1);
+    assert_eq!(ctx.repo.store.list_tasks().unwrap().len(), 1);
 }

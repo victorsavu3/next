@@ -42,7 +42,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 }
 
 fn show(ctx: &mut AppContext, json: bool) -> anyhow::Result<()> {
-    let state = ctx.store.get_state()?;
+    let state = ctx.repo.store.get_state()?;
     if json {
         let mut entries: Vec<String> = state
             .resources
@@ -54,7 +54,7 @@ fn show(ctx: &mut AppContext, json: bool) -> anyhow::Result<()> {
     } else if state.resources.is_empty() {
         println!("No resources tracked (all implicitly available).");
     } else {
-        let descriptions = ctx.store.list_tag_descriptions()?;
+        let descriptions = ctx.repo.store.list_tag_descriptions()?;
         let mut rows: Vec<(&String, &bool)> = state.resources.iter().collect();
         rows.sort_by_key(|(k, _)| *k);
         for (name, available) in rows {
@@ -75,7 +75,7 @@ fn set(ctx: &mut AppContext, resource: String, availability: Availability) -> an
     let available = matches!(availability, Availability::On);
     let bare = resource.trim_start_matches('#');
 
-    ctx.state_transaction(|store| {
+    ctx.repo.state_transaction(|store| {
         let mut state = store.get_state()?;
         state.resources.insert(bare.to_owned(), available);
         store.save_state(&state)?;

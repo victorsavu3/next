@@ -52,7 +52,7 @@ fn next_respects_count_arg() {
     }
     // Count of 2 must not error; all 5 tasks remain in the store.
     next_cmd::run(next_args(Some(2)), &env.ctx).unwrap();
-    assert_eq!(env.ctx.store.list_tasks().unwrap().len(), 5);
+    assert_eq!(env.ctx.repo.store.list_tasks().unwrap().len(), 5);
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn next_default_count_from_config() {
     env.ctx.config.next_count = 3;
     // With 15 tasks and next_count = 3, must not error.
     next_cmd::run(next_args(None), &env.ctx).unwrap();
-    assert_eq!(env.ctx.store.list_tasks().unwrap().len(), 15);
+    assert_eq!(env.ctx.repo.store.list_tasks().unwrap().len(), 15);
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn next_excludes_done_tasks() {
 
     // next only shows open tasks
     next_cmd::run(next_args(None), &env.ctx).unwrap();
-    let all = env.ctx.store.list_tasks().unwrap();
+    let all = env.ctx.repo.store.list_tasks().unwrap();
     let open_count = all
         .iter()
         .filter(|t| t.status == next::core::domain::task::Status::Open)

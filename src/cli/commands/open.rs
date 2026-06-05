@@ -7,8 +7,8 @@ pub struct Args {
 }
 
 pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
-    let id = resolve_task_id(ctx.store(), &args.id)?;
-    let task = ctx.store().get_task(id)?;
+    let id = resolve_task_id(ctx.repo.store(), &args.id)?;
+    let task = ctx.repo.store().get_task(id)?;
 
     let url = task
         .url

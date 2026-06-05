@@ -68,7 +68,7 @@ fn set(ctx: &mut AppContext, args: DataSetArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
     let value: serde_json::Value = serde_json::from_str(&args.value)
         .unwrap_or_else(|_| serde_json::Value::String(args.value.clone()));
-    ctx.transaction(|store, vcs, root| {
+    ctx.repo.transaction(|store, vcs, root| {
         let mut meta = store.get_tag_meta(&args.tag)?.unwrap_or_default();
         meta.data.insert(args.key.clone(), value);
         store.set_tag_meta(&args.tag, meta)?;
@@ -85,7 +85,7 @@ fn set(ctx: &mut AppContext, args: DataSetArgs) -> anyhow::Result<()> {
 
 fn get(ctx: &mut AppContext, args: DataGetArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let meta = ctx.store.get_tag_meta(&args.tag)?.unwrap_or_default();
+    let meta = ctx.repo.store.get_tag_meta(&args.tag)?.unwrap_or_default();
     match meta.data.get(&args.key) {
         Some(v) => println!("{v}"),
         None => anyhow::bail!("key {:?} not found for tag {:?}", args.key, args.tag),
@@ -95,7 +95,7 @@ fn get(ctx: &mut AppContext, args: DataGetArgs) -> anyhow::Result<()> {
 
 fn unset(ctx: &mut AppContext, args: DataUnsetArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    ctx.transaction(|store, vcs, root| {
+    ctx.repo.transaction(|store, vcs, root| {
         let mut meta = store
             .get_tag_meta(&args.tag)?
             .ok_or_else(|| anyhow::anyhow!("no metadata set for tag {:?}", args.tag))?;
@@ -120,7 +120,7 @@ fn unset(ctx: &mut AppContext, args: DataUnsetArgs) -> anyhow::Result<()> {
 
 fn list(ctx: &mut AppContext, args: DataListArgs) -> anyhow::Result<()> {
     tag::validate_tag(&args.tag).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let meta = ctx.store.get_tag_meta(&args.tag)?.unwrap_or_default();
+    let meta = ctx.repo.store.get_tag_meta(&args.tag)?.unwrap_or_default();
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&meta.data)?);

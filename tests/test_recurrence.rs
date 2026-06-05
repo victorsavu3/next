@@ -40,7 +40,7 @@ fn done_args(id: &str) -> done::Args {
 
 /// Returns all tasks regardless of status.
 fn all_tasks(env: &common::TestEnv) -> Vec<next::core::domain::task::Task> {
-    env.ctx.store.list_tasks().unwrap()
+    env.ctx.repo.store.list_tasks().unwrap()
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────
@@ -428,7 +428,7 @@ fn backward_compat_rule_alias_loads() {
     .unwrap();
 
     // Reload from a fresh store (exercises round-trip through TOML serialization).
-    let (fresh_store, _) = next::core::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let (fresh_store, _) = next::core::storage::open(env.ctx.repo.repo_root.clone()).unwrap();
     let task = fresh_store
         .get_task_by_slug("legacy")
         .unwrap()
@@ -488,7 +488,7 @@ fn recur_snap_round_trips_toml() {
     )
     .unwrap();
 
-    let (fresh, _) = next::core::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let (fresh, _) = next::core::storage::open(env.ctx.repo.repo_root.clone()).unwrap();
     let t = fresh.get_task_by_slug("sat-task").unwrap().unwrap();
     assert!(
         matches!(
@@ -511,7 +511,7 @@ fn recur_snap_round_trips_toml() {
     )
     .unwrap();
 
-    let (fresh2, _) = next::core::storage::open(env.ctx.repo_root.clone()).unwrap();
+    let (fresh2, _) = next::core::storage::open(env.ctx.repo.repo_root.clone()).unwrap();
     let t2 = fresh2.get_task_by_slug("workday-task").unwrap().unwrap();
     assert!(
         matches!(t2.recurrence, Some(Recurrence::Completion { snap: Some(Snap::NextWorkday), .. })),
@@ -534,7 +534,7 @@ fn recur_edit_rule_preserves_anchor() {
     )
     .unwrap();
 
-    let before = env.ctx.store.get_task_by_slug("monthly").unwrap().unwrap();
+    let before = env.ctx.repo.store.get_task_by_slug("monthly").unwrap().unwrap();
     let original_anchor = match &before.recurrence {
         Some(Recurrence::Schedule { anchor, .. }) => *anchor,
         _ => panic!("expected schedule recurrence"),
@@ -577,7 +577,7 @@ fn recur_edit_rule_preserves_anchor() {
     )
     .unwrap();
 
-    let after = env.ctx.store.get_task_by_slug("monthly").unwrap().unwrap();
+    let after = env.ctx.repo.store.get_task_by_slug("monthly").unwrap().unwrap();
     let new_anchor = match &after.recurrence {
         Some(Recurrence::Schedule { anchor, rrule, .. }) => {
             assert_eq!(rrule, "FREQ=MONTHLY;BYMONTHDAY=15", "rrule should be updated");
@@ -602,7 +602,7 @@ fn recur_clear_recurrence_removes_rule() {
     )
     .unwrap();
 
-    let before = env.ctx.store.get_task_by_slug("clearme").unwrap().unwrap();
+    let before = env.ctx.repo.store.get_task_by_slug("clearme").unwrap().unwrap();
     assert!(before.recurrence.is_some(), "should have recurrence before clear");
     assert!(before.recurrence_id.is_some(), "should have recurrence_id before clear");
 
@@ -642,7 +642,7 @@ fn recur_clear_recurrence_removes_rule() {
     )
     .unwrap();
 
-    let after = env.ctx.store.get_task_by_slug("clearme").unwrap().unwrap();
+    let after = env.ctx.repo.store.get_task_by_slug("clearme").unwrap().unwrap();
     assert!(after.recurrence.is_none(), "recurrence should be cleared");
     assert!(after.recurrence_id.is_none(), "recurrence_id should be cleared");
 }
@@ -661,7 +661,7 @@ fn recur_first_instance_has_recurrence_id() {
     )
     .unwrap();
 
-    let task = env.ctx.store.get_task_by_slug("first-instance").unwrap().unwrap();
+    let task = env.ctx.repo.store.get_task_by_slug("first-instance").unwrap().unwrap();
     assert_eq!(
         task.recurrence_id,
         Some(task.id),

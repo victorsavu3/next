@@ -34,7 +34,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
 }
 
 fn show(ctx: &mut AppContext) -> anyhow::Result<()> {
-    let state = ctx.store.get_state()?;
+    let state = ctx.repo.store.get_state()?;
     if state.active_users.is_empty() {
         println!("No active user filter (all tasks visible).");
     } else {
@@ -47,7 +47,7 @@ fn show(ctx: &mut AppContext) -> anyhow::Result<()> {
 }
 
 fn set(ctx: &mut AppContext, users: Vec<String>) -> anyhow::Result<()> {
-    ctx.state_transaction(|store| {
+    ctx.repo.state_transaction(|store| {
         let mut state = store.get_state()?;
         state.active_users = users.clone();
         store.save_state(&state)?;
@@ -58,7 +58,7 @@ fn set(ctx: &mut AppContext, users: Vec<String>) -> anyhow::Result<()> {
 }
 
 fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
-    ctx.state_transaction(|store| {
+    ctx.repo.state_transaction(|store| {
         let mut state = store.get_state()?;
         state.active_users.clear();
         store.save_state(&state)?;
@@ -69,7 +69,7 @@ fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
 }
 
 fn list(ctx: &mut AppContext) -> anyhow::Result<()> {
-    let tasks = ctx.store.list_tasks()?;
+    let tasks = ctx.repo.store.list_tasks()?;
     let mut users: Vec<String> = tasks
         .into_iter()
         .filter_map(|t| t.assignee)
@@ -80,7 +80,7 @@ fn list(ctx: &mut AppContext) -> anyhow::Result<()> {
     if users.is_empty() {
         println!("No users assigned to any task.");
     } else {
-        let state = ctx.store.get_state()?;
+        let state = ctx.repo.store.get_state()?;
         for u in &users {
             let active = if state.active_users.contains(u) {
                 " *"

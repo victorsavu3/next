@@ -28,7 +28,7 @@ pub fn run_with_writer(
     ctx: &AppContext,
     out: &mut dyn Write,
 ) -> anyhow::Result<()> {
-    let all_tasks = ctx.store().list_tasks()?;
+    let all_tasks = ctx.repo.store().list_tasks()?;
 
     if args.json {
         let tasks: Vec<&Task> = if args.all {
