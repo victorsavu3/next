@@ -1,4 +1,5 @@
 use crate::core::domain::filter::FilterSet;
+use crate::core::domain::tag;
 
 /// Shared filter arguments used across list-style commands.
 ///
@@ -52,7 +53,13 @@ impl FilterArgs {
     }
 
     /// Converts to a domain [`FilterSet`].
+    ///
+    /// Tag tokens are validated, so a malformed `+tag` / `-tag` surfaces as an
+    /// `Err` rather than silently matching nothing.
     pub fn to_filter_set(&self) -> anyhow::Result<FilterSet> {
+        for t in self.required_tags.iter().chain(self.excluded_tags.iter()) {
+            tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
+        }
         let user_override = if self.all_users {
             Some(vec![]) // empty = bypass user filter
         } else {

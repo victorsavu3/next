@@ -8,7 +8,9 @@
 
 use chrono::NaiveDate;
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use tui_input::Input;
+use tui_input::backend::crossterm::EventHandler;
 
 use crate::core::domain::filter;
 use crate::core::domain::task::Task;
@@ -20,14 +22,16 @@ use super::config::ConfigSource;
 
 /// Which interaction mode the UI is in.
 ///
-/// Only [`Mode::Normal`] exists in T3. Later tasks (filter bar, edit modal,
-/// confirm popup) add variants here, and the event loop / drawing code branch
-/// on the active mode.
+/// [`Mode::Normal`] browses the list; [`Mode::Filter`] edits the live filter
+/// buffer. Later tasks (edit modal, confirm popup) add variants here, and the
+/// event loop / drawing code branch on the active mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
     /// Browsing the task list; keys drive selection and reload.
     #[default]
     Normal,
+    /// Editing the filter buffer in the filter bar.
+    Filter,
 }
 
 /// A discrete state transition produced by [`App::handle_key`] and applied by
@@ -47,6 +51,20 @@ pub enum Action {
     SelectLast,
     /// Re-run the load+score pipeline.
     Reload,
+    /// Open the filter bar, pre-filled with the current tokens.
+    OpenFilter,
+    /// While in [`Mode::Filter`]: feed a raw input event to the buffer.
+    FilterInput(KeyEvent),
+    /// While in [`Mode::Filter`]: commit the buffer into the active filter and reload.
+    CommitFilter,
+    /// While in [`Mode::Filter`]: cancel editing and restore the previous tokens.
+    CancelFilter,
+    /// Toggle the `--all` filter flag and reload.
+    ToggleAll,
+    /// Toggle the `--future` filter flag and reload.
+    ToggleFuture,
+    /// Toggle the `--all-users` filter flag and reload.
+    ToggleAllUsers,
 }
 
 /// The central application state.
@@ -60,6 +78,19 @@ pub struct App {
     tasks: Vec<ScoredTask>,
     /// Index of the selected task in `tasks`. Meaningless when `tasks` is empty.
     selected: usize,
+
+    /// Active filter tokens (`+tag`, `-tag`, `parent:`, `context:`, `user:`),
+    /// threaded into [`FilterArgs`] on every [`App::reload`].
+    filter_tokens: Vec<String>,
+    /// `--future`: include tasks scheduled in the future.
+    filter_future: bool,
+    /// `--all`: bypass implicit filtering (show done/blocked/etc.).
+    filter_all: bool,
+    /// `--all-users`: ignore the active user filter.
+    filter_all_users: bool,
+
+    /// The editable filter buffer, live only while in [`Mode::Filter`].
+    filter_input: Input,
 
     /// The current interaction mode.
     mode: Mode,
@@ -80,6 +111,11 @@ impl App {
             today,
             tasks: Vec::new(),
             selected: 0,
+            filter_tokens: Vec::new(),
+            filter_future: false,
+            filter_all: false,
+            filter_all_users: false,
+            filter_input: Input::default(),
             mode: Mode::Normal,
             status: None,
             should_quit: false,
@@ -96,6 +132,11 @@ impl App {
     /// Which config file the settings came from, for the title bar.
     pub fn source(&self) -> ConfigSource {
         self.source
+    }
+
+    /// "Today", used by the list for overdue / due-today styling.
+    pub fn today(&self) -> NaiveDate {
+        self.today
     }
 
     /// The current interaction mode.
@@ -123,6 +164,31 @@ impl App {
         self.should_quit
     }
 
+    /// The active filter tokens, for rendering the filter summary.
+    pub fn filter_tokens(&self) -> &[String] {
+        &self.filter_tokens
+    }
+
+    /// Whether the `--all` toggle is active.
+    pub fn filter_all(&self) -> bool {
+        self.filter_all
+    }
+
+    /// Whether the `--future` toggle is active.
+    pub fn filter_future(&self) -> bool {
+        self.filter_future
+    }
+
+    /// Whether the `--all-users` toggle is active.
+    pub fn filter_all_users(&self) -> bool {
+        self.filter_all_users
+    }
+
+    /// The live filter buffer, for rendering the filter bar in [`Mode::Filter`].
+    pub fn filter_input(&self) -> &Input {
+        &self.filter_input
+    }
+
     /// The task currently under the selection, or `None` when the list is empty.
     pub fn selected_task(&self) -> Option<&Task> {
         self.tasks.get(self.selected).map(|s| &s.task)
@@ -130,19 +196,27 @@ impl App {
 
     // ── Data loading ──────────────────────────────────────────────────────
 
-    /// Re-runs the load + score pipeline (the same one `next list` uses with no
-    /// filter tokens) and clamps the selection to the new list length.
+    /// Re-runs the load + score pipeline (the same one `next list` uses) with
+    /// the active filter tokens + flags, and clamps the selection to the new
+    /// list length.
     ///
-    /// The filter pipeline lives here; the live filter bar (T4) should feed its
-    /// tokens into the [`FilterArgs`] built below instead of the empty default.
+    /// A bad filter token surfaces as an `Err` carrying the parse message; the
+    /// caller ([`App::update`]) shows it in the status line and leaves the
+    /// previous list untouched.
     pub fn reload(&mut self) -> anyhow::Result<()> {
+        // Build the filter first: an invalid token must NOT clear the list, so
+        // we fail before touching `self.tasks`.
+        let mut fa = FilterArgs::parse(self.filter_tokens.clone());
+        fa.future = self.filter_future;
+        fa.all = self.filter_all;
+        fa.all_users = self.filter_all_users;
+        let filter_set = fa.to_filter_set()?;
+
         let store = self.repo.store();
         let state = store.get_state()?;
         let all_tasks = store.list_tasks()?;
         let tag_metas = store.list_tag_metas()?;
 
-        // T3: no filter tokens — the default implicit filtering, like `next list`.
-        let filter_set = FilterArgs::parse(Vec::new()).to_filter_set()?;
         let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, self.today);
         let scored = scoring::score_and_sort(
             filtered,
@@ -168,6 +242,7 @@ impl App {
     pub fn handle_key(&self, key: KeyEvent) -> Option<Action> {
         match self.mode {
             Mode::Normal => Self::normal_key(key),
+            Mode::Filter => Self::filter_key(key),
         }
     }
 
@@ -180,7 +255,20 @@ impl App {
             KeyCode::Char('g') | KeyCode::Home => Some(Action::SelectFirst),
             KeyCode::Char('G') | KeyCode::End => Some(Action::SelectLast),
             KeyCode::Char('r') => Some(Action::Reload),
+            KeyCode::Char('/') => Some(Action::OpenFilter),
+            KeyCode::Char('A') => Some(Action::ToggleAll),
+            KeyCode::Char('F') => Some(Action::ToggleFuture),
+            KeyCode::Char('U') => Some(Action::ToggleAllUsers),
             _ => None,
+        }
+    }
+
+    fn filter_key(key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Enter => Some(Action::CommitFilter),
+            KeyCode::Esc => Some(Action::CancelFilter),
+            // Everything else is editing input (chars, backspace, arrows, …).
+            _ => Some(Action::FilterInput(key)),
         }
     }
 
@@ -192,11 +280,62 @@ impl App {
             Action::SelectPrev => self.select_prev(),
             Action::SelectFirst => self.select_first(),
             Action::SelectLast => self.select_last(),
-            Action::Reload => match self.reload() {
-                Ok(()) => self.status = Some("reloaded".to_owned()),
-                Err(e) => self.status = Some(format!("reload failed: {e}")),
-            },
+            Action::Reload => self.reload_with_status("reloaded"),
+            Action::OpenFilter => self.open_filter(),
+            Action::FilterInput(key) => {
+                self.filter_input.handle_event(&Event::Key(key));
+            }
+            Action::CommitFilter => self.commit_filter(),
+            Action::CancelFilter => self.cancel_filter(),
+            Action::ToggleAll => {
+                self.filter_all = !self.filter_all;
+                self.reload_with_status("reloaded");
+            }
+            Action::ToggleFuture => {
+                self.filter_future = !self.filter_future;
+                self.reload_with_status("reloaded");
+            }
+            Action::ToggleAllUsers => {
+                self.filter_all_users = !self.filter_all_users;
+                self.reload_with_status("reloaded");
+            }
         }
+    }
+
+    /// Runs [`App::reload`], reporting either `ok_msg` or the error into the
+    /// status line. On error the previous list is preserved (see [`App::reload`]).
+    fn reload_with_status(&mut self, ok_msg: &str) {
+        match self.reload() {
+            Ok(()) => self.status = Some(ok_msg.to_owned()),
+            Err(e) => self.status = Some(format!("filter error: {e}")),
+        }
+    }
+
+    /// Enters [`Mode::Filter`], pre-filling the buffer with the current tokens.
+    fn open_filter(&mut self) {
+        self.filter_input = Input::new(self.filter_tokens.join(" "));
+        self.mode = Mode::Filter;
+        self.status = None;
+    }
+
+    /// Parses the buffer into `filter_tokens` (whitespace split) and reloads.
+    /// On a parse error the tokens are still updated but the list is preserved,
+    /// and the error is shown so the user can fix the buffer (`/` to re-edit).
+    fn commit_filter(&mut self) {
+        self.filter_tokens = self
+            .filter_input
+            .value()
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect();
+        self.mode = Mode::Normal;
+        self.reload_with_status("filter applied");
+    }
+
+    /// Leaves [`Mode::Filter`] without changing the active filter or list.
+    fn cancel_filter(&mut self) {
+        self.mode = Mode::Normal;
+        self.status = None;
     }
 
     // ── Selection helpers (pure, clamp to bounds, no-op on empty list) ─────
@@ -275,6 +414,113 @@ mod tests {
         cfg.set_str("user.email", "test@test.com").unwrap();
         let config = Config::default();
         crate::core::bootstrap::open_repository(root, &config).unwrap()
+    }
+
+    const TODAY: (i32, u32, u32) = (2026, 6, 5);
+
+    /// Builds an `App` over a real (empty) repo containing the given tasks, then
+    /// reloads so `tasks()` reflects them through the full filter pipeline.
+    fn app_with_repo_tasks(tasks: Vec<Task>) -> App {
+        let mut repo = test_repo();
+        for task in &tasks {
+            repo.store_mut().save_task(task).unwrap();
+        }
+        let today = NaiveDate::from_ymd_opt(TODAY.0, TODAY.1, TODAY.2).unwrap();
+        let mut app = App::new(Config::default(), repo, ConfigSource::Default, today);
+        app.reload().unwrap();
+        app
+    }
+
+    /// Titles currently visible, for order-independent assertions.
+    fn visible_titles(app: &App) -> Vec<String> {
+        app.tasks().iter().map(|s| s.task.title.clone()).collect()
+    }
+
+    #[test]
+    fn commit_filter_parses_buffer_into_tokens() {
+        let mut app = app_with_repo_tasks(Vec::new());
+        app.open_filter();
+        app.filter_input = Input::new("  +#rust   -#chore  ".to_owned());
+        app.commit_filter();
+        assert_eq!(app.filter_tokens(), &["+#rust", "-#chore"]);
+        assert_eq!(app.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn reload_applies_required_tag_filter() {
+        let mut tagged = Task::new("rusty");
+        tagged.tags = vec!["#rust".to_owned()];
+        let plain = Task::new("plain");
+        let mut app = app_with_repo_tasks(vec![tagged, plain]);
+
+        // No filter: both tasks visible.
+        assert_eq!(visible_titles(&app).len(), 2);
+
+        // Require the #rust tag: only the tagged task survives.
+        app.filter_tokens = vec!["+#rust".to_owned()];
+        app.reload().unwrap();
+        assert_eq!(visible_titles(&app), vec!["rusty".to_owned()]);
+    }
+
+    #[test]
+    fn toggle_all_changes_results() {
+        let open = Task::new("open task");
+        let mut done = Task::new("done task");
+        done.mark_done();
+        let mut app = app_with_repo_tasks(vec![open, done]);
+
+        // Implicit filter hides the done task.
+        assert_eq!(visible_titles(&app), vec!["open task".to_owned()]);
+
+        // `--all` (toggled via the action) bypasses implicit filtering.
+        app.update(Action::ToggleAll);
+        assert!(app.filter_all());
+        let titles = visible_titles(&app);
+        assert!(titles.contains(&"open task".to_owned()));
+        assert!(titles.contains(&"done task".to_owned()));
+
+        // Toggling back restores the filtered view.
+        app.update(Action::ToggleAll);
+        assert!(!app.filter_all());
+        assert_eq!(visible_titles(&app), vec!["open task".to_owned()]);
+    }
+
+    #[test]
+    fn invalid_token_sets_status_and_preserves_list() {
+        let mut app = app_with_repo_tasks(vec![Task::new("keepme")]);
+        let before = visible_titles(&app);
+        assert_eq!(before, vec!["keepme".to_owned()]);
+
+        // A malformed tag fails validation in `to_filter_set`.
+        app.open_filter();
+        app.filter_input = Input::new("+#bad..tag".to_owned());
+        app.commit_filter();
+
+        // The list is unchanged and a status message explains the failure.
+        assert_eq!(visible_titles(&app), before);
+        assert!(app.status().unwrap().starts_with("filter error:"));
+        assert_eq!(app.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn cancel_filter_restores_tokens_without_reload() {
+        let mut app = app_with_repo_tasks(vec![Task::new("a")]);
+        app.filter_tokens = vec!["+#rust".to_owned()];
+        app.open_filter();
+        // Edit the buffer, then cancel.
+        app.filter_input = Input::new("+#other".to_owned());
+        app.cancel_filter();
+        assert_eq!(app.mode(), Mode::Normal);
+        assert_eq!(app.filter_tokens(), &["+#rust"]); // unchanged
+    }
+
+    #[test]
+    fn open_filter_prefills_current_tokens() {
+        let mut app = app_with_repo_tasks(Vec::new());
+        app.filter_tokens = vec!["+#rust".to_owned(), "-#chore".to_owned()];
+        app.open_filter();
+        assert_eq!(app.mode(), Mode::Filter);
+        assert_eq!(app.filter_input().value(), "+#rust -#chore");
     }
 
     #[test]
