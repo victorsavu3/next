@@ -253,11 +253,6 @@ impl Task {
         self.start.is_some_and(|s| s > today)
     }
 
-    /// Returns `true` when the task is open (not done or cancelled).
-    pub fn is_open(&self) -> bool {
-        self.status == Status::Open
-    }
-
     /// Returns `true` when the task is actionable: open or started.
     pub fn is_active(&self) -> bool {
         matches!(self.status, Status::Open | Status::Started)

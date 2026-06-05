@@ -16,10 +16,8 @@ pub mod sync;
 pub mod task_repository;
 pub mod value;
 
-pub use config::Config;
 pub use error::{Result, TaskError};
 pub use filter_args::FilterArgs;
-pub use resolve::resolve_task_id;
 pub use store::{PullResult, Store, VcsBackend};
 pub use sync::{sync, SyncOutcome};
 pub use task_repository::TaskRepository;

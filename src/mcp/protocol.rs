@@ -52,11 +52,6 @@ impl JsonRpcResponse {
     pub fn invalid_params(id: Option<Value>, msg: impl Into<String>) -> Self {
         Self::err(id, -32602, msg)
     }
-
-    #[allow(dead_code)]
-    pub fn internal_error(id: Option<Value>, msg: impl Into<String>) -> Self {
-        Self::err(id, -32603, msg)
-    }
 }
 
 // ── MCP types ────────────────────────────────────────────────────────────────

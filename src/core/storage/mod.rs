@@ -198,11 +198,6 @@ pub fn tag_meta_path(root: &Path, tag: &str) -> PathBuf {
     root.join("tags").join(format!("{}.toml", encode_tag_path(tag)))
 }
 
-/// Alias kept for callers that reference the description-only path.
-pub fn tag_description_path(root: &Path, tag: &str) -> PathBuf {
-    tag_meta_path(root, tag)
-}
-
 /// Returns the path to the repository's committed scoring config,
 /// `<root>/config/scoring.toml`.
 pub fn scoring_path(root: &Path) -> PathBuf {
