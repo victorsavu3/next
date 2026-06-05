@@ -47,7 +47,7 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let tag_metas = ctx.repo.store().list_tag_metas()?;
 
     let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
-    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.config.scoring, &tag_metas);
+    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.repo.scoring, &tag_metas);
 
     let limit = args.limit.or(ctx.config.list_limit);
     if let Some(n) = limit {

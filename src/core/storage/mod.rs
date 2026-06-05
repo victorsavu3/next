@@ -203,6 +203,34 @@ pub fn tag_description_path(root: &Path, tag: &str) -> PathBuf {
     tag_meta_path(root, tag)
 }
 
+/// Returns the path to the repository's committed scoring config,
+/// `<root>/config/scoring.toml`.
+pub fn scoring_path(root: &Path) -> PathBuf {
+    root.join("config").join("scoring.toml")
+}
+
+/// Loads the repository's scoring weights from `<root>/config/scoring.toml`.
+///
+/// This file is committed to the repo (and synced), so every consumer
+/// (cli/mcp/forgejo) shares the same scoring view. Returns
+/// [`ScoringConfig::default`] when the file is absent; on a parse error it warns
+/// and falls back to the default rather than failing to open the repository.
+pub fn load_scoring(root: &Path) -> crate::core::scoring::ScoringConfig {
+    use crate::core::scoring::ScoringConfig;
+    let path = scoring_path(root);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return ScoringConfig::default(),
+    };
+    match toml::from_str(&content) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            tracing::warn!("failed to parse {}: {e}; using default scoring", path.display());
+            ScoringConfig::default()
+        }
+    }
+}
+
 /// Returns the path where the state file for `root` is stored.
 ///
 /// Uses `$XDG_STATE_HOME/task-manager/<hash>/state.toml` where `<hash>` is an

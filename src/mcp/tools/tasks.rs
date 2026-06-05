@@ -50,7 +50,7 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
     let tag_metas = ctx.store.list_tag_metas()?;
 
     let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
-    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &crate::core::scoring::ScoringConfig::default(), &tag_metas);
+    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.scoring, &tag_metas);
 
     if let Some(n) = limit {
         scored.truncate(n);
@@ -74,7 +74,7 @@ pub fn get_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
     let all_tasks = ctx.store.list_tasks()?;
     let tag_metas = ctx.store.list_tag_metas()?;
     let parent = task.parent_id.and_then(|pid| all_tasks.iter().find(|t| t.id == pid));
-    let breakdown = scoring::score_with_breakdown(&task, parent, today, &crate::core::scoring::ScoringConfig::default(), &tag_metas);
+    let breakdown = scoring::score_with_breakdown(&task, parent, today, &ctx.scoring, &tag_metas);
 
     let children: Vec<&Task> = all_tasks.iter().filter(|t| t.parent_id == Some(id)).collect();
 

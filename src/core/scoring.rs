@@ -52,7 +52,7 @@ fn default_started_bonus() -> f64 { DEFAULT_STARTED_BONUS }
 
 /// Weights used in the urgency scoring formula. All fields are optional in the
 /// config file; omitted fields keep their default.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScoringConfig {
     #[serde(default = "default_due_overdue_base")]
     pub due_overdue_base: f64,

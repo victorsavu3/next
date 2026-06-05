@@ -2,8 +2,6 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::scoring::ScoringConfig;
-
 pub const DEFAULT_FORECAST_HORIZON_DAYS: u32 = 90;
 pub const DEFAULT_NEXT_COUNT: usize = 10;
 
@@ -38,17 +36,12 @@ pub struct SyncConfig {
 /// repository = "/home/alice/tasks"   # use next from any directory
 /// forecast_horizon_days = 60
 /// next_count = 5
-///
-/// [scoring]
-/// priority_high = 3.0          # only override what you want to change
-/// age_max       = 3.0
 /// ```
+///
+/// Scoring weights are **not** configured here — they live in the repository at
+/// `config/scoring.toml` so every consumer (cli/mcp/forgejo) shares one view.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Urgency scoring weights.
-    #[serde(default)]
-    pub scoring: ScoringConfig,
-
     /// Number of days ahead shown by `next forecast`.
     #[serde(default = "default_forecast_horizon_days")]
     pub forecast_horizon_days: u32,
@@ -82,7 +75,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            scoring: ScoringConfig::default(),
             forecast_horizon_days: default_forecast_horizon_days(),
             next_count: default_next_count(),
             list_limit: None,

@@ -59,13 +59,13 @@ next/                             # crate root (also git repo)
     next-mcp.container            # Podman Quadlet systemd unit file
   src/
     lib.rs                        # `pub mod core` + feature-gated cli/mcp/forgejo; small type prelude
-    app_context.rs                # AppContext (cli): Config + TaskRepository (Derefs to it); config.toml loading
+    app_context.rs                # AppContext (cli): Config + TaskRepository (field `repo`); config.toml loading
     core/                         # THE CORE LIBRARY — compiled with no features
       error.rs                    # TaskError, Result
-      config.rs                   # Config + SyncConfig (config.toml schema; no backend selection)
+      config.rs                   # Config + SyncConfig (config.toml schema; machine-local, no scoring)
       store.rs                    # Store + VcsBackend traits
       resolve.rs                  # resolve_task_id(store, id_str) -> Result<Uuid>
-      task_repository.rs          # TaskRepository: store + vcs + repo_root + transactions + plugin events
+      task_repository.rs          # TaskRepository: store + vcs + repo_root + scoring + transactions + plugin events
       sync.rs                     # sync(): pull -> cache-reconcile -> push
       value.rs                    # parse_value(): task data value parsing
       filter_args.rs              # FilterArgs -> FilterSet (filter-token parsing)
@@ -75,7 +75,7 @@ next/                             # crate root (also git repo)
       domain/                     # pure domain types (no I/O)
         mod.rs  task.rs  state.rs  tag.rs  filter.rs  date_parse.rs
       storage/                    # local TOML + SQLite + git backend
-        mod.rs                    # open(), task_path(), state_path_for_repo(), plugins_path_for_repo()
+        mod.rs                    # open(), task_path(), state_path_for_repo(), plugins_path_for_repo(), load_scoring()
         filenames.rs  lock.rs (FileLock)  toml_store.rs  cached_store.rs  git_backend.rs
       plugin/                     # export hook (machine-local plugins registry + notify)
         mod.rs  registry.rs  notify.rs
@@ -177,12 +177,10 @@ pub trait VcsBackend: Send + Sync {
 }
 ```
 
-**Configuration** (`next::config`):
+**Configuration** (`next::core::config`) — machine-local `config.toml`, CLI-only:
 
 ```rust
 pub struct Config {
-    pub backend: BackendConfig,
-    pub scoring: ScoringConfig,
     pub sync: SyncConfig,              // git_subprocess: use shell git for push/pull
     pub forecast_horizon_days: u32,    // default 90
     pub next_count: usize,             // default 10
@@ -190,11 +188,13 @@ pub struct Config {
     pub repository: Option<PathBuf>,   // default repo root (overridden by --repo)
     pub autosync: bool,                // sync after each mutation (overridden by --autosync)
 }
-
-pub struct BackendConfig {
-    pub kind: BackendKind,             // Local (default and only supported value)
-}
 ```
+
+Scoring weights are **not** in `config.toml`. They live in the repository at
+`config/scoring.toml` (committed, synced) and are loaded by
+`storage::load_scoring()` into `TaskRepository::scoring` for every consumer
+(cli/mcp/forgejo), giving a single consistent scoring view. `next init` seeds the
+file with the defaults; absent or partial files fall back to `ScoringConfig::default()`.
 
 **Error type** (`next::error`):
 
@@ -591,8 +591,12 @@ Accepted by `--due` and `--start` in `next add` and `next edit`.
 
 ## 12. Configuration
 
-`$XDG_CONFIG_HOME/task-manager/config.toml` (loaded once at startup; falls back to
-defaults when absent):
+Two layers: machine-local CLI settings, and repo-stored scoring weights.
+
+### 12.1 Machine-local — `$XDG_CONFIG_HOME/task-manager/config.toml`
+
+CLI-only (the MCP server and plugins do not read it); loaded once at startup, falls
+back to defaults when absent:
 
 ```toml
 repository            = "/home/alice/tasks"  # use next from any directory
@@ -600,11 +604,16 @@ autosync              = false                # sync after each mutation (--autos
 list_limit            = 20                   # cap `next list` output; absent = unlimited
 forecast_horizon_days = 90
 next_count            = 10                   # tasks shown by `next next`
+```
 
-[backend]
-kind = "local"
+### 12.2 Repo-stored scoring — `<repo>/config/scoring.toml`
 
-[scoring]
+Committed to the repository and synced, so the CLI, the MCP server, and plugins all
+score tasks identically. Loaded by `storage::load_scoring()` into
+`TaskRepository::scoring`. `next init` seeds it with the defaults below; omitted
+fields fall back to `ScoringConfig::default()`.
+
+```toml
 due_overdue_base    = 12.0
 due_overdue_per_day = 0.3
 due_week_base       = 6.0
@@ -630,7 +639,7 @@ started_bonus       =  4.0   # flat bonus added when status == started
 ## 13. Error handling
 
 ```rust
-pub enum AppError {
+pub enum TaskError {
     #[error("task not found: {0}")]
     TaskNotFound(String),              // exit 1
 

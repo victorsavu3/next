@@ -10,13 +10,17 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use crate::core::{plugin::TaskEvent, Store, VcsBackend};
+use crate::core::{plugin::TaskEvent, scoring::ScoringConfig, Store, VcsBackend};
 
 pub struct TaskRepository {
     pub store: Box<dyn Store>,
     pub vcs: Box<dyn VcsBackend>,
     /// Absolute path to the repository root (contains `.git`).
     pub repo_root: PathBuf,
+    /// Urgency scoring weights for this repository. Defaults to
+    /// [`ScoringConfig::default`]; the CLI overrides it from `config.toml` so
+    /// every consumer (cli/mcp/forgejo) scores consistently.
+    pub scoring: ScoringConfig,
     /// Task mutations performed this run, drained at the post-mutation
     /// chokepoint to notify subscribed plugins.
     task_events: Vec<TaskEvent>,
@@ -28,10 +32,12 @@ pub struct TaskRepository {
 
 impl TaskRepository {
     /// Assembles a repository from already-opened parts, reading the
-    /// `NEXT_PLUGIN_ORIGIN` loop-guard env var. Callers that need a specific
-    /// git backend (e.g. subprocess git) build it and pass it here.
+    /// `NEXT_PLUGIN_ORIGIN` loop-guard env var and the repo's committed scoring
+    /// weights (`config/scoring.toml`). Callers that need a specific git backend
+    /// (e.g. subprocess git) build it and pass it here.
     pub fn with_parts(store: Box<dyn Store>, vcs: Box<dyn VcsBackend>, repo_root: PathBuf) -> Self {
         Self {
+            scoring: crate::core::storage::load_scoring(&repo_root),
             store,
             vcs,
             repo_root,

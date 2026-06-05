@@ -24,7 +24,7 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
         .parent_id
         .and_then(|pid| all_tasks.iter().find(|t| t.id == pid));
 
-    let bd = scoring::score_with_breakdown(&task, parent, today, &ctx.config.scoring, &tag_metas);
+    let bd = scoring::score_with_breakdown(&task, parent, today, &ctx.repo.scoring, &tag_metas);
 
     if args.json {
         let children: Vec<_> = all_tasks

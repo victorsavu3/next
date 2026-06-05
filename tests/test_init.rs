@@ -34,6 +34,33 @@ fn init_adds_next_db_to_gitignore() {
 }
 
 #[test]
+fn init_creates_scoring_config() {
+    let dir = tempfile::tempdir().unwrap();
+    run(dir.path()).unwrap();
+
+    let path = dir.path().join("config").join("scoring.toml");
+    assert!(path.is_file(), "config/scoring.toml must exist after init");
+
+    // It must parse back into a ScoringConfig (the default weights).
+    let content = fs::read_to_string(&path).unwrap();
+    let parsed: next::core::scoring::ScoringConfig = toml::from_str(&content).unwrap();
+    assert_eq!(parsed, next::core::scoring::ScoringConfig::default());
+}
+
+#[test]
+fn init_does_not_clobber_existing_scoring_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config").join("scoring.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "priority_high = 9.0\n").unwrap();
+
+    run(dir.path()).unwrap();
+
+    let content = fs::read_to_string(&path).unwrap();
+    assert_eq!(content, "priority_high = 9.0\n", "existing scoring config must be preserved");
+}
+
+#[test]
 fn init_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     run(dir.path()).unwrap();

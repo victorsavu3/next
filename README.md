@@ -206,14 +206,26 @@ runs `next sync` after every mutation command.
 
 ## Configuration
 
-`next` stores tasks locally as TOML files in a git repository. The config file lives at
-`$XDG_CONFIG_HOME/task-manager/config.toml`:
+`next` stores tasks locally as TOML files in a git repository.
+
+**Machine-local settings** live at `$XDG_CONFIG_HOME/task-manager/config.toml` (CLI only):
 
 ```toml
 repository = "/home/alice/tasks"  # use next from any directory
 
 autosync   = true                 # sync automatically after each mutation
 list_limit = 20                   # cap `next list` output (same as -n 20)
+```
+
+**Scoring weights** live *in the repository* at `config/scoring.toml`, committed to git
+and synced. `next init` seeds it with the defaults. Because it is part of the repo, the
+CLI, the MCP server, and plugins all score tasks the same way. Omitted fields fall back to
+the built-in defaults, so you can keep just the weights you change:
+
+```toml
+# config/scoring.toml
+priority_high = 3.0   # only override what you want to change
+age_max       = 3.0
 ```
 
 Remote access is provided via MCP — see the MCP server section below.

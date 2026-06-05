@@ -40,11 +40,40 @@ fn score_all(env: &mut common::TestEnv) -> Vec<ScoredTask> {
     let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &filter_set, &state, today);
     let tag_metas = env.ctx.repo.store.list_tag_metas().unwrap();
-    scoring::score_and_sort(filtered, &all, today, &env.ctx.config.scoring, &tag_metas)
+    scoring::score_and_sort(filtered, &all, today, &env.ctx.repo.scoring, &tag_metas)
 }
 
 fn titles(tasks: &[ScoredTask]) -> Vec<&str> {
     tasks.iter().map(|t| t.task.title.as_str()).collect()
+}
+
+/// A repository loads its scoring weights from the committed
+/// `config/scoring.toml`, so cli/mcp/forgejo share one view. Absent → defaults.
+#[test]
+fn repository_loads_scoring_from_config_file() {
+    use next::core::scoring::ScoringConfig;
+
+    let dir = tempfile::tempdir().unwrap();
+    common::setup_in(dir.path());
+
+    // Absent file → built-in defaults.
+    let (store, vcs) = next::core::storage::open(dir.path().to_path_buf()).unwrap();
+    let repo = next::TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+    assert_eq!(repo.scoring, ScoringConfig::default(), "no file → defaults");
+
+    // A partial file overrides only the named weight; the rest stay default.
+    let config_dir = dir.path().join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(config_dir.join("scoring.toml"), "priority_high = 9.0\n").unwrap();
+
+    let (store, vcs) = next::core::storage::open(dir.path().to_path_buf()).unwrap();
+    let repo = next::TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+    assert_eq!(repo.scoring.priority_high, 9.0, "weight from config/scoring.toml must win");
+    assert_eq!(
+        repo.scoring.priority_low,
+        ScoringConfig::default().priority_low,
+        "unspecified weights stay at the default"
+    );
 }
 
 // ---------------------------------------------------------------------------

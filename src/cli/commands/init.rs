@@ -15,8 +15,9 @@ pub struct Args {}
 /// Steps:
 ///  1. `git init` if `.git` is absent.
 ///  2. Create `tasks/` if absent.
-///  3. Append `.next.db`, its WAL sidecars, `.next.lock`, `state.toml` to `.gitignore`.
-///  4. Create an initial git commit when the repository has no commits yet.
+///  3. Write `config/scoring.toml` (the repo's committed scoring weights) if absent.
+///  4. Append `.next.db`, its WAL sidecars, `.next.lock`, `state.toml` to `.gitignore`.
+///  5. Create an initial git commit when the repository has no commits yet.
 pub fn run(_args: Args, dir: &Path) -> anyhow::Result<()> {
     // Step 1 — git repository.
     let git_dir = dir.join(".git");
@@ -36,7 +37,10 @@ pub fn run(_args: Args, dir: &Path) -> anyhow::Result<()> {
         println!("Created tasks/");
     }
 
-    // Step 3 — .gitignore entries for generated files.
+    // Step 3 — config/scoring.toml (committed scoring weights).
+    ensure_scoring_config(dir)?;
+
+    // Step 4 — .gitignore entries for generated files.
     // `.next.db-wal` / `.next.db-shm` are the SQLite WAL sidecar files.
     let gitignore_path = dir.join(".gitignore");
     for entry in &[
@@ -49,11 +53,11 @@ pub fn run(_args: Args, dir: &Path) -> anyhow::Result<()> {
         ensure_gitignored(&gitignore_path, entry)?;
     }
 
-    // Step 4 — initial commit when the repo is empty.
+    // Step 5 — initial commit when the repo is empty.
     let has_commits = has_any_commits(dir);
     if !has_commits {
         // Stage everything we just created.
-        git(dir, &["add", ".gitignore"]).ok();
+        git(dir, &["add", ".gitignore", "config/scoring.toml"]).ok();
 
         match git(dir, &["commit", "-m", "next: init task repository"]) {
             Ok(_) => println!("Created initial commit."),
@@ -63,7 +67,7 @@ pub fn run(_args: Args, dir: &Path) -> anyhow::Result<()> {
                      Set your git user info and commit manually:\n\
                      \n  git config user.name  'Your Name'\n\
                      \n  git config user.email 'you@example.com'\n\
-                     \n  git add .gitignore && git commit -m 'init'"
+                     \n  git add . && git commit -m 'init'"
                 );
             }
         }
@@ -95,6 +99,37 @@ fn git(dir: &Path, args: &[&str]) -> anyhow::Result<()> {
         "git {} exited with status {status}",
         args.join(" ")
     );
+    Ok(())
+}
+
+/// Writes `<dir>/config/scoring.toml` with the default scoring weights when it
+/// is absent. The file is committed to the repo (and synced), so every consumer
+/// (cli/mcp/forgejo) scores tasks the same way. Omitted fields fall back to the
+/// built-in defaults, so users may trim it to just the weights they change.
+fn ensure_scoring_config(dir: &Path) -> anyhow::Result<()> {
+    use crate::core::scoring::ScoringConfig;
+
+    let path = crate::core::storage::scoring_path(dir);
+    if path.exists() {
+        println!("config/scoring.toml already exists.");
+        return Ok(());
+    }
+
+    let config_dir = path.parent().expect("scoring_path always has a parent");
+    fs::create_dir_all(config_dir).context("failed to create config/")?;
+
+    let body = toml::to_string_pretty(&ScoringConfig::default())
+        .context("failed to serialize default scoring config")?;
+    let content = format!(
+        "# Urgency scoring weights for this repository.\n\
+         #\n\
+         # Committed to the repo and synced, so the CLI, MCP server, and plugins\n\
+         # all score tasks the same way. Edit to tune; omitted fields fall back to\n\
+         # the built-in defaults.\n\
+         \n{body}"
+    );
+    fs::write(&path, content).context("failed to write config/scoring.toml")?;
+    println!("Created config/scoring.toml");
     Ok(())
 }
 

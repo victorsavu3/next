@@ -215,8 +215,11 @@ The score MUST be the sum of the following weighted factors:
 | **Started bonus** | Flat additive bonus when `status == started` |
 | **User adjustment** | Always; `score_adjustment` added directly |
 
-Default weights MUST be defined in code and SHOULD be overridable via a user config file
-at `$XDG_CONFIG_HOME/task-manager/config.toml`.
+Default weights MUST be defined in code and SHOULD be overridable via a config file
+committed to the repository at `config/scoring.toml`. Because the weights live in the
+repository (not in machine-local config), every consumer — the CLI, the MCP server, and
+plugins — MUST share the same scoring view. `next init` seeds the file with the defaults;
+absent or partial files fall back to the built-in defaults.
 
 Tasks excluded from the default view (blocked, resource-unavailable, future `start`,
 parent awaiting subtasks) MUST NOT receive a score and MUST NOT appear in `next list` /
