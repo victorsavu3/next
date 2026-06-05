@@ -35,15 +35,17 @@ This document describes the internal design of `next`. Read `REQUIREMENTS.md` fo
 ```
 
 The domain layer is pure logic with no I/O. Storage calls into domain types but not
-vice versa. Both the CLI and MCP layers wire them together via `AppContext`. All MCP
-modules live in `src/mcp/` and are gated by the `mcp` Cargo feature.
+vice versa. The runtime handle that ties the store, git backend, and scoring together is
+`TaskRepository` (`src/core/task_repository.rs`); the MCP server and the Forgejo plugin use
+it directly, while the CLI wraps it in `AppContext` to add `config.toml` handling (CLI-only).
+All MCP modules live in `src/mcp/` and are gated by the `mcp` Cargo feature.
 
 ---
 
 ## 2. Module layout
 
 The project is a single crate named `next` with a library (`src/lib.rs`) and three
-feature-gated binaries: `src/main.rs` (CLI, requires `cli` — on by default),
+feature-gated binaries: `src/cli/main.rs` (CLI, requires `cli` — on by default),
 `src/mcp/main.rs` (MCP server, requires `mcp`), and `src/forgejo/main.rs`
 (`next-forgejo`, requires `forgejo`). With **no features** the crate is just the `core`
 module — the task store, git backend, domain types, scoring/service/recurrence, the
@@ -110,8 +112,9 @@ next/                             # crate root (also git repo)
 | `forgejo` | | `next-forgejo` binary, `src/forgejo/**` | `forgejo-api`, `url`, `tokio`, `clap`, `tracing-subscriber` |
 
 With **no features** (`--no-default-features`) the crate is just the core library —
-`domain`, `storage`, `store`, `plugin`, `core`, `app_context`, `config`, `resolve`, `error`
-— with no `clap`/CLI dependencies, so other crates can link it. The three feature modules
+`domain`, `storage`, `store`, `plugin`, `config`, `resolve`, `error`, `scoring`, `service`,
+`task_repository` — with no `clap`/CLI dependencies, so other crates can link it.
+(`app_context` is gated behind the `cli` feature; see `src/lib.rs`.) The three feature modules
 depend only on this core (the cross-cutting helpers they share — filter-token parsing,
 data-value parsing, repo sync — live in `core`, never in `cli`). The presubmit
 (`prek.toml`) runs clippy+test with `--all-features` and a `--no-default-features` clippy to
@@ -128,13 +131,19 @@ keep the core build clean.
 | Module | Contents |
 |--------|----------|
 | `task` | `Task`, `Status` (`Open`/`Started`/`Done`/`Cancelled`), `Priority`, `Recurrence`, `Snap` |
-| `recurrence` | `fn next_occurrence(rrule, anchor, after)`, `fn apply_snap(date, snap)`, `fn spawn_next(task, today)` |
 | `state` | `GlobalState` (active contexts, excluded contexts, active users, resource availability map) |
 | `tag` | `TagKind` (Context / Resource / Freeform); `validate_tag` (allowlist: segments start with letter, contain `a-zA-Z0-9-_`, `/` separator allowed, `..` explicitly rejected); `validate_context_tag` (enforces `@` prefix); `validate_resource_tag` (enforces `#` prefix) |
 | `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
-| `scoring` | `ScoredTask`, `ScoringWeights`, `fn score_and_sort(tasks, all_tasks, today, weights, tag_metas)` |
 | `date_parse` | `fn parse_date(expr, today) -> Result<NaiveDate>` |
-| `service` | `CreateTaskParams`, `EditTaskParams`, `create_task()`, `complete_task()`, `apply_edits()`, `validate_slug()`, `validate_url()` — shared business logic used by both CLI and MCP handlers |
+
+**Core (non-domain) modules** at `next::core` (`src/core/*.rs`, not under `domain/`):
+
+| Module | Contents |
+|--------|----------|
+| `scoring` | `ScoredTask`, `ScoringConfig`, `fn score(task, parent, today, weights, tag_metas)`, `fn score_and_sort(tasks, all_tasks, today, weights, tag_metas)` |
+| `service` | `CreateTaskParams`, `EditTaskParams`, `create_task()`, `complete_task()`, `apply_edits()`, `validate_slug()`, `validate_url()`, `begin_mutation()`/`end_mutation()` — shared business logic used by the CLI, MCP, and Forgejo handlers |
+| `recurrence` | `fn next_occurrence(rrule, anchor, after)`, `fn apply_snap(date, snap)`, `fn spawn_next(task, today)` |
+| `task_repository` | `TaskRepository` — store + vcs + repo_root + scoring + transactions + plugin events |
 
 Key `Task` fields: `id`, `title`, `status`, `priority`, `due`, `start`, `long_term`,
 `slug`, `parent_id`, `assignee`, `tags`, `blocked_by`, `score_adjustment`, `description`,
@@ -196,12 +205,14 @@ Scoring weights are **not** in `config.toml`. They live in the repository at
 (cli/mcp/forgejo), giving a single consistent scoring view. `next init` seeds the
 file with the defaults; absent or partial files fall back to `ScoringConfig::default()`.
 
-**Error type** (`next::error`):
+**Error type** (`next::error`) — `pub type Result<T> = std::result::Result<T, TaskError>`:
 
 ```rust
-pub enum AppError {
+pub enum TaskError {
+    InvalidDate(String, String),       // expression + reason
     TaskNotFound(String),
     AmbiguousId(String, usize),
+    SlugConflict(String),
     GitConflict(Vec<PathBuf>),
     Io(std::io::Error),
     Other(String),
@@ -265,58 +276,55 @@ Both migrations are idempotent (subsequent opens are no-ops).
 **`GitBackend`** wraps `Mutex<git2::Repository>` to satisfy `Send + Sync`. Commit
 messages follow the pattern `next: <verb> "<task title>"`.
 
-### `next::cli` — command handlers
+### `next::cli` — command handlers (feature = `"cli"`)
 
-```
-src/
-  main.rs           # entry point: Init handled before AppContext; dispatches all others
-  app_context.rs    # AppContext struct + ::new() (selects backend, opens store)
-  log.rs            # Logger: append-only next.log with 1 MB rotation
-  resolve.rs        # fn resolve_task_id(store, id_str) -> Result<Uuid>
-  cli/
-    mod.rs          # top-level Cli + Command enum (clap derive)
-    filter.rs       # FilterArgs -> FilterSet conversion
-    render.rs       # task list and detail rendering (text and --json)
-    recurrence_parse.rs  # parse_recurrence(): shared by add.rs and edit.rs
-    commands/
-      init.rs       # next init — no AppContext needed; runs git init, creates tasks/
-      tutorial.rs   # next tutorial — no AppContext needed; prints embedded TUTORIAL.md
-      add.rs        cancel.rs   context.rs  data.rs
-      delete.rs     done.rs     edit.rs     forecast.rs
-      list.rs       mod.rs      move_cmd.rs next_cmd.rs
-      open.rs       resource.rs show.rs     start.rs
-      stop.rs       sync.rs     tree.rs     user.rs
-      tag/
-        mod.rs      # TagSubcommand dispatch + list()
-        meta.rs     # describe, set-url, set-priority, set-no-time-urgency, show, clear-*
-        data.rs     # tag data set/get/unset/list
-```
+See the §2 tree for the full file list. Key entry points:
+
+- `src/cli/main.rs` — the `next` binary entry point. `Init`/`Tutorial` are handled before
+  `AppContext`; all other commands build an `AppContext` and dispatch.
+- `src/cli/mod.rs` — top-level `Cli` + `Command` enum (clap derive), including the global
+  `--repo`, `--autosync`, and `--no-autosync` flags.
+- `src/cli/render.rs` — task list and detail rendering (text and `--json`).
+- `src/cli/recurrence_parse.rs` — `parse_recurrence()`, shared by `add.rs` and `edit.rs`.
+- `src/cli/commands/` — one module per subcommand (`add`, `done`, `edit`, …), plus the
+  `tag/` (`mod`/`meta`/`data`) and `plugin/` submodules.
+
+ID resolution (`resolve_task_id`) and filter-token conversion (`FilterArgs`) are **not** in
+`cli` — they live in `next::core::resolve` (`src/core/resolve.rs`) and
+`next::core::filter_args` (`src/core/filter_args.rs`) so every consumer shares them. There is
+no `src/log.rs` / logging module.
 
 ---
 
 ## 4. Application context
 
-Mutation command handlers receive `&mut AppContext`; read-only commands take `&AppContext`:
+`AppContext` is the CLI-only wrapper around `TaskRepository`. Mutation command handlers
+receive `&mut AppContext`; read-only commands take `&AppContext`:
 
 ```rust
 pub struct AppContext {
-    pub config: Config,
-    pub store: Box<dyn Store>,
-    pub vcs: Box<dyn VcsBackend>,
-    pub repo_root: PathBuf,     // absolute path; used for log placement and task paths
-    pub log: Logger,
-}
-
-impl AppContext {
-    pub fn store(&self) -> &dyn Store { … }
-    pub fn store_mut(&mut self) -> &mut dyn Store { … }
+    pub config: Config,         // the loaded config.toml (CLI-only)
+    pub repo: TaskRepository,   // the opened repository (store + vcs + repo_root + scoring)
 }
 ```
 
-`AppContext::new()` opens the local backend:
+There is no `Deref` and no `store`/`vcs`/`repo_root` fields on `AppContext`. Handlers reach
+the repository through `ctx.repo` — e.g. `ctx.repo.store`, `ctx.repo.store_mut()`,
+`ctx.repo.transaction(…)`, `ctx.repo.state_transaction(…)`, `ctx.repo.record_task_event(…)` —
+and CLI configuration via `ctx.config`.
 
-- Walk up from CWD for `.git`; call `next::storage::open(root)` to get
-  `(CachedStore, GitBackend)`; fail if no git repo is found.
+`AppContext::new(config_path, repo)`:
+
+1. Load `config.toml` (the given path, else the XDG default; falls back to `Config::default()`).
+2. Resolve the repository root: the `--repo` override, else `config.repository`, else walk up
+   from CWD for a `.git` directory; fail if none is found.
+3. Call `next::core::storage::open(root)` to get `(CachedStore, GitBackend)`, apply
+   `config.sync.git_subprocess` to the git backend, and assemble
+   `TaskRepository::with_parts(store, vcs, root)` (which also loads `config/scoring.toml` into
+   `repo.scoring`).
+
+The MCP server and the Forgejo plugin build a `TaskRepository` directly (via `with_parts` /
+`TaskRepository::open`) without `AppContext`, since they do not read `config.toml`.
 
 Remote access is provided via MCP — connect with `claude mcp add --transport http https://next-mcp.victorsavu.eu`.
 
@@ -330,13 +338,13 @@ Remote access is provided via MCP — connect with `claude mcp add --transport h
 1. Parse CLI args (clap)
 2. If command is Init → run init::run(args, cwd); exit
    If command is Tutorial → print embedded TUTORIAL.md; exit
-3. AppContext::new(): locate repository root, select backend, open CachedStore
-4. Execute command logic (reads from store; writes to store + vcs)
+3. AppContext::new(): locate repository root, open CachedStore + GitBackend into TaskRepository
+4. Execute command logic (reads from ctx.repo.store; writes via ctx.repo.transaction)
 5. Task mutations (add/edit/start/stop/done/cancel/delete/move/tag/data): vcs.commit(changed_paths, message)
    State mutations (context/resource/user): write to XDG state file only; no commit
 6. Render output (text or JSON to stdout)
 7. If autosync enabled and command succeeded and is a mutation (`add`/`start`/`stop`/`done`/`cancel`/`edit`/`delete`/`move`/`tag`/`data`): run sync (pull + push)
-8. On error: ctx.log.error(cmd_name, message); propagate to main
+8. On error: print the message to stderr and propagate to main for a non-zero exit code
 ```
 
 Read-only commands (list, show, forecast, tree) skip steps 5 and 7 and take `&AppContext` rather than `&mut AppContext`.
@@ -345,8 +353,8 @@ Read-only commands (list, show, forecast, tree) skip steps 5 and 7 and take `&Ap
 
 ## 6. Storage layer
 
-`next_storage::open(root)` returns `(CachedStore, GitBackend)`. `CachedStore` satisfies
-the `Store` trait; callers box it as `Box<dyn Store>` inside `AppContext`.
+`next::core::storage::open(root)` returns `(CachedStore, GitBackend)`. `CachedStore` satisfies
+the `Store` trait; callers box it as `Box<dyn Store>` inside `TaskRepository`.
 
 ### 6.1 TOML file conventions
 
@@ -383,7 +391,7 @@ Multiple `next` processes — CLI invocations, the long-running `next-mcp` serve
 external plugin processes — mutate the same repository in parallel. Several
 mechanisms keep this safe:
 
-1. **Re-entrant advisory lock** (`storage::FileLock`, `src/storage/lock.rs`). A generic
+1. **Re-entrant advisory lock** (`storage::FileLock`, `src/core/storage/lock.rs`). A generic
    advisory `flock(2)` over a given lock file, exclusive across processes and threads but
    **re-entrant within a single thread** so a transaction can hold it while the nested
    `save_task` / `commit` / `save_state` calls re-acquire it. A process-global registry
@@ -393,7 +401,7 @@ mechanisms keep this safe:
    **repo lock** (`<repo>/.next.lock`, shared by `TomlStore` task/tag writes and
    `GitBackend` commit/pull/push), the **state lock**, and the **plugins lock** (see below).
 
-2. **Repository mutation transactions** (`AppContext::transaction`, built on
+2. **Repository mutation transactions** (`TaskRepository::transaction`, built on
    `service::begin_mutation` / `end_mutation`). Every task or tag mutation holds the repo
    lock across the *entire* read → modify → write → commit sequence, so two processes
    cannot interleave and lose each other's updates. On entry the transaction reconciles
@@ -401,7 +409,7 @@ mechanisms keep this safe:
    processes' commits; on exit it records the new HEAD (`Store::note_head`) so the next
    transaction does not rebuild needlessly.
 
-3. **State mutation transactions** (`AppContext::state_transaction`). Machine-local state
+3. **State mutation transactions** (`TaskRepository::state_transaction`). Machine-local state
    (active contexts, excluded contexts, active users, resource availability) lives outside
    the git repository, so it has its own lock — `.state.toml.lock` next to the state file.
    Each `next context` / `resource` / `user` (and the matching MCP tool) holds this
@@ -424,7 +432,7 @@ The three locks are independent files and never block one another. When a path t
 than one, the ordering is always repo-lock-before-state/plugins-lock, never the reverse, so
 they cannot deadlock. `tests/locking.rs` covers lost-update prevention for task, state, and
 plugin-subscription edits, slug-conflict races, and pull/commit coordination; re-entrant
-lock unit tests live in `src/storage/lock.rs`.
+lock unit tests live in `src/core/storage/lock.rs`.
 
 ### 6.4 Plugins (export hook)
 
@@ -433,7 +441,7 @@ change. The registry (`plugin::registry`) is machine-local — `plugins.toml` in
 state dir (`storage::plugins_path_for_repo`), never committed — each entry being
 `{ name, command: argv, tasks: [uuid] }`, managed by the `next plugin` subcommands.
 
-Each task-mutating handler records a `(verb, task_id)` `TaskEvent` on `AppContext` after its
+Each task-mutating handler records a `(verb, task_id)` `TaskEvent` on `TaskRepository` after its
 transaction returns. The CLI (`main.rs`) and MCP (`tools::dispatch`) chokepoints drain the
 buffer and call `plugin::notify`, which spawns every subscribed plugin's command
 fire-and-forget (event JSON on stdin + `NEXT_PLUGIN_EVENT`/`NEXT_REPO`/`NEXT_PLUGIN_ORIGIN`
@@ -443,29 +451,7 @@ REQUIREMENTS.md §10 for the full contract.
 
 ---
 
-## 7. Logging
-
-```
-src/log.rs
-```
-
-`Logger` writes an append-only plaintext log at `<repo_root>/next.log`:
-
-```
-2026-05-17T12:00:00Z INFO  [add] added "Water plants" (a1b2c3d4)
-2026-05-17T12:01:00Z ERROR [done] task not found: "xyz"
-```
-
-- Format: `{timestamp} {LEVEL} [{command}] {message}\n`
-- Rotation: when `next.log` exceeds 1 MB, it is renamed to `next.log.1` before the next
-  write. Only one backup is kept.
-- Write failures are silently swallowed — logging never aborts a command.
-- Mutation commands log success silently (no terminal output on success). Display commands
-  write to stdout only.
-
----
-
-## 8. Filtering pipeline
+## 7. Filtering pipeline
 
 `domain::filter::FilterSet` holds the parsed filter state:
 
@@ -509,9 +495,9 @@ tasks with no `assignee`.
 
 ---
 
-## 9. ID resolution
+## 8. ID resolution
 
-`src/resolve.rs`:
+`src/core/resolve.rs`:
 
 ```rust
 pub fn resolve_task_id(store: &dyn Store, id_str: &str) -> anyhow::Result<Uuid>
@@ -524,9 +510,9 @@ Resolution order:
 
 ---
 
-## 10. Scoring
+## 9. Scoring
 
-Scores are computed at query time (not stored) by `domain::scoring::score_and_sort`.
+Scores are computed at query time (not stored) by `core::scoring::score_and_sort`.
 
 ```
 score(task) =
@@ -574,7 +560,7 @@ both `due_factor` and `age_factor` are forced to `0.0`. Set with
 
 ---
 
-## 11. Natural-language date parsing
+## 10. Natural-language date parsing
 
 `domain::date_parse::parse_date(expr: &str, today: NaiveDate) -> Result<NaiveDate>`
 
@@ -589,7 +575,7 @@ Accepted by `--due` and `--start` in `next add` and `next edit`.
 
 ---
 
-## 12. Configuration
+## 11. Configuration
 
 Two layers: machine-local CLI settings, and repo-stored scoring weights.
 
@@ -636,15 +622,21 @@ started_bonus       =  4.0   # flat bonus added when status == started
 
 ---
 
-## 13. Error handling
+## 12. Error handling
 
 ```rust
 pub enum TaskError {
+    #[error("invalid date expression '{0}': {1}")]
+    InvalidDate(String, String),       // exit 1
+
     #[error("task not found: {0}")]
     TaskNotFound(String),              // exit 1
 
-    #[error("ambiguous task ID prefix '{0}': {1} matches")]
+    #[error("ambiguous task ID prefix '{0}': matches {1} tasks")]
     AmbiguousId(String, usize),        // exit 1
+
+    #[error("slug '{0}' is already taken by another task")]
+    SlugConflict(String),              // exit 1
 
     #[error("git conflict in files: {0:?}")]
     GitConflict(Vec<PathBuf>),         // exit 2
@@ -657,32 +649,32 @@ pub enum TaskError {
 }
 ```
 
-All error messages are printed to stderr. `main` logs the error via `Logger::error` and
-propagates the `anyhow::Error` to produce a non-zero exit code.
+All error messages are printed to stderr; `main` propagates the `anyhow::Error` to produce a
+non-zero exit code.
 
 ---
 
-## 14. Testing strategy
+## 13. Testing strategy
 
 | Layer | Location | Approach |
 |-------|----------|----------|
-| `domain::scoring` | `src/domain/scoring.rs` | Unit tests with fixed dates; each factor tested independently |
-| `domain::filter` | `src/domain/filter.rs` | Unit tests: build `FilterSet` + `Vec<Task>`, assert filtered output |
-| `domain::date_parse` | `src/domain/date_parse.rs` | Unit tests: fixed "today", assert parsed date for common expressions |
-| `TomlStore` | `src/storage/toml_store.rs` | Round-trip tests: write task to `tempdir`, read back, assert equal fields; migration unit tests: write legacy `state.toml`, call `TomlStore::open()`, assert per-tag files created and `state.toml` cleaned |
-| `GitBackend` | `src/storage/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
-| `CachedStore` | `src/storage/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |
+| `core::scoring` | `src/core/scoring.rs` | Unit tests with fixed dates; each factor tested independently |
+| `domain::filter` | `src/core/domain/filter.rs` | Unit tests: build `FilterSet` + `Vec<Task>`, assert filtered output |
+| `domain::date_parse` | `src/core/domain/date_parse.rs` | Unit tests: fixed "today", assert parsed date for common expressions |
+| `TomlStore` | `src/core/storage/toml_store.rs` | Round-trip tests: write task to `tempdir`, read back, assert equal fields; migration unit tests: write legacy `state.toml`, call `TomlStore::open()`, assert per-tag files created and `state.toml` cleaned |
+| `GitBackend` | `src/core/storage/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
+| `CachedStore` | `src/core/storage/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |
 | Cache sync | `tests/cache_sync.rs` | Integration tests: write-through consistency (SQLite ↔ TOML), git pull propagation (HEAD change triggers rebuild), cache-reuse (same HEAD = no rebuild) |
 | Migration | `tests/migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next::storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens |
-| File locking | `tests/locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption, including transactional lost-update prevention (N processes each add a distinct tag to one task; all must survive). Re-entrant lock unit tests live in `src/storage/lock.rs` |
+| File locking | `tests/locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption, including transactional lost-update prevention (N processes each add a distinct tag to one task; all must survive). Re-entrant lock unit tests live in `src/core/storage/lock.rs` |
 | CLI commands | `tests/test_*.rs` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |
-| MCP unit tests | `src/mcp/tools/*.rs` | Unit tests per tool module using real `AppContext` in a `tempdir` git repo (requires `--features mcp`) |
+| MCP unit tests | `src/mcp/tools/*.rs` | Unit tests per tool module using a real `TaskRepository` in a `tempdir` git repo (requires `--features mcp`) |
 | MCP integration tests | `tests/test_mcp.rs` | Start a real HTTP server on `127.0.0.1:0` in `#[tokio::test]`; test all 13 tools, auth, webhook, and autosync (requires `--features mcp`) |
 | Container tests | `tests/test_container.rs` | Start the real container image via `testcontainers` (Podman); opt-in with `CONTAINER_TESTS=1 DOCKER_HOST=unix:///…/podman.sock`; covers git clone, auth, sync push, deferred timer, webhook, and idempotent restart |
 
 ---
 
-## 15. Dependencies
+## 14. Dependencies
 
 | Crate | Purpose |
 |-------|---------|

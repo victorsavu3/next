@@ -514,23 +514,16 @@ See §7.2.
 
 ---
 
-## 9. Backend configuration
+## 9. Storage and sync configuration
 
-The storage backend is selected in `$XDG_CONFIG_HOME/task-manager/config.toml`.
+Tasks are stored as TOML files in a git repository. The repository root is determined by the
+`--repo` flag, then `repository` in `$XDG_CONFIG_HOME/task-manager/config.toml`, and otherwise
+by walking up from the current working directory until a `.git` directory is found. There is
+no pluggable-backend selection — the local git store is the only backend.
 
-### 9.1 Local backend (default)
+### 9.1 Sync configuration
 
-Tasks are stored as TOML files in a git repository. The git repository root is determined
-by walking up from the current working directory until a `.git` directory is found.
-
-```toml
-[backend]
-kind = "local"
-```
-
-### 9.2 Sync configuration
-
-The `[sync]` section controls how `next sync` (and autosync) performs push/pull:
+The `[sync]` section of `config.toml` controls how `next sync` (and autosync) performs push/pull:
 
 ```toml
 [sync]

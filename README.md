@@ -55,7 +55,6 @@ my-tasks/
     __context__work.toml       # tag description for @work  (@ → __context__)
     __context__home/
       kitchen.toml             # tag description for @home/kitchen
-  next.log                     # append-only command log (rotated at 1 MB)
   .next.db                     # SQLite read cache — not committed
 
 ~/.local/state/task-manager/<repo-hash>/
@@ -200,7 +199,8 @@ Task IDs accept a full UUID, a slug, or any unambiguous 4+ character hex prefix.
 All commands support `--json` for pipe-friendly output.
 
 The `--autosync` global flag (or `autosync = true` in the config file) automatically
-runs `next sync` after every mutation command.
+runs `next sync` after every mutation command. The `--no-autosync` global flag disables it
+for a single invocation even when `autosync = true` in the config (the two flags conflict).
 
 ---
 
@@ -211,10 +211,12 @@ runs `next sync` after every mutation command.
 **Machine-local settings** live at `$XDG_CONFIG_HOME/task-manager/config.toml` (CLI only):
 
 ```toml
-repository = "/home/alice/tasks"  # use next from any directory
+repository            = "/home/alice/tasks"  # use next from any directory
 
-autosync   = true                 # sync automatically after each mutation
-list_limit = 20                   # cap `next list` output (same as -n 20)
+autosync              = true                 # sync automatically after each mutation
+list_limit            = 20                   # cap `next list` output (same as -n 20)
+forecast_horizon_days = 90                   # days ahead shown by `next forecast`
+next_count            = 10                   # tasks shown by `next next`
 ```
 
 **Scoring weights** live *in the repository* at `config/scoring.toml`, committed to git
@@ -459,10 +461,11 @@ cargo build --features mcp           # + the MCP server
 cargo build --features forgejo       # + the Forgejo plugin
 ```
 
-With `--no-default-features` the crate is just the core (`domain`, `storage`, `store`,
-`plugin`, `core`, `app_context`, `config`) that other crates can link without the CLI or
-its dependencies. Logic shared between the CLI, MCP server, and plugins lives in the
-`core` module so the feature modules depend only on the core.
+With `--no-default-features` the crate is just the core library under `src/core/` (`domain`,
+`storage`, `store`, `plugin`, `config`, `scoring`, `service`, `task_repository`, …) that other
+crates can link without the CLI or its dependencies. Logic shared between the CLI, MCP server,
+and plugins lives in the `core` module so the feature modules depend only on the core.
+(`AppContext` is part of the `cli` feature, not the no-features core.)
 
 ---
 
