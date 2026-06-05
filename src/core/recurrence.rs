@@ -200,8 +200,12 @@ pub fn next_occurrence(
         }
 
         Freq::Daily => {
-            // Limit extended to cover large INTERVAL values.
-            let limit = (rule.interval as usize) + 10;
+            // When BYDAY is present, an interval-aligned day may only coincide
+            // with an allowed weekday every lcm(interval, 7) days (up to 7×interval
+            // when interval and 7 are coprime). Mirror the WEEKLY bound so such
+            // rules resolve instead of erroring; for plain DAILY this is still
+            // ample (the first aligned day is interval days out).
+            let limit = (rule.interval as usize) * 7 + 14;
             let mut d = after + Duration::days(1);
             for _ in 0..limit {
                 let wd = d.weekday().num_days_from_monday() as u8;
@@ -474,6 +478,52 @@ mod tests {
         // Week 0 = May 4, Week 1 = May 11, Week 2 = May 18
         let result = next_occurrence("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO", anchor, after).unwrap();
         assert_eq!(result, d(2026, 5, 18));
+    }
+
+    #[test]
+    fn daily_interval5_byday_monday_aligns_at_lcm() {
+        // FREQ=DAILY;INTERVAL=5;BYDAY=MO from a Monday anchor.
+        // The first day that is BOTH a multiple of 5 from the anchor AND a Monday
+        // is lcm(5, 7) = 35 days out. anchor = May 4 2026 (Mon) → June 8 2026 (Mon).
+        let anchor = d(2026, 5, 4); // Monday
+        assert_eq!(anchor.weekday(), Weekday::Mon);
+        let after = d(2026, 5, 4); // same day as anchor
+        let result = next_occurrence("FREQ=DAILY;INTERVAL=5;BYDAY=MO", anchor, after).unwrap();
+        assert_eq!(result, d(2026, 6, 8));
+        assert_eq!(result.weekday(), Weekday::Mon);
+        assert_eq!((result - anchor).num_days() % 5, 0);
+    }
+
+    #[test]
+    fn daily_interval3_byday_tuesday_aligns() {
+        // FREQ=DAILY;INTERVAL=3;BYDAY=TU. lcm(3, 7) = 21.
+        // anchor = May 5 2026 (Tue) → next Tuesday that is a multiple of 3 days out.
+        let anchor = d(2026, 5, 5); // Tuesday
+        assert_eq!(anchor.weekday(), Weekday::Tue);
+        let after = d(2026, 5, 5);
+        let result = next_occurrence("FREQ=DAILY;INTERVAL=3;BYDAY=TU", anchor, after).unwrap();
+        // May 5 + 21 = May 26 (Tuesday); 21 / 3 = 7.
+        assert_eq!(result, d(2026, 5, 26));
+        assert_eq!(result.weekday(), Weekday::Tue);
+        assert_eq!((result - anchor).num_days() % 3, 0);
+    }
+
+    #[test]
+    fn daily_interval5_no_byday_regression() {
+        // Plain FREQ=DAILY;INTERVAL=5 → next aligned day is interval days out.
+        let anchor = d(2026, 5, 4);
+        let after = d(2026, 5, 4);
+        let result = next_occurrence("FREQ=DAILY;INTERVAL=5", anchor, after).unwrap();
+        assert_eq!(result, d(2026, 5, 9));
+    }
+
+    #[test]
+    fn daily_no_byday_regression() {
+        // Plain FREQ=DAILY → next day.
+        let anchor = d(2026, 5, 4);
+        let after = d(2026, 5, 4);
+        let result = next_occurrence("FREQ=DAILY", anchor, after).unwrap();
+        assert_eq!(result, d(2026, 5, 5));
     }
 
     // ── spawn_next ──────────────────────────────────────────────────────────
