@@ -339,6 +339,63 @@ pub fn next_occurrence(
     }
 }
 
+// ─── project_series ──────────────────────────────────────────────────────────
+
+/// Hard cap on the number of projected occurrences generated per series, as a
+/// safety net against a misbehaving rule that fails to advance. The horizon is
+/// the real bound; this only guards against pathological cases.
+const MAX_PROJECTED_PER_SERIES: usize = 366;
+
+/// Enumerate the projected (not-yet-spawned) future occurrences of `task`'s
+/// recurrence series with dates `> today` (and `> the current instance`) up to
+/// and including `cutoff`.
+///
+/// Pure and timezone-free: `today` and `cutoff` are passed in so the function is
+/// directly testable. Returns an empty list when the task is not an active
+/// schedule-type recurring task. Completion-type recurrence is intentionally not
+/// projected: the next date is `completion_date + interval_days`, and future
+/// completion dates are unknown, so no deterministic series exists to forecast.
+///
+/// Shared by both the CLI `forecast` command and the MCP `get_forecast` tool so
+/// their projections cannot drift.
+pub fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<NaiveDate> {
+    if !task.is_active() {
+        return Vec::new();
+    }
+    let Some(Recurrence::Schedule { rrule, anchor, snap }) = task.recurrence.as_ref() else {
+        return Vec::new();
+    };
+
+    // Walk the raw (un-snapped) series so each `next_occurrence` call strictly
+    // advances; the snap is applied only to the emitted date. The concrete task
+    // already covers its own `due`, so start projecting strictly after it.
+    let mut after = [task.due, task.start, Some(today)]
+        .into_iter()
+        .flatten()
+        .max()
+        .unwrap_or(today);
+
+    let mut dates = Vec::new();
+    for _ in 0..MAX_PROJECTED_PER_SERIES {
+        let raw = match next_occurrence(rrule, *anchor, after) {
+            Ok(d) => d,
+            Err(_) => break,
+        };
+        // `next_occurrence` guarantees raw > after, so the walk terminates.
+        after = raw;
+        let occurrence = snap.as_ref().map_or(raw, |s| apply_snap(raw, s));
+        if occurrence > cutoff {
+            break;
+        }
+        // Snapping can move a date backwards to a prior emitted one or onto the
+        // current instance; only keep strictly-future, in-horizon dates.
+        if occurrence > today {
+            dates.push(occurrence);
+        }
+    }
+    dates
+}
+
 // ─── spawn_next ────────────────────────────────────────────────────────────
 
 /// Creates the next recurring task instance from a completed task.
@@ -928,6 +985,83 @@ mod tests {
         let next = spawn_next(&task, d(2026, 5, 5)).unwrap().unwrap();
         assert_eq!(next.data.get("ticket").and_then(|v| v.as_str()), Some("JIRA-99"));
         assert!(!next.data.contains_key("time_log"), "time_log must not be copied");
+    }
+
+    // ── project_series ──────────────────────────────────────────────────────
+
+    fn weekly_monday_task(anchor: NaiveDate) -> Task {
+        let mut task = Task::new("Weekly review");
+        task.due = Some(anchor);
+        task.recurrence = Some(Recurrence::Schedule {
+            rrule: "FREQ=WEEKLY;BYDAY=MO".into(),
+            anchor,
+            snap: None,
+        });
+        task
+    }
+
+    #[test]
+    fn project_series_weekly_yields_expected_dates_in_horizon() {
+        // Anchor Mon May 4 2026; today May 4; 21-day horizon → cutoff May 25.
+        // The current instance (May 4) is excluded; projected Mondays strictly
+        // after today and within the horizon are May 11, 18, 25.
+        let anchor = d(2026, 5, 4);
+        let task = weekly_monday_task(anchor);
+        let dates = project_series(&task, d(2026, 5, 4), d(2026, 5, 25));
+        assert_eq!(dates, vec![d(2026, 5, 11), d(2026, 5, 18), d(2026, 5, 25)]);
+    }
+
+    #[test]
+    fn project_series_bounded_by_horizon() {
+        // A short horizon yields a single projected occurrence.
+        let anchor = d(2026, 5, 4);
+        let task = weekly_monday_task(anchor);
+        let dates = project_series(&task, d(2026, 5, 4), d(2026, 5, 12));
+        assert_eq!(dates, vec![d(2026, 5, 11)]);
+    }
+
+    #[test]
+    fn project_series_applies_snap() {
+        // Weekly Monday schedule snapped to next Saturday: each projected Monday
+        // is moved forward to the following Saturday.
+        let anchor = d(2026, 5, 4); // Monday
+        let mut task = weekly_monday_task(anchor);
+        task.recurrence = Some(Recurrence::Schedule {
+            rrule: "FREQ=WEEKLY;BYDAY=MO".into(),
+            anchor,
+            snap: Some(Snap::NextWeekday { weekday: 5 }), // Saturday
+        });
+        let dates = project_series(&task, d(2026, 5, 4), d(2026, 5, 31));
+        // Mondays May 11/18/25 snap to Saturdays May 16/23/30.
+        assert_eq!(dates, vec![d(2026, 5, 16), d(2026, 5, 23), d(2026, 5, 30)]);
+        assert!(dates.iter().all(|d| d.weekday() == Weekday::Sat));
+    }
+
+    #[test]
+    fn project_series_completion_type_yields_none() {
+        let mut task = Task::new("Water plants");
+        task.due = Some(d(2026, 5, 1));
+        task.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
+        assert!(project_series(&task, d(2026, 5, 4), d(2026, 7, 1)).is_empty());
+    }
+
+    #[test]
+    fn project_series_done_and_cancelled_yield_none() {
+        let anchor = d(2026, 5, 4);
+        let mut done = weekly_monday_task(anchor);
+        done.status = crate::core::domain::task::Status::Done;
+        assert!(project_series(&done, d(2026, 5, 4), d(2026, 6, 1)).is_empty());
+
+        let mut cancelled = weekly_monday_task(anchor);
+        cancelled.status = crate::core::domain::task::Status::Cancelled;
+        assert!(project_series(&cancelled, d(2026, 5, 4), d(2026, 6, 1)).is_empty());
+    }
+
+    #[test]
+    fn project_series_non_recurring_yields_none() {
+        let mut task = Task::new("One-off");
+        task.due = Some(d(2026, 5, 10));
+        assert!(project_series(&task, d(2026, 5, 1), d(2026, 7, 1)).is_empty());
     }
 
     #[test]

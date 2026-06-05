@@ -334,6 +334,10 @@ interval_days`, and future completion dates are unknown, so only the current ins
 shown. Done/cancelled recurring tasks are not projected. Non-recurring tasks with a due
 date within the horizon appear unchanged.
 
+This projection logic lives in a single shared core helper (`recurrence::project_series`)
+used by both `next forecast` and the MCP `get_forecast` tool (§12.5), so the two
+implementations cannot drift.
+
 ---
 
 ## 8. CLI commands
@@ -683,6 +687,8 @@ The `sync` tool MUST cancel any pending deferred timer and run sync immediately,
 **Input validation (tags):** Tags are validated by `domain::tag::validate_tag` using an allowlist per path segment: starts with an ASCII letter, then letters / digits / `-` / `_`. The `/` separator is allowed for hierarchical tags (e.g. `@home/kitchen`). The `..` component MUST be explicitly rejected. The `@` and `#` prefixes are permitted. Context tags (`@`) MUST be validated with `validate_context_tag` and resource tags (`#`) with `validate_resource_tag` to enforce the correct prefix.
 
 **Input validation (data keys):** The `key` field in `manage_task_data` MUST be validated: non-empty, at most 256 characters, and contain only ASCII letters (`a-z`, `A-Z`), digits (`0-9`), hyphens (`-`), and underscores (`_`). Dots, slashes, and spaces MUST be rejected.
+
+**`get_forecast` projection:** The `get_forecast` tool MUST have the same projection behaviour as `next forecast` (§7): in addition to concrete tasks due within the horizon, it MUST project active (open/started) schedule-type recurrence series forward to `today + horizon` using the shared core helper (`recurrence::project_series`), so the two implementations cannot drift. The horizon defaults to `DEFAULT_FORECAST_HORIZON_DAYS` (90) and is overridable via the `horizon_days` parameter. Each returned entry is `{ date, id, title, score, projected }`; projected (not-yet-spawned) occurrences MUST carry `projected: true` and concrete tasks `projected: false`. Completion-type recurrence and done/cancelled tasks MUST NOT be projected.
 
 ### 12.6 Sync mechanisms
 

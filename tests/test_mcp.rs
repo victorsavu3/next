@@ -336,6 +336,48 @@ async fn get_forecast_empty() {
     assert!(v.is_empty());
 }
 
+#[tokio::test]
+async fn get_forecast_projects_schedule_recurrence() {
+    let dir = tempfile::tempdir().unwrap();
+    let addr = start_test_server("tok", None, dir.path()).await;
+    let c = Client::new();
+
+    let today = chrono::Local::now().date_naive();
+    let due_in = |n: i64| (today + chrono::Duration::days(n)).format("%Y-%m-%d").to_string();
+
+    // Weekly schedule task due today → anchors on today, projecting weekly ahead.
+    let add = tool_call(&c, addr, "tok", "add_task",
+        json!({ "title": "Weekly review", "due": due_in(0),
+                "recur_schedule": "FREQ=WEEKLY", "autosync": false })).await;
+    assert!(!is_error(&add));
+
+    // Non-recurring task due in 3 days → concrete entry, never projected.
+    let add2 = tool_call(&c, addr, "tok", "add_task",
+        json!({ "title": "One off", "due": due_in(3), "autosync": false })).await;
+    assert!(!is_error(&add2));
+
+    // Completion-type recurring task due in 2 days → concrete only, no projection.
+    let add3 = tool_call(&c, addr, "tok", "add_task",
+        json!({ "title": "Water plants", "due": due_in(2),
+                "recur_completion": 7, "autosync": false })).await;
+    assert!(!is_error(&add3));
+
+    let resp = tool_call(&c, addr, "tok", "get_forecast", json!({ "horizon_days": 30 })).await;
+    assert!(!is_error(&resp));
+    let v: Vec<Value> = serde_json::from_str(&result_text(&resp)).unwrap();
+
+    let projected: Vec<_> = v.iter().filter(|e| e["projected"] == json!(true)).collect();
+    // 30-day horizon, weekly anchored on today → 4 projected occurrences.
+    assert_eq!(projected.len(), 4, "expected 4 projected weekly occurrences");
+    assert!(projected.iter().all(|e| e["title"] == json!("Weekly review")));
+
+    // The non-recurring and completion-type tasks appear as concrete entries.
+    assert!(v.iter().any(|e| e["title"] == json!("One off") && e["projected"] == json!(false)));
+    assert!(v.iter().any(|e| e["title"] == json!("Water plants") && e["projected"] == json!(false)));
+    // Completion-type recurrence is never projected.
+    assert!(!v.iter().any(|e| e["title"] == json!("Water plants") && e["projected"] == json!(true)));
+}
+
 // ── Webhook tests ─────────────────────────────────────────────────────────────
 
 #[tokio::test]

@@ -211,7 +211,7 @@ pub fn all_tools() -> Vec<Tool> {
         },
         Tool {
             name: "get_forecast",
-            description: "List upcoming tasks by due date within a configurable horizon.",
+            description: "List upcoming occurrences within a configurable horizon: concrete tasks due in the window plus projected (not-yet-spawned) future instances of active schedule-type recurrence series. Each entry carries a `projected` flag (true for forecast-only occurrences).",
             input_schema: json!({
                 "type": "object",
                 "properties": {

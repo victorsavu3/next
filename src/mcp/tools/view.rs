@@ -1,11 +1,28 @@
-use chrono::Local;
+use chrono::{Local, NaiveDate};
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::core::FilterArgs;
-use crate::core::{domain::filter, scoring};
+use crate::core::{domain::filter, recurrence, scoring};
 use crate::TaskRepository;
 
 // ── get_forecast ──────────────────────────────────────────────────────────────
+
+/// A single occurrence in the forecast: either a concrete existing task whose
+/// stored `due` falls within the horizon, or a projected (not-yet-spawned)
+/// future instance of an active schedule-type recurrence series.
+#[derive(Debug, Clone, Serialize)]
+struct ForecastEntry {
+    /// The forecast date (the task's `due`, or the projected occurrence date).
+    date: NaiveDate,
+    /// Short 8-char id of the originating task.
+    id: String,
+    title: String,
+    /// Urgency score of the originating task.
+    score: f64,
+    /// `true` for projected future occurrences that do not yet exist as tasks.
+    projected: bool,
+}
 
 pub fn get_forecast(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let today = Local::now().date_naive();
@@ -42,12 +59,40 @@ pub fn get_forecast(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<
     let scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.scoring, &tag_metas);
 
     let cutoff = today + chrono::Duration::days(horizon as i64);
-    let due_tasks: Vec<_> = scored
-        .into_iter()
-        .filter(|st| st.task.due.is_some_and(|d| d <= cutoff))
-        .collect();
 
-    Ok(serde_json::to_value(&due_tasks)?)
+    let mut entries: Vec<ForecastEntry> = Vec::new();
+    for st in &scored {
+        let short = st.task.id.to_string().replace('-', "")[..8].to_string();
+
+        // Concrete existing task whose stored due falls within the horizon.
+        if st.task.due.is_some_and(|d| d <= cutoff) {
+            entries.push(ForecastEntry {
+                date: st.task.due.unwrap(),
+                id: short.clone(),
+                title: st.task.title.clone(),
+                score: st.score,
+                projected: false,
+            });
+        }
+
+        // Project active schedule-type recurrence series forward. Completion-type,
+        // done, and cancelled tasks are skipped inside `project_series`.
+        for date in recurrence::project_series(&st.task, today, cutoff) {
+            entries.push(ForecastEntry {
+                date,
+                id: short.clone(),
+                title: st.task.title.clone(),
+                score: st.score,
+                projected: true,
+            });
+        }
+    }
+
+    // Order chronologically; concrete tasks sort before projected ones on the
+    // same date so the current instance is shown ahead of its projections.
+    entries.sort_by(|a, b| a.date.cmp(&b.date).then(a.projected.cmp(&b.projected)));
+
+    Ok(serde_json::to_value(&entries)?)
 }
 
 #[cfg(test)]
@@ -93,6 +138,71 @@ mod tests {
         ctx.vcs.commit(&[path], "next: add Fix bug").unwrap();
 
         let result = get_forecast(&serde_json::json!({ "horizon_days": 7 }), &mut ctx).unwrap();
-        assert_eq!(result.as_array().unwrap().len(), 1);
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        // Concrete due tasks are not marked projected.
+        assert_eq!(arr[0]["projected"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn forecast_projects_schedule_recurrence() {
+        let (_dir, mut ctx) = make_ctx();
+        use crate::core::domain::task::{Recurrence, Task};
+        use crate::core::storage;
+        let today = Local::now().date_naive();
+        let mut task = Task::new("Weekly review".to_owned());
+        // Anchor on today's weekday so projected occurrences fall weekly ahead.
+        task.due = Some(today);
+        task.recurrence = Some(Recurrence::Schedule {
+            rrule: "FREQ=WEEKLY".into(),
+            anchor: today,
+            snap: None,
+        });
+        let path = storage::task_path(&ctx.repo_root, &task);
+        ctx.store.save_task(&task).unwrap();
+        ctx.vcs.commit(&[path], "next: add Weekly review").unwrap();
+
+        // 30-day horizon → the concrete instance plus 4 projected weekly occurrences.
+        let result = get_forecast(&serde_json::json!({ "horizon_days": 30 }), &mut ctx).unwrap();
+        let arr = result.as_array().unwrap();
+        let projected: Vec<_> = arr.iter().filter(|e| e["projected"] == serde_json::json!(true)).collect();
+        assert_eq!(projected.len(), 4);
+        assert!(arr.iter().any(|e| e["projected"] == serde_json::json!(false)));
+    }
+
+    #[test]
+    fn forecast_does_not_project_completion_or_done() {
+        let (_dir, mut ctx) = make_ctx();
+        use crate::core::domain::task::{Recurrence, Status, Task};
+        use crate::core::storage;
+        let today = Local::now().date_naive();
+
+        // Completion-type recurrence: not projected (only the concrete instance shows).
+        let mut completion = Task::new("Water plants".to_owned());
+        completion.due = Some(today + chrono::Duration::days(2));
+        completion.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
+        let p1 = storage::task_path(&ctx.repo_root, &completion);
+        ctx.store.save_task(&completion).unwrap();
+        ctx.vcs.commit(&[p1], "next: add Water plants").unwrap();
+
+        // Done schedule task: neither concrete nor projected (done is filtered out).
+        let mut done = Task::new("Old review".to_owned());
+        done.due = Some(today + chrono::Duration::days(1));
+        done.status = Status::Done;
+        done.recurrence = Some(Recurrence::Schedule {
+            rrule: "FREQ=WEEKLY".into(),
+            anchor: today,
+            snap: None,
+        });
+        let p2 = storage::task_path(&ctx.repo_root, &done);
+        ctx.store.save_task(&done).unwrap();
+        ctx.vcs.commit(&[p2], "next: add Old review").unwrap();
+
+        let result = get_forecast(&serde_json::json!({ "horizon_days": 30 }), &mut ctx).unwrap();
+        let arr = result.as_array().unwrap();
+        // Only the single concrete completion-type task, no projections.
+        assert!(arr.iter().all(|e| e["projected"] == serde_json::json!(false)));
+        assert!(arr.iter().all(|e| e["title"] != serde_json::json!("Old review")));
+        assert_eq!(arr.len(), 1);
     }
 }

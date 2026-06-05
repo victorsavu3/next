@@ -1,16 +1,10 @@
 use chrono::{Local, NaiveDate};
 use serde::Serialize;
 
-use crate::core::domain::task::{Recurrence, Task};
 use crate::core::{domain::filter, recurrence, scoring};
 
 use crate::core::FilterArgs;
 use crate::AppContext;
-
-/// Hard cap on the number of projected occurrences generated per series, as a
-/// safety net against a misbehaving rule that fails to advance. The horizon is
-/// the real bound; this only guards against pathological cases.
-const MAX_PROJECTED_PER_SERIES: usize = 366;
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -96,7 +90,7 @@ pub fn build_entries(args: &Args, ctx: &AppContext) -> anyhow::Result<(Vec<Forec
         // Project the recurrence series forward. Only schedule-type series have
         // deterministic future dates; completion-type series depend on unknown
         // future completion dates and cannot be projected, so they are skipped.
-        for date in project_series(&st.task, today, cutoff) {
+        for date in recurrence::project_series(&st.task, today, cutoff) {
             entries.push(ForecastEntry {
                 date,
                 id: short.clone(),
@@ -149,54 +143,6 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     print_section(&format!("Next {horizon} days"), &later_vec, today);
 
     Ok(())
-}
-
-/// Enumerate the projected (not-yet-spawned) future occurrences of `task`'s
-/// recurrence series with dates `> today` (and `> the current instance`) up to
-/// and including `cutoff`.
-///
-/// Returns an empty list when the task is not an active schedule-type recurring
-/// task. Completion-type recurrence is intentionally not projected: the next
-/// date is `completion_date + interval_days`, and future completion dates are
-/// unknown, so no deterministic series exists to forecast.
-fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<NaiveDate> {
-    if !task.is_active() {
-        return Vec::new();
-    }
-    let Some(Recurrence::Schedule { rrule, anchor, snap }) = task.recurrence.as_ref() else {
-        return Vec::new();
-    };
-
-    // Walk the raw (un-snapped) series so each `next_occurrence` call strictly
-    // advances; the snap is applied only to the emitted date. The concrete task
-    // already covers its own `due`, so start projecting strictly after it.
-    let mut after = [task.due, task.start, Some(today)]
-        .into_iter()
-        .flatten()
-        .max()
-        .unwrap_or(today);
-
-    let mut dates = Vec::new();
-    for _ in 0..MAX_PROJECTED_PER_SERIES {
-        let raw = match recurrence::next_occurrence(rrule, *anchor, after) {
-            Ok(d) => d,
-            Err(_) => break,
-        };
-        // `next_occurrence` guarantees raw > after, so the walk terminates.
-        after = raw;
-        let occurrence = snap
-            .as_ref()
-            .map_or(raw, |s| recurrence::apply_snap(raw, s));
-        if occurrence > cutoff {
-            break;
-        }
-        // Snapping can move a date backwards to a prior emitted one or onto the
-        // current instance; only keep strictly-future, in-horizon dates.
-        if occurrence > today {
-            dates.push(occurrence);
-        }
-    }
-    dates
 }
 
 fn print_section(label: &str, entries: &[&ForecastEntry], today: NaiveDate) {
