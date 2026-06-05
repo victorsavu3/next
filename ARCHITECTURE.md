@@ -61,7 +61,6 @@ next/                             # crate root (also git repo)
     next-mcp.container            # Podman Quadlet systemd unit file
   src/
     lib.rs                        # `pub mod core` + feature-gated cli/mcp/forgejo; small type prelude
-    app_context.rs                # AppContext (cli): Config + TaskRepository (field `repo`); config.toml loading
     core/                         # THE CORE LIBRARY — compiled with no features
       error.rs                    # TaskError, Result
       config.rs                   # Config + SyncConfig (config.toml schema; machine-local, no scoring)
@@ -83,6 +82,7 @@ next/                             # crate root (also git repo)
         mod.rs  registry.rs  notify.rs
     cli/                          # feature = "cli" (default); the `next` binary + clap
       main.rs                     # `next` binary entry point
+      app_context.rs              # AppContext: Config + TaskRepository (field `repo`); config.toml loading
       mod.rs  render.rs  recurrence_parse.rs
       commands/
         add.rs   cancel.rs  context.rs  data.rs   delete.rs  done.rs  edit.rs
@@ -114,11 +114,19 @@ next/                             # crate root (also git repo)
 With **no features** (`--no-default-features`) the crate is just the core library —
 `domain`, `storage`, `store`, `plugin`, `config`, `resolve`, `error`, `scoring`, `service`,
 `task_repository` — with no `clap`/CLI dependencies, so other crates can link it.
-(`app_context` is gated behind the `cli` feature; see `src/lib.rs`.) The three feature modules
-depend only on this core (the cross-cutting helpers they share — filter-token parsing,
-data-value parsing, repo sync — live in `core`, never in `cli`). The presubmit
+`AppContext` (the CLI's `Config` + `TaskRepository` wrapper) is **not** part of core; it
+lives at `src/cli/app_context.rs`, compiled only with the `cli` feature. The three feature
+modules depend only on this core (the cross-cutting helpers they share — filter-token
+parsing, data-value parsing, repo sync — live in `core`, never in `cli`). The presubmit
 (`prek.toml`) runs clippy+test with `--all-features` and a `--no-default-features` clippy to
 keep the core build clean.
+
+Every **non-optional** dependency is required by `core`, so it is present even in the
+featureless build; there are no CLI-exclusive always-on dependencies. The CLI-only crate
+`clap` is `optional` and pulled in by the `cli` feature (and also by `forgejo`, whose binary
+uses clap too); `tracing-subscriber` is shared by all three binaries. The `dep:` syntax in
+`[features]` keeps these optional crates out of the dependency graph unless their feature is
+enabled.
 
 ---
 

@@ -4,9 +4,10 @@ version = "1.1.0"
 edition = "2021"
 
 [features]
-# With no features the crate is just the core library (domain, storage, store,
-# plugin, core, app_context, config) that other crates can link without the CLI
-# or its dependencies. The default build still includes the CLI.
+# With no features the crate is just the `core` library (domain, storage, store,
+# plugin, scoring, service, recurrence, config) that other crates can link
+# without the CLI or its dependencies. The CLI (including `AppContext`) lives in
+# `src/cli/`. The default build still includes the CLI.
 default = ["cli"]
 cli = [
     "dep:clap",

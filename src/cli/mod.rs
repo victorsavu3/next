@@ -1,3 +1,4 @@
+pub mod app_context;
 pub mod commands;
 pub mod recurrence_parse;
 pub mod render;
