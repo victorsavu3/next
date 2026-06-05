@@ -25,6 +25,10 @@ forgejo = [
     "dep:clap",
     "dep:tracing-subscriber",
 ]
+tui = [
+    "dep:ratatui",
+    "dep:tracing-subscriber",
+]
 
 [[bin]]
 name = "next"
@@ -40,6 +44,11 @@ required-features = ["mcp"]
 name = "next-forgejo"
 path = "src/forgejo/main.rs"
 required-features = ["forgejo"]
+
+[[bin]]
+name = "next-tui"
+path = "src/tui/main.rs"
+required-features = ["tui"]
 
 [dependencies]
 # domain / core
@@ -67,6 +76,10 @@ axum  = { version = "0.8", optional = true }
 # Forgejo plugin (optional — enabled by the `forgejo` feature)
 forgejo-api = { version = "0.10", optional = true }
 url         = { version = "2", optional = true }
+# Terminal UI (optional — enabled by the `tui` feature). We rely on ratatui's
+# re-exported `crossterm` (ratatui::crossterm) instead of a direct crossterm
+# dependency, so that only a single crossterm version is ever pulled in.
+ratatui = { version = "0.30", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

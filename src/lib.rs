@@ -6,6 +6,8 @@ pub mod cli;
 pub mod forgejo;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+#[cfg(feature = "tui")]
+pub mod tui;
 
 // Crate-root prelude of the most-used core types.
 #[cfg(feature = "cli")]
