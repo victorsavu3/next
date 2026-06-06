@@ -42,6 +42,10 @@ pub enum Mode {
     Filter,
     /// Editing the selected task in the edit modal.
     Edit,
+    /// Confirming deletion of the selected task in a yes/no popup.
+    ConfirmDelete,
+    /// Picking a new parent for the selected task in a searchable list.
+    MovePicker,
 }
 
 /// A discrete state transition produced by [`App::handle_key`] and applied by
@@ -91,6 +95,33 @@ pub enum Action {
     EditSave,
     /// While in [`Mode::Edit`]: discard the form and return to Normal.
     EditCancel,
+
+    /// Complete the selected task (recurrence-aware), then reload.
+    Done,
+    /// Cancel the selected task, then reload.
+    Cancel,
+    /// Toggle the selected task between started and stopped, then reload.
+    ToggleStart,
+    /// Open the selected task's URL in the system browser.
+    OpenUrl,
+    /// Open the delete-confirmation popup for the selected task.
+    OpenDelete,
+    /// While in [`Mode::ConfirmDelete`]: confirm and delete the task.
+    ConfirmDelete,
+    /// While in [`Mode::ConfirmDelete`]: dismiss the popup without deleting.
+    CancelDelete,
+    /// Open the move (parent-picker) popup for the selected task.
+    OpenMove,
+    /// While in [`Mode::MovePicker`]: feed a raw key event to the search buffer.
+    MoveInput(KeyEvent),
+    /// While in [`Mode::MovePicker`]: move the highlight to the next candidate.
+    MoveNext,
+    /// While in [`Mode::MovePicker`]: move the highlight to the previous candidate.
+    MovePrev,
+    /// While in [`Mode::MovePicker`]: reparent to the highlighted candidate.
+    MoveConfirm,
+    /// While in [`Mode::MovePicker`]: dismiss the popup without moving.
+    MoveCancel,
 }
 
 /// Everything the detail pane needs for one task, resolved from the cached
@@ -105,6 +136,52 @@ pub struct DetailData<'a> {
     pub children: Vec<(String, String)>,
     pub blockers: Vec<String>,
     pub breakdown: ScoreBreakdown,
+}
+
+/// One selectable entry in the move (parent-picker) list: either a concrete
+/// task or the synthetic "top-level" option (`task_id == None`).
+pub struct MoveCandidate {
+    /// The target parent id, or `None` for "no parent / top-level".
+    pub task_id: Option<uuid::Uuid>,
+    /// The label shown in the list.
+    pub label: String,
+}
+
+/// Live state for the move (parent-picker) popup. Holds the full candidate set
+/// (already pruned of the moved task and its descendants to prevent cycles), a
+/// live search buffer, and the highlighted row within the *filtered* view.
+pub struct MovePicker {
+    /// The task being reparented.
+    task_id: uuid::Uuid,
+    /// All valid candidates (top-level option first, then non-descendant tasks).
+    candidates: Vec<MoveCandidate>,
+    /// The live search buffer.
+    query: Input,
+    /// Highlighted index within the filtered candidate list.
+    selected: usize,
+}
+
+impl MovePicker {
+    /// The candidates matching the current query (case-insensitive substring).
+    /// The top-level option (empty-ish label match) always matches an empty
+    /// query and matches when its label contains the query.
+    pub fn filtered(&self) -> Vec<&MoveCandidate> {
+        let q = self.query.value().to_lowercase();
+        self.candidates
+            .iter()
+            .filter(|c| q.is_empty() || c.label.to_lowercase().contains(&q))
+            .collect()
+    }
+
+    /// The live search buffer, for rendering the input line.
+    pub fn query(&self) -> &Input {
+        &self.query
+    }
+
+    /// The highlighted index within the filtered list.
+    pub fn selected(&self) -> usize {
+        self.selected
+    }
 }
 
 /// The central application state.
@@ -146,6 +223,8 @@ pub struct App {
     mode: Mode,
     /// The live edit-modal form, present only while in [`Mode::Edit`].
     edit_form: Option<super::edit::EditForm>,
+    /// The live move (parent-picker) state, present only in [`Mode::MovePicker`].
+    move_picker: Option<MovePicker>,
     /// A transient status message shown in the footer.
     status: Option<String>,
     /// Set when the user asks to quit; the event loop checks this.
@@ -173,6 +252,7 @@ impl App {
             filter_input: Input::default(),
             mode: Mode::Normal,
             edit_form: None,
+            move_picker: None,
             status: None,
             should_quit: false,
         }
@@ -204,6 +284,12 @@ impl App {
     /// only while in [`Mode::Edit`].
     pub fn edit_form(&self) -> Option<&super::edit::EditForm> {
         self.edit_form.as_ref()
+    }
+
+    /// The live move (parent-picker) state, for the drawing layer to render the
+    /// popup. Present only while in [`Mode::MovePicker`].
+    pub fn move_picker(&self) -> Option<&MovePicker> {
+        self.move_picker.as_ref()
     }
 
     /// The scored, sorted, currently-visible tasks.
@@ -378,6 +464,8 @@ impl App {
             Mode::Normal => Self::normal_key(key),
             Mode::Filter => Self::filter_key(key),
             Mode::Edit => self.edit_key(key),
+            Mode::ConfirmDelete => Self::confirm_delete_key(key),
+            Mode::MovePicker => Self::move_picker_key(key),
         }
     }
 
@@ -385,24 +473,32 @@ impl App {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Some(Action::Quit),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
-            KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectNext),
-            KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectPrev),
-            KeyCode::Char('g') | KeyCode::Home => Some(Action::SelectFirst),
-            KeyCode::Char('G') | KeyCode::End => Some(Action::SelectLast),
-            KeyCode::Char('r') => Some(Action::Reload),
-            KeyCode::Char('e') => Some(Action::OpenEdit),
-            KeyCode::Char('/') => Some(Action::OpenFilter),
-            KeyCode::Char('A') => Some(Action::ToggleAll),
-            KeyCode::Char('F') => Some(Action::ToggleFuture),
-            KeyCode::Char('U') => Some(Action::ToggleAllUsers),
-            KeyCode::PageDown => Some(Action::DetailPageDown),
-            KeyCode::PageUp => Some(Action::DetailPageUp),
+            // Ctrl-d / Ctrl-u scroll the detail pane; the plain keys below are
+            // bound to actions, so the modifier guards must come first.
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(Action::DetailPageDown)
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(Action::DetailPageUp)
             }
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectNext),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectPrev),
+            KeyCode::Char('g') | KeyCode::Home => Some(Action::SelectFirst),
+            KeyCode::Char('G') | KeyCode::End => Some(Action::SelectLast),
+            KeyCode::Char('r') => Some(Action::Reload),
+            KeyCode::Char('e') => Some(Action::OpenEdit),
+            KeyCode::Char('d') => Some(Action::Done),
+            KeyCode::Char('c') => Some(Action::Cancel),
+            KeyCode::Char('s') => Some(Action::ToggleStart),
+            KeyCode::Char('o') => Some(Action::OpenUrl),
+            KeyCode::Char('m') => Some(Action::OpenMove),
+            KeyCode::Char('x') | KeyCode::Delete => Some(Action::OpenDelete),
+            KeyCode::Char('/') => Some(Action::OpenFilter),
+            KeyCode::Char('A') => Some(Action::ToggleAll),
+            KeyCode::Char('F') => Some(Action::ToggleFuture),
+            KeyCode::Char('U') => Some(Action::ToggleAllUsers),
+            KeyCode::PageDown => Some(Action::DetailPageDown),
+            KeyCode::PageUp => Some(Action::DetailPageUp),
             _ => None,
         }
     }
@@ -413,6 +509,31 @@ impl App {
             KeyCode::Esc => Some(Action::CancelFilter),
             // Everything else is editing input (chars, backspace, arrows, …).
             _ => Some(Action::FilterInput(key)),
+        }
+    }
+
+    /// Key mapping for the delete-confirmation popup: `y`/Enter confirms,
+    /// `n`/`Esc` (or `q`) cancels.
+    fn confirm_delete_key(key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(Action::ConfirmDelete),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc | KeyCode::Char('q') => {
+                Some(Action::CancelDelete)
+            }
+            _ => None,
+        }
+    }
+
+    /// Key mapping for the move (parent-picker) popup. `Esc` cancels, `Enter`
+    /// confirms, ↑/↓ move the highlight, and everything else edits the search
+    /// buffer.
+    fn move_picker_key(key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Esc => Some(Action::MoveCancel),
+            KeyCode::Enter => Some(Action::MoveConfirm),
+            KeyCode::Down => Some(Action::MoveNext),
+            KeyCode::Up => Some(Action::MovePrev),
+            _ => Some(Action::MoveInput(key)),
         }
     }
 
@@ -502,6 +623,20 @@ impl App {
             }
             Action::EditSave => self.save_edit(),
             Action::EditCancel => self.cancel_edit(),
+
+            Action::Done => self.do_done(),
+            Action::Cancel => self.do_cancel(),
+            Action::ToggleStart => self.do_toggle_start(),
+            Action::OpenUrl => self.do_open_url(),
+            Action::OpenDelete => self.open_delete(),
+            Action::ConfirmDelete => self.do_delete(),
+            Action::CancelDelete => self.cancel_delete(),
+            Action::OpenMove => self.open_move(),
+            Action::MoveInput(key) => self.move_input(key),
+            Action::MoveNext => self.move_select_next(),
+            Action::MovePrev => self.move_select_prev(),
+            Action::MoveConfirm => self.do_move(),
+            Action::MoveCancel => self.cancel_move(),
         }
     }
 
@@ -608,6 +743,321 @@ impl App {
             self.repo.record_task_event("data", task_id);
         }
         Ok(())
+    }
+
+    // ── Keybound actions on the selected task ─────────────────────────────
+    //
+    // Each mutating action mirrors the corresponding CLI command but operates on
+    // the already-selected task (no id resolution). On error (validation, store,
+    // or git conflict) the status line carries the message and no state is lost;
+    // on success a brief status is set, the list reloads, and the selection
+    // follows the task by id where it still exists.
+
+    /// Reloads after a mutation and re-selects the task with `keep_id` if it is
+    /// still visible; otherwise clamps to the nearest remaining row. Reports
+    /// `ok_msg` (or a reload error) into the status line.
+    fn reload_keep(&mut self, keep_id: uuid::Uuid, ok_msg: String) {
+        match self.reload() {
+            Ok(()) => {
+                if let Some(idx) = self.tasks.iter().position(|s| s.task.id == keep_id) {
+                    self.selected = idx;
+                }
+                self.clamp_selection();
+                self.status = Some(ok_msg);
+            }
+            Err(e) => self.status = Some(format!("{ok_msg}; reload failed: {e}")),
+        }
+    }
+
+    /// Completes the selected task (recurrence-aware). The completed task leaves
+    /// the default view, so the selection lands on the nearest remaining row. If
+    /// the task carried a recurrence, the spawned next instance is noted.
+    fn do_done(&mut self) {
+        let Some(task) = self.selected_task() else {
+            self.status = Some("nothing selected".to_owned());
+            return;
+        };
+        let id = task.id;
+        let had_recurrence = task.recurrence.is_some();
+
+        let repo_root = self.repo.repo_root.clone();
+        let result = crate::core::service::complete_task(
+            id,
+            self.today,
+            &repo_root,
+            &mut *self.repo.store,
+            &*self.repo.vcs,
+        );
+        match result {
+            Ok(_) => {
+                self.repo.record_task_event("done", id);
+                let msg = if had_recurrence {
+                    "completed; spawned next occurrence".to_owned()
+                } else {
+                    "completed".to_owned()
+                };
+                // The completed task leaves the default view; keep the selection
+                // near where it was (clamp handles the now-shorter list).
+                match self.reload() {
+                    Ok(()) => {
+                        self.clamp_selection();
+                        self.status = Some(msg);
+                    }
+                    Err(e) => self.status = Some(format!("{msg}; reload failed: {e}")),
+                }
+            }
+            Err(e) => self.status = Some(format!("done error: {e}")),
+        }
+    }
+
+    /// Cancels the selected task.
+    fn do_cancel(&mut self) {
+        let Some(id) = self.selected_task().map(|t| t.id) else {
+            self.status = Some("nothing selected".to_owned());
+            return;
+        };
+        let result = self.repo.transaction(|store, vcs, root| {
+            let mut t = store.get_task(id)?;
+            t.mark_cancelled();
+            store.save_task(&t)?;
+            let path = crate::core::storage::task_path(root, &t);
+            vcs.commit(&[path], &format!("next: cancel {}", t.title))?;
+            Ok(())
+        });
+        match result {
+            Ok(()) => {
+                self.repo.record_task_event("cancel", id);
+                self.reload_keep(id, "cancelled".to_owned());
+            }
+            Err(e) => self.status = Some(format!("cancel error: {e}")),
+        }
+    }
+
+    /// Toggles the selected task between started and stopped, based on its
+    /// current status (a started task stops; any other active task starts).
+    fn do_toggle_start(&mut self) {
+        let Some(task) = self.selected_task() else {
+            self.status = Some("nothing selected".to_owned());
+            return;
+        };
+        let id = task.id;
+        let starting = task.status != crate::core::domain::task::Status::Started;
+        let (verb, commit, ok_msg) = if starting {
+            ("start", "next: start", "started")
+        } else {
+            ("stop", "next: stop", "stopped")
+        };
+        let result = self.repo.transaction(|store, vcs, root| {
+            let mut t = store.get_task(id)?;
+            if starting {
+                t.mark_started();
+            } else {
+                t.mark_stopped();
+            }
+            store.save_task(&t)?;
+            let path = crate::core::storage::task_path(root, &t);
+            vcs.commit(&[path], &format!("{commit} {}", t.title))?;
+            Ok(())
+        });
+        match result {
+            Ok(()) => {
+                self.repo.record_task_event(verb, id);
+                self.reload_keep(id, ok_msg.to_owned());
+            }
+            Err(e) => self.status = Some(format!("{verb} error: {e}")),
+        }
+    }
+
+    /// Opens the selected task's URL via the system opener. Read-only; sets an
+    /// error status when the task has no URL.
+    fn do_open_url(&mut self) {
+        let Some(task) = self.selected_task() else {
+            self.status = Some("nothing selected".to_owned());
+            return;
+        };
+        match task.url.clone() {
+            Some(url) => match open_url(&url) {
+                Ok(()) => self.status = Some(format!("opened {url}")),
+                Err(e) => self.status = Some(format!("open error: {e}")),
+            },
+            None => self.status = Some("open error: task has no URL set".to_owned()),
+        }
+    }
+
+    /// Opens the delete-confirmation popup for the selected task. No-op (with a
+    /// status hint) when the list is empty.
+    fn open_delete(&mut self) {
+        if self.selected_task().is_none() {
+            self.status = Some("nothing selected".to_owned());
+            return;
+        }
+        self.mode = Mode::ConfirmDelete;
+        self.status = None;
+    }
+
+    /// Dismisses the delete-confirmation popup without deleting.
+    fn cancel_delete(&mut self) {
+        self.mode = Mode::Normal;
+        self.status = Some("delete cancelled".to_owned());
+    }
+
+    /// Deletes the selected task (after confirmation), then reloads. The deleted
+    /// task is gone, so the selection clamps to the nearest remaining row.
+    fn do_delete(&mut self) {
+        self.mode = Mode::Normal;
+        let Some(task) = self.selected_task().cloned() else {
+            self.status = Some("nothing selected".to_owned());
+            return;
+        };
+        let id = task.id;
+        let result = self.repo.transaction(|store, vcs, root| {
+            let path = crate::core::storage::task_path(root, &task);
+            store.delete_task(id)?;
+            vcs.commit(&[path], &format!("next: delete {}", task.title))?;
+            Ok(())
+        });
+        match result {
+            Ok(()) => {
+                self.repo.record_task_event("delete", id);
+                match self.reload() {
+                    Ok(()) => {
+                        self.clamp_selection();
+                        self.status = Some("deleted".to_owned());
+                    }
+                    Err(e) => self.status = Some(format!("deleted; reload failed: {e}")),
+                }
+            }
+            Err(e) => self.status = Some(format!("delete error: {e}")),
+        }
+    }
+
+    /// Opens the move (parent-picker) popup for the selected task, seeded with
+    /// every candidate that is neither the task itself nor one of its
+    /// descendants (which would create a cycle), plus a "top-level" option.
+    fn open_move(&mut self) {
+        let Some(task) = self.selected_task() else {
+            self.status = Some("nothing selected".to_owned());
+            return;
+        };
+        let task_id = task.id;
+        let banned = self.subtree_ids(task_id);
+
+        let mut candidates = vec![MoveCandidate {
+            task_id: None,
+            label: "(top-level / no parent)".to_owned(),
+        }];
+        for t in &self.all_tasks {
+            if banned.contains(&t.id) {
+                continue;
+            }
+            candidates.push(MoveCandidate {
+                task_id: Some(t.id),
+                label: format!("[{}] {}", short_id(t), t.title),
+            });
+        }
+
+        self.move_picker = Some(MovePicker {
+            task_id,
+            candidates,
+            query: Input::default(),
+            selected: 0,
+        });
+        self.mode = Mode::MovePicker;
+        self.status = None;
+    }
+
+    /// The set of ids in the subtree rooted at `root_id` (inclusive). Used by the
+    /// move picker to forbid reparenting a task under itself or a descendant.
+    fn subtree_ids(&self, root_id: uuid::Uuid) -> std::collections::HashSet<uuid::Uuid> {
+        let mut banned = std::collections::HashSet::new();
+        banned.insert(root_id);
+        // Iterate to a fixed point: a task joins the set once its parent is in it.
+        loop {
+            let mut added = false;
+            for t in &self.all_tasks {
+                if let Some(pid) = t.parent_id {
+                    if banned.contains(&pid) && banned.insert(t.id) {
+                        added = true;
+                    }
+                }
+            }
+            if !added {
+                break;
+            }
+        }
+        banned
+    }
+
+    /// Feeds a key event to the move picker's search buffer, then clamps the
+    /// highlight to the new filtered length.
+    fn move_input(&mut self, key: KeyEvent) {
+        if let Some(picker) = self.move_picker.as_mut() {
+            picker.query.handle_event(&Event::Key(key));
+            let len = picker.filtered().len();
+            if picker.selected >= len {
+                picker.selected = len.saturating_sub(1);
+            }
+        }
+    }
+
+    /// Moves the move-picker highlight down by one (clamped at the last match).
+    fn move_select_next(&mut self) {
+        if let Some(picker) = self.move_picker.as_mut() {
+            let len = picker.filtered().len();
+            if len > 0 && picker.selected + 1 < len {
+                picker.selected += 1;
+            }
+        }
+    }
+
+    /// Moves the move-picker highlight up by one (clamped at the first match).
+    fn move_select_prev(&mut self) {
+        if let Some(picker) = self.move_picker.as_mut() {
+            picker.selected = picker.selected.saturating_sub(1);
+        }
+    }
+
+    /// Dismisses the move picker without reparenting.
+    fn cancel_move(&mut self) {
+        self.move_picker = None;
+        self.mode = Mode::Normal;
+        self.status = Some("move cancelled".to_owned());
+    }
+
+    /// Reparents the picked task to the highlighted candidate (or top-level),
+    /// then reloads and re-selects the moved task. Closes the popup on success;
+    /// on a store/git error the popup closes and the error lands in the status.
+    fn do_move(&mut self) {
+        let Some(picker) = self.move_picker.as_ref() else {
+            return;
+        };
+        let task_id = picker.task_id;
+        let filtered = picker.filtered();
+        let Some(candidate) = filtered.get(picker.selected) else {
+            self.status = Some("move error: no candidate selected".to_owned());
+            return;
+        };
+        let new_parent = candidate.task_id;
+
+        self.move_picker = None;
+        self.mode = Mode::Normal;
+
+        let result = self.repo.transaction(|store, vcs, root| {
+            let mut t = store.get_task(task_id)?;
+            t.parent_id = new_parent;
+            t.touch();
+            store.save_task(&t)?;
+            let path = crate::core::storage::task_path(root, &t);
+            vcs.commit(&[path], &format!("next: move {}", t.title))?;
+            Ok(())
+        });
+        match result {
+            Ok(()) => {
+                self.repo.record_task_event("move", task_id);
+                self.reload_keep(task_id, "moved".to_owned());
+            }
+            Err(e) => self.status = Some(format!("move error: {e}")),
+        }
     }
 
     /// Runs [`App::reload`], reporting either `ok_msg` or the error into the
@@ -720,6 +1170,25 @@ impl App {
 /// `[id]` form used by `next show`.
 fn short_id(task: &Task) -> String {
     task.id.to_string().replace('-', "")[..8].to_owned()
+}
+
+/// Spawns the system URL opener (`open` on macOS, `xdg-open` elsewhere) for
+/// `url`, mirroring the CLI `open` command. Returns an error if the opener
+/// cannot be launched or exits non-zero.
+fn open_url(url: &str) -> anyhow::Result<()> {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let status = std::process::Command::new(opener)
+        .arg(url)
+        .status()
+        .map_err(|e| anyhow::anyhow!("failed to run {opener}: {e}"))?;
+    if !status.success() {
+        anyhow::bail!("{opener} exited with status {status}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1087,5 +1556,281 @@ mod tests {
         let action = app.handle_key(tab).unwrap();
         app.update(action);
         assert_ne!(app.edit_form().unwrap().focus, first);
+    }
+
+    // ── keybound actions (T7) ───────────────────────────────────────────────
+
+    /// Creates `title` via the shared service over an existing repo, committing
+    /// it so it is mutable. Returns its id.
+    fn commit_task(app: &mut App, title: &str) -> uuid::Uuid {
+        let repo_root = app.repo.repo_root.clone();
+        let task = crate::core::service::create_task(
+            title.to_owned(),
+            crate::core::service::CreateTaskParams::default(),
+            app.today,
+            &repo_root,
+            &mut *app.repo.store,
+            &*app.repo.vcs,
+        )
+        .unwrap();
+        task.id
+    }
+
+    #[test]
+    fn done_removes_task_from_default_view() {
+        let (mut app, id) = app_with_committed_task("finish me");
+        assert_eq!(app.tasks().len(), 1);
+        app.update(Action::Done);
+        // Done tasks leave the default (implicitly-filtered) view.
+        assert!(app.tasks().iter().all(|s| s.task.id != id));
+        assert_eq!(app.status().unwrap(), "completed");
+        // The store records it as done.
+        assert_eq!(
+            app.repo.store.get_task(id).unwrap().status,
+            crate::core::domain::task::Status::Done
+        );
+    }
+
+    #[test]
+    fn done_with_recurrence_spawns_next_and_reports_it() {
+        let mut repo = test_repo();
+        let today = NaiveDate::from_ymd_opt(TODAY.0, TODAY.1, TODAY.2).unwrap();
+        let params = crate::core::service::CreateTaskParams {
+            recurrence: Some(crate::core::domain::task::Recurrence::Completion {
+                interval_days: 7,
+                snap: None,
+            }),
+            ..Default::default()
+        };
+        let task = crate::core::service::create_task(
+            "recurring".to_owned(),
+            params,
+            today,
+            &repo.repo_root.clone(),
+            &mut *repo.store,
+            &*repo.vcs,
+        )
+        .unwrap();
+        let mut app = App::new(Config::default(), repo, ConfigSource::Default, today);
+        app.reload().unwrap();
+
+        app.update(Action::Done);
+        assert_eq!(app.status().unwrap(), "completed; spawned next occurrence");
+        // Original is done; a fresh open instance now exists in the store.
+        let all = app.repo.store.list_tasks().unwrap();
+        assert!(all.iter().any(|t| t.id == task.id
+            && t.status == crate::core::domain::task::Status::Done));
+        assert!(all.iter().any(|t| t.id != task.id
+            && t.status == crate::core::domain::task::Status::Open
+            && t.title == "recurring"));
+    }
+
+    #[test]
+    fn cancel_marks_task_cancelled() {
+        let (mut app, id) = app_with_committed_task("scrap me");
+        app.update(Action::Cancel);
+        assert_eq!(app.status().unwrap(), "cancelled");
+        assert_eq!(
+            app.repo.store.get_task(id).unwrap().status,
+            crate::core::domain::task::Status::Cancelled
+        );
+    }
+
+    #[test]
+    fn toggle_start_starts_then_stops() {
+        use crate::core::domain::task::Status;
+        let (mut app, id) = app_with_committed_task("work on me");
+        // First toggle starts it.
+        app.update(Action::ToggleStart);
+        assert_eq!(app.status().unwrap(), "started");
+        assert_eq!(app.repo.store.get_task(id).unwrap().status, Status::Started);
+        // Selection follows the still-visible task.
+        assert_eq!(app.selected_task().unwrap().id, id);
+        // Second toggle stops it (back to open).
+        app.update(Action::ToggleStart);
+        assert_eq!(app.status().unwrap(), "stopped");
+        assert_eq!(app.repo.store.get_task(id).unwrap().status, Status::Open);
+    }
+
+    #[test]
+    fn delete_requires_confirm_then_removes_task() {
+        let (mut app, id) = app_with_committed_task("delete me");
+        // Opening the popup does not delete.
+        app.update(Action::OpenDelete);
+        assert_eq!(app.mode(), Mode::ConfirmDelete);
+        assert!(app.repo.store.get_task(id).is_ok());
+
+        // Cancelling leaves it intact.
+        app.update(Action::CancelDelete);
+        assert_eq!(app.mode(), Mode::Normal);
+        assert!(app.repo.store.get_task(id).is_ok());
+
+        // Confirming removes it.
+        app.update(Action::OpenDelete);
+        app.update(Action::ConfirmDelete);
+        assert_eq!(app.mode(), Mode::Normal);
+        assert_eq!(app.status().unwrap(), "deleted");
+        assert!(app.repo.store.get_task(id).is_err());
+        assert!(app.tasks().is_empty());
+    }
+
+    #[test]
+    fn move_reparents_task() {
+        let (mut app, child_id) = app_with_committed_task("child");
+        let parent_id = commit_task(&mut app, "parent");
+        app.reload().unwrap();
+        // Select the child.
+        let idx = app.tasks().iter().position(|s| s.task.id == child_id).unwrap();
+        app.selected = idx;
+
+        app.update(Action::OpenMove);
+        assert_eq!(app.mode(), Mode::MovePicker);
+        // Highlight the "parent" candidate.
+        let pos = app
+            .move_picker()
+            .unwrap()
+            .filtered()
+            .iter()
+            .position(|c| c.task_id == Some(parent_id))
+            .unwrap();
+        app.move_picker.as_mut().unwrap().selected = pos;
+        app.update(Action::MoveConfirm);
+
+        assert_eq!(app.status().unwrap(), "moved");
+        assert_eq!(app.repo.store.get_task(child_id).unwrap().parent_id, Some(parent_id));
+    }
+
+    #[test]
+    fn move_to_top_level_clears_parent() {
+        let (mut app, parent_id) = app_with_committed_task("parent");
+        let child_id = commit_task(&mut app, "child");
+        // Reparent the child under the parent directly in the store.
+        app.repo
+            .transaction(|store, vcs, root| {
+                let mut t = store.get_task(child_id)?;
+                t.parent_id = Some(parent_id);
+                store.save_task(&t)?;
+                let path = crate::core::storage::task_path(root, &t);
+                vcs.commit(&[path], "setup")?;
+                Ok(())
+            })
+            .unwrap();
+        app.reload().unwrap();
+
+        let idx = app.tasks().iter().position(|s| s.task.id == child_id).unwrap();
+        app.selected = idx;
+        app.update(Action::OpenMove);
+        // The top-level option is first.
+        app.move_picker.as_mut().unwrap().selected = 0;
+        assert_eq!(app.move_picker().unwrap().filtered()[0].task_id, None);
+        app.update(Action::MoveConfirm);
+        assert_eq!(app.repo.store.get_task(child_id).unwrap().parent_id, None);
+    }
+
+    #[test]
+    fn move_picker_excludes_self_and_descendants() {
+        // root → mid → leaf; moving `root` may not target root, mid, or leaf.
+        let (mut app, root_id) = app_with_committed_task("root");
+        let mid_id = commit_task(&mut app, "mid");
+        let leaf_id = commit_task(&mut app, "leaf");
+        app.repo
+            .transaction(|store, vcs, root| {
+                let mut mid = store.get_task(mid_id)?;
+                mid.parent_id = Some(root_id);
+                store.save_task(&mid)?;
+                let mut leaf = store.get_task(leaf_id)?;
+                leaf.parent_id = Some(mid_id);
+                store.save_task(&leaf)?;
+                vcs.commit(
+                    &[
+                        crate::core::storage::task_path(root, &mid),
+                        crate::core::storage::task_path(root, &leaf),
+                    ],
+                    "setup tree",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        app.update(Action::ToggleAll); // reveal parents with open children
+        app.reload().unwrap();
+
+        let idx = app.tasks().iter().position(|s| s.task.id == root_id).unwrap();
+        app.selected = idx;
+        app.update(Action::OpenMove);
+        let candidates = app.move_picker().unwrap();
+        // None of root/mid/leaf may appear as a candidate target.
+        for banned in [root_id, mid_id, leaf_id] {
+            assert!(
+                candidates
+                    .filtered()
+                    .iter()
+                    .all(|c| c.task_id != Some(banned)),
+                "descendant or self leaked into candidates"
+            );
+        }
+        // The top-level option is still available.
+        assert!(candidates.filtered().iter().any(|c| c.task_id.is_none()));
+    }
+
+    #[test]
+    fn move_rejects_descendant_target_no_cycle() {
+        // Even if a descendant id were somehow chosen, the picker never offers
+        // it; confirm the resulting parent is a non-descendant and no cycle
+        // forms. Here we move `mid` (under root) to top-level and back is safe.
+        let (mut app, root_id) = app_with_committed_task("root");
+        let mid_id = commit_task(&mut app, "mid");
+        app.repo
+            .transaction(|store, vcs, root| {
+                let mut mid = store.get_task(mid_id)?;
+                mid.parent_id = Some(root_id);
+                store.save_task(&mid)?;
+                let path = crate::core::storage::task_path(root, &mid);
+                vcs.commit(&[path], "setup")?;
+                Ok(())
+            })
+            .unwrap();
+        app.update(Action::ToggleAll); // reveal parents with open children
+        app.reload().unwrap();
+
+        // Moving root: mid must not be a candidate (would create root→mid→root).
+        let idx = app.tasks().iter().position(|s| s.task.id == root_id).unwrap();
+        app.selected = idx;
+        app.update(Action::OpenMove);
+        assert!(
+            app.move_picker()
+                .unwrap()
+                .filtered()
+                .iter()
+                .all(|c| c.task_id != Some(mid_id))
+        );
+    }
+
+    #[test]
+    fn open_url_without_url_sets_error_status() {
+        let (mut app, _id) = app_with_committed_task("no url");
+        app.update(Action::OpenUrl);
+        assert!(app.status().unwrap().contains("no URL"));
+    }
+
+    #[test]
+    fn move_picker_search_filters_candidates() {
+        let (mut app, child_id) = app_with_committed_task("child");
+        commit_task(&mut app, "alpha parent");
+        commit_task(&mut app, "beta parent");
+        app.reload().unwrap();
+        let idx = app.tasks().iter().position(|s| s.task.id == child_id).unwrap();
+        app.selected = idx;
+        app.update(Action::OpenMove);
+
+        // Type "alpha" into the search buffer; only the alpha candidate matches.
+        for ch in "alpha".chars() {
+            app.update(Action::MoveInput(KeyEvent::new(
+                KeyCode::Char(ch),
+                KeyModifiers::NONE,
+            )));
+        }
+        let filtered = app.move_picker().unwrap().filtered();
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered[0].label.contains("alpha parent"));
     }
 }

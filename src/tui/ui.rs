@@ -34,9 +34,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_body(frame, chunks[2], app);
     draw_footer(frame, chunks[3], app);
 
-    // The edit modal floats over the whole frame when active.
-    if app.mode() == Mode::Edit {
-        edit_modal::draw(frame, frame.area(), app);
+    // Modal overlays float over the whole frame when active.
+    match app.mode() {
+        Mode::Edit => edit_modal::draw(frame, frame.area(), app),
+        Mode::ConfirmDelete => confirm_popup::draw(frame, frame.area(), app),
+        Mode::MovePicker => move_popup::draw(frame, frame.area(), app),
+        Mode::Normal | Mode::Filter => {}
     }
 }
 
@@ -493,12 +496,14 @@ fn wrap_lines(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let hint = match app.mode() {
         Mode::Normal => {
-            "q quit  j/k nav  g/G first/last  PgUp/PgDn scroll  r reload  e edit  / filter  A all  F future  U all-users"
+            "q quit  j/k nav  r reload  e edit  d done  s start/stop  c cancel  m move  o open  x del  / filter  A/F/U flags"
         }
         Mode::Filter => "Enter apply  Esc cancel",
         Mode::Edit => {
             "Tab/↑↓ field  Space/←→ toggle  Enter commit (tag/data)  Ctrl-S save  Esc cancel"
         }
+        Mode::ConfirmDelete => "y/Enter delete  n/Esc cancel",
+        Mode::MovePicker => "type to search  ↑↓ select  Enter move  Esc cancel",
     };
     let mut spans = vec![Span::styled(hint, Style::default().add_modifier(Modifier::DIM))];
     if let Some(status) = app.status() {
@@ -681,6 +686,110 @@ mod edit_modal {
     }
 }
 
+/// The delete-confirmation popup: a small centered box showing the task title
+/// with a `y/N` prompt.
+mod confirm_popup {
+    use ratatui::Frame;
+    use ratatui::layout::Rect;
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+
+    use crate::tui::app::App;
+
+    use super::centered_rect;
+
+    pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
+        let Some(task) = app.selected_task() else {
+            return;
+        };
+
+        let popup = centered_rect(60, 30, area);
+        frame.render_widget(Clear, popup);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" delete task ")
+            .border_style(Style::default().fg(Color::Red));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let lines = vec![
+            Line::from(Span::raw("Delete this task?")),
+            Line::from(Span::styled(
+                task.title.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("y/Enter", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::raw(" delete    "),
+                Span::styled("n/Esc", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" cancel"),
+            ]),
+        ];
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    }
+}
+
+/// The move (parent-picker) popup: a search line over a scrollable list of
+/// candidate parents (the moved task and its descendants are already excluded).
+mod move_popup {
+    use ratatui::Frame;
+    use ratatui::layout::{Constraint, Direction, Layout, Rect};
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+
+    use crate::tui::app::App;
+
+    use super::centered_rect;
+
+    pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
+        let Some(picker) = app.move_picker() else {
+            return;
+        };
+
+        let popup = centered_rect(70, 70, area);
+        frame.render_widget(Clear, popup);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" move: pick new parent  (Enter move · Esc cancel) ")
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(inner);
+
+        // Search line.
+        let search = Line::from(vec![
+            Span::styled("search: ", Style::default().fg(Color::Yellow)),
+            Span::raw(picker.query().value().to_owned()),
+        ]);
+        frame.render_widget(Paragraph::new(search), rows[0]);
+
+        // Candidate list (filtered by the query).
+        let items: Vec<ListItem> = picker
+            .filtered()
+            .iter()
+            .map(|c| ListItem::new(Line::from(Span::raw(c.label.clone()))))
+            .collect();
+        let list = List::new(items)
+            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        let mut state = ListState::default();
+        if picker.filtered().is_empty() {
+            state.select(None);
+        } else {
+            state.select(Some(picker.selected()));
+        }
+        frame.render_stateful_widget(list, rows[1], &mut state);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -777,6 +886,29 @@ mod tests {
         app.update(Action::OpenEdit);
         assert_eq!(app.mode(), Mode::Edit);
         let backend = TestBackend::new(100, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    }
+
+    #[test]
+    fn renders_delete_confirm_popup_without_panicking() {
+        let mut app = app_with_tasks(vec![Task::new("delete me")]);
+        app.update(Action::OpenDelete);
+        assert_eq!(app.mode(), Mode::ConfirmDelete);
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    }
+
+    #[test]
+    fn renders_move_picker_without_panicking() {
+        let mut app = app_with_tasks(vec![
+            Task::new("child"),
+            Task::new("candidate parent"),
+        ]);
+        app.update(Action::OpenMove);
+        assert_eq!(app.mode(), Mode::MovePicker);
+        let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }
