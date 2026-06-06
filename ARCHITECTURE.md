@@ -77,7 +77,8 @@ next/                             # crate root (also git repo)
       domain/                     # pure domain types (no I/O)
         mod.rs  task.rs  state.rs  tag.rs  filter.rs  date_parse.rs
       storage/                    # local TOML + SQLite + git backend
-        mod.rs                    # open(), task_path(), state_path_for_repo(), plugins_path_for_repo(), load_scoring()
+        mod.rs                    # open(), task_path(), state_path_for_repo(), load_scoring()
+        machine_state.rs          # MachineState (combined state.toml) + load_/update_machine_state
         filenames.rs  lock.rs (FileLock)  toml_store.rs  cached_store.rs  git_backend.rs
       plugin/                     # export hook (machine-local plugins registry + notify)
         mod.rs  registry.rs  notify.rs
@@ -290,19 +291,31 @@ are no separate metadata commands for contexts or resources — use `next tag de
 and `next resource` commands only manage the machine-local active-context / resource-availability
 state stored in `state.toml`; they do not touch tag metadata.
 
-Machine-local state (active contexts, active users, resource availability) is stored at
-`$XDG_STATE_HOME/task-manager/<fnv1a-hash-of-canonical-repo-path>/state.toml`.  This
-path is computed by `next::storage::state_path_for_repo(root)` and is never committed to
-git.  A separate advisory lock file co-located with `state.toml` (`.state.toml.lock`)
-guards concurrent writes.
+All machine-local state lives in a single `state.toml` at
+`$XDG_STATE_HOME/task-manager/<fnv1a-hash-of-canonical-repo-path>/state.toml`, computed by
+`next::storage::state_path_for_repo(root)` and never committed to git.  It holds three
+sections (see `storage/machine_state.rs`, `MachineState`):
 
-Two one-time migrations run on `TomlStore::open()`:
+* the global runtime state — active contexts, excluded contexts, resource availability,
+  active users — flattened at the top level (unchanged on-disk format);
+* the plugin registry as a `[[plugin]]` array;
+* the sync state under `[sync]` (`last_pull` plus per-plugin `last_sync`).
+
+`load_machine_state` / `update_machine_state` are the read / locked-read-modify-write
+primitives all three subsystems (`TomlStore` global state, `plugin::registry`,
+`sync_state`) share, so none can clobber another's section. A single advisory lock file
+co-located with `state.toml` (`.state.toml.lock`) guards every machine-local write.
+
+Three one-time migrations run on `TomlStore::open()`:
 1. **State file migration**: if `<repo>/state.toml` exists and the XDG path does not,
    the file is moved to the XDG location.
 2. **Tag description migration**: if `state.toml` contains a legacy `[tag_descriptions]`
    table, each entry is extracted to its own file under `tags/` and the table is removed.
+3. **Machine-file merge**: if the former separate `plugins.toml` / `sync_state.toml` exist
+   in the state dir, their contents are folded into `state.toml`'s `[[plugin]]` / `[sync]`
+   sections and the old files are deleted.
 
-Both migrations are idempotent (subsequent opens are no-ops).
+All migrations are idempotent (subsequent opens are no-ops).
 
 **`GitBackend`** wraps `Mutex<git2::Repository>` to satisfy `Send + Sync`. Commit
 messages follow the pattern `next: <verb> "<task title>"`.
@@ -428,9 +441,11 @@ mechanisms keep this safe:
    `save_task` / `commit` / `save_state` calls re-acquire it. A process-global registry
    maps each lock-file path to one in-process gate (owner thread + recursion depth)
    layered over the OS lock — plain `flock` is per open-file-description and would
-   otherwise self-deadlock on the second acquire. Three *separate* instances are used: the
+   otherwise self-deadlock on the second acquire. Two *separate* instances are used: the
    **repo lock** (`<repo>/.next.lock`, shared by `TomlStore` task/tag writes and
-   `GitBackend` commit/pull/push), the **state lock**, and the **plugins lock** (see below).
+   `GitBackend` commit/pull/push) and the **state lock** (`.state.toml.lock`), which now
+   guards *all* machine-local writes — global state, plugin registry, and sync state —
+   since they share one `state.toml` (see below).
 
 2. **Repository mutation transactions** (`TaskRepository::transaction`, built on
    `service::begin_mutation` / `end_mutation`). Every task or tag mutation holds the repo
@@ -440,12 +455,17 @@ mechanisms keep this safe:
    processes' commits; on exit it records the new HEAD (`Store::note_head`) so the next
    transaction does not rebuild needlessly.
 
-3. **State mutation transactions** (`TaskRepository::state_transaction`). Machine-local state
-   (active contexts, excluded contexts, active users, resource availability) lives outside
-   the git repository, so it has its own lock — `.state.toml.lock` next to the state file.
-   Each `next context` / `resource` / `user` (and the matching MCP tool) holds this
-   exclusive lock across its `get_state` → modify → `save_state`, closing the same
-   lost-update window. No HEAD reconciliation, since state is never committed to git.
+3. **State mutation transactions** (`TaskRepository::state_transaction`). All machine-local
+   state lives outside the git repository in one `state.toml`, so it has its own lock —
+   `.state.toml.lock` next to the state file. This single lock now serialises every
+   machine-local write: the global state (active contexts, excluded contexts, active users,
+   resource availability), the plugin registry, and the sync state. Each writer does a
+   locked read-modify-write of the whole file via `load_machine_state` /
+   `update_machine_state` (`storage/machine_state.rs`), so e.g. a `save_state` cannot drop a
+   concurrently-added plugin and vice versa. Each `next context` / `resource` / `user` (and
+   the matching MCP tool) holds this exclusive lock across its `get_state` → modify →
+   `save_state`, closing the same lost-update window. No HEAD reconciliation, since state is
+   never committed to git.
 
 4. **SQLite WAL + busy_timeout** (`CachedStore::configure_connection`). `.next.db` is a
    single file shared by all processes; WAL lets readers and a writer proceed
@@ -456,21 +476,25 @@ mechanisms keep this safe:
 5. **Plugin notification** (`plugin::notify`, see §6.4). Subscribed plugins are spawned
    only at the post-mutation chokepoints (`main.rs` after autosync; MCP `tools::dispatch`
    after the tool runs), i.e. **after the repo lock is released** — a plugin typically
-   calls back into `next` and would otherwise deadlock. The plugins registry has its own
-   `.plugins.toml.lock`, taken only there and during `next plugin` edits.
+   calls back into `next` and would otherwise deadlock. The plugin registry now lives in
+   `state.toml`, so registry reads/writes (during notification and `next plugin` edits)
+   take the shared state lock.
 
-The three locks are independent files and never block one another. When a path takes more
-than one, the ordering is always repo-lock-before-state/plugins-lock, never the reverse, so
-they cannot deadlock. `tests/locking.rs` covers lost-update prevention for task, state, and
-plugin-subscription edits, slug-conflict races, and pull/commit coordination; re-entrant
-lock unit tests live in `src/core/storage/lock.rs`.
+The two locks are independent files and never block one another. When a path takes both,
+the ordering is always repo-lock-before-state-lock, never the reverse, so they cannot
+deadlock. `tests/locking.rs` covers lost-update prevention for task, state, and
+plugin-subscription edits, the cross-section non-clobbering of the shared `state.toml`,
+slug-conflict races, and pull/commit coordination; re-entrant lock unit tests live in
+`src/core/storage/lock.rs`.
 
 ### 6.4 Plugins (export hook)
 
 External plugin binaries subscribe to individual tasks and are notified when those tasks
-change. The registry (`plugin::registry`) is machine-local — `plugins.toml` in the per-repo
-state dir (`storage::plugins_path_for_repo`), never committed — each entry being
+change. The registry (`plugin::registry`) is machine-local — the `[[plugin]]` section of
+the combined `state.toml` in the per-repo state dir, never committed — each entry being
 `{ name, command: argv, tasks: [uuid] }`, managed by the `next plugin` subcommands.
+Registry reads/writes go through the shared `storage::machine_state` helpers under the
+single state lock, so they cannot clobber the global or sync sections of the file.
 
 Each task-mutating handler records a `(verb, task_id)` `TaskEvent` on `TaskRepository` after its
 transaction returns. The CLI (`main.rs`) and MCP (`tools::dispatch`) chokepoints drain the
@@ -696,7 +720,7 @@ non-zero exit code.
 | `GitBackend` | `src/core/storage/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
 | `CachedStore` | `src/core/storage/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |
 | Cache sync | `tests/cache_sync.rs` | Integration tests: write-through consistency (SQLite ↔ TOML), git pull propagation (HEAD change triggers rebuild), cache-reuse (same HEAD = no rebuild) |
-| Migration | `tests/migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next::storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens |
+| Migration | `tests/migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next::storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens; plus the machine-file merge (legacy `plugins.toml` + `sync_state.toml` folded into `state.toml`, old files deleted, second open a no-op) |
 | File locking | `tests/locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption, including transactional lost-update prevention (N processes each add a distinct tag to one task; all must survive). Re-entrant lock unit tests live in `src/core/storage/lock.rs` |
 | CLI commands | `tests/test_*.rs` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |
 | MCP unit tests | `src/mcp/tools/*.rs` | Unit tests per tool module using a real `TaskRepository` in a `tempdir` git repo (requires `--features mcp`) |

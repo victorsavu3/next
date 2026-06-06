@@ -392,7 +392,7 @@ next plugin list
 
 A plugin typically registers itself: after importing an external item as a task, it runs
 `next plugin watch <name> <task-id>` so it learns about later changes. Registrations are
-**machine-local** — stored in `plugins.toml` beside the state file under
+**machine-local** — stored in the `[[plugin]]` section of `state.toml` under
 `$XDG_STATE_HOME/task-manager/<hash>/`, never committed to git (plugin binaries are
 per-machine).
 

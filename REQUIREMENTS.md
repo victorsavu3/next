@@ -572,10 +572,11 @@ default, like `mcp`) and link the `next` library directly.
 - Registration is performed via `next plugin …` CLI commands: `register <name> -- <argv>`
   (define/replace a plugin's command, preserving subscriptions), `watch`/`unwatch <name>
   <task>`, `unregister <name>`, and `list`.
-- The registry MUST be machine-local — stored as `plugins.toml` in the per-repo state
-  directory (`$XDG_STATE_HOME/task-manager/<hash>/`), never committed to git, guarded by
-  its own lock (`.plugins.toml.lock`) independent of the repo and state locks. Plugin
-  commands are stored as argv (never shell-parsed).
+- The registry MUST be machine-local — stored in the `[[plugin]]` section of the combined
+  `state.toml` in the per-repo state directory (`$XDG_STATE_HOME/task-manager/<hash>/`),
+  never committed to git, guarded by the single machine-local state lock
+  (`.state.toml.lock`) shared with the global and sync state, independent of the repo lock.
+  Plugin commands are stored as argv (never shell-parsed).
 
 ### 10.2 Notification
 
