@@ -39,6 +39,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Edit => edit_modal::draw(frame, frame.area(), app),
         Mode::ConfirmDelete => confirm_popup::draw(frame, frame.area(), app),
         Mode::MovePicker => move_popup::draw(frame, frame.area(), app),
+        Mode::StatePanel => state_popup::draw(frame, frame.area(), app),
         Mode::Normal | Mode::Filter => {}
     }
 }
@@ -511,12 +512,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let hint = match app.mode() {
         Mode::Normal => match app.view() {
             View::List => {
-                "q quit  1/2/3 view  j/k nav  e edit  d done  s start/stop  c cancel  m move  o open  x del  / filter  A/F/U flags"
+                "q quit  1/2/3 view  j/k nav  e edit  d done  s start/stop  c cancel  m move  o open  x del  / filter  A/F/U flags  S state  y sync"
             }
             View::Tree => {
-                "q quit  1/2/3 view  j/k nav  ←/→ fold  Space toggle  . all  e edit  d done  s start  m move  x del  / filter"
+                "q quit  1/2/3 view  j/k nav  ←/→ fold  Space toggle  . all  e edit  d done  s start  m move  x del  / filter  S state  y sync"
             }
-            View::Forecast => "q quit  1/2/3 view  +/- horizon  r reload  / filter  A/F/U flags",
+            View::Forecast => {
+                "q quit  1/2/3 view  +/- horizon  r reload  / filter  A/F/U flags  S state  y sync"
+            }
         },
         Mode::Filter => "Enter apply  Esc cancel",
         Mode::Edit => {
@@ -524,6 +527,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         }
         Mode::ConfirmDelete => "y/Enter delete  n/Esc cancel",
         Mode::MovePicker => "type to search  ↑↓ select  Enter move  Esc cancel",
+        Mode::StatePanel => {
+            "Tab section  j/k nav  Space/a toggle  x exclude (ctx)  C clear  Esc close"
+        }
     };
     let mut spans = vec![Span::styled(hint, Style::default().add_modifier(Modifier::DIM))];
     if let Some(status) = app.status() {
@@ -807,6 +813,177 @@ mod move_popup {
             state.select(Some(picker.selected()));
         }
         frame.render_stateful_widget(list, rows[1], &mut state);
+    }
+}
+
+/// The state-management popup: three stacked sections (Contexts / Resources /
+/// Users), the focused one highlighted, each row showing its toggle state. The
+/// highlighted row within the focused section is reversed.
+mod state_popup {
+    use ratatui::Frame;
+    use ratatui::layout::{Constraint, Direction, Layout, Rect};
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+
+    use crate::tui::app::App;
+    use crate::tui::state_panel::{Section, StatePanel};
+
+    pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
+        let Some(panel) = app.state_panel() else {
+            return;
+        };
+
+        let popup = centered(area);
+        frame.render_widget(Clear, popup);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" machine-local state  (Tab section · Esc close) ")
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        // Three equal-ish stacked sections.
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(40),
+                Constraint::Percentage(30),
+                Constraint::Percentage(30),
+            ])
+            .split(inner);
+
+        draw_contexts(frame, rows[0], panel);
+        draw_resources(frame, rows[1], panel);
+        draw_users(frame, rows[2], panel);
+    }
+
+    /// A 80%×80% centered popup.
+    fn centered(area: Rect) -> Rect {
+        super::centered_rect(80, 80, area)
+    }
+
+    /// A section block whose border/title is emphasised when it holds focus.
+    fn section_block(label: &str, focused: bool) -> Block<'static> {
+        let (border, title_style) = if focused {
+            (Color::Cyan, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        } else {
+            (Color::DarkGray, Style::default().add_modifier(Modifier::DIM))
+        };
+        Block::default()
+            .borders(Borders::ALL)
+            .title(Span::styled(format!(" {label} "), title_style))
+            .border_style(Style::default().fg(border))
+    }
+
+    fn render_section(
+        frame: &mut Frame,
+        area: Rect,
+        block: Block<'static>,
+        focused: bool,
+        selected: usize,
+        items: Vec<ListItem<'static>>,
+    ) {
+        if items.is_empty() {
+            let p = Paragraph::new("(none)")
+                .block(block)
+                .style(Style::default().add_modifier(Modifier::DIM));
+            frame.render_widget(p, area);
+            return;
+        }
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        let mut state = ListState::default();
+        // Only show the highlight in the focused section.
+        state.select(focused.then_some(selected));
+        frame.render_stateful_widget(list, area, &mut state);
+    }
+
+    fn draw_contexts(frame: &mut Frame, area: Rect, panel: &StatePanel) {
+        let focused = panel.section == Section::Contexts;
+        let items: Vec<ListItem> = panel
+            .contexts
+            .iter()
+            .map(|r| {
+                let mut spans = vec![Span::raw(r.tag.clone())];
+                if r.active {
+                    spans.push(Span::styled(
+                        "  [active]",
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    ));
+                }
+                if r.excluded {
+                    spans.push(Span::styled(
+                        "  [excluded]",
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
+            })
+            .collect();
+        render_section(
+            frame,
+            area,
+            section_block("Contexts (a active · x excluded · C clear)", focused),
+            focused,
+            panel.ctx_idx,
+            items,
+        );
+    }
+
+    fn draw_resources(frame: &mut Frame, area: Rect, panel: &StatePanel) {
+        let focused = panel.section == Section::Resources;
+        let items: Vec<ListItem> = panel
+            .resources
+            .iter()
+            .map(|r| {
+                let (label, style) = if r.available {
+                    ("available", Style::default().fg(Color::Green))
+                } else {
+                    ("unavailable", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                };
+                ListItem::new(Line::from(vec![
+                    Span::raw(format!("{:<22} ", r.tag)),
+                    Span::styled(label, style),
+                ]))
+            })
+            .collect();
+        render_section(
+            frame,
+            area,
+            section_block("Resources (Space toggle availability)", focused),
+            focused,
+            panel.res_idx,
+            items,
+        );
+    }
+
+    fn draw_users(frame: &mut Frame, area: Rect, panel: &StatePanel) {
+        let focused = panel.section == Section::Users;
+        let items: Vec<ListItem> = panel
+            .users
+            .iter()
+            .map(|r| {
+                let mut spans = vec![Span::raw(r.name.clone())];
+                if r.active {
+                    spans.push(Span::styled(
+                        "  [active]",
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
+            })
+            .collect();
+        render_section(
+            frame,
+            area,
+            section_block("Users (Space toggle · C clear)", focused),
+            focused,
+            panel.user_idx,
+            items,
+        );
     }
 }
 
@@ -1192,6 +1369,19 @@ mod tests {
         let mut app = app_with_tasks(vec![due]);
         app.update(Action::SwitchView(View::Forecast));
         assert_eq!(app.view(), View::Forecast);
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    }
+
+    #[test]
+    fn renders_state_panel_without_panicking() {
+        let mut alice = Task::new("alice task");
+        alice.tags = vec!["@work".to_owned(), "#printer".to_owned()];
+        alice.assignee = Some("alice".to_owned());
+        let mut app = app_with_tasks(vec![alice]);
+        app.update(Action::OpenStatePanel);
+        assert_eq!(app.mode(), Mode::StatePanel);
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();

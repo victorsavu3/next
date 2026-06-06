@@ -7,6 +7,7 @@
 //! event loop.
 
 use std::collections::HashMap;
+use std::sync::mpsc::{self, Receiver, Sender};
 
 use chrono::NaiveDate;
 
@@ -22,6 +23,8 @@ use crate::core::{FilterArgs, TaskRepository};
 use crate::Config;
 
 use super::config::ConfigSource;
+use super::state_panel::{Section, StatePanel};
+use super::sync::{SyncMsg, SyncResult};
 
 /// How many lines a single PageUp/PageDown (or Ctrl-u/Ctrl-d) moves the detail
 /// pane. A fixed step keeps the action self-contained; the draw layer clamps it
@@ -84,6 +87,8 @@ pub enum Mode {
     ConfirmDelete,
     /// Picking a new parent for the selected task in a searchable list.
     MovePicker,
+    /// Viewing/editing machine-local state (contexts/resources/users) in a popup.
+    StatePanel,
 }
 
 /// A discrete state transition produced by [`App::handle_key`] and applied by
@@ -183,6 +188,31 @@ pub enum Action {
     ForecastWiden,
     /// In [`View::Forecast`]: narrow the forecast horizon.
     ForecastNarrow,
+
+    /// Open the machine-local state panel (contexts / resources / users).
+    OpenStatePanel,
+    /// While in [`Mode::StatePanel`]: focus the next section.
+    StateSectionNext,
+    /// While in [`Mode::StatePanel`]: focus the previous section.
+    StateSectionPrev,
+    /// While in [`Mode::StatePanel`]: move the highlight down within the section.
+    StateNext,
+    /// While in [`Mode::StatePanel`]: move the highlight up within the section.
+    StatePrev,
+    /// While in [`Mode::StatePanel`]: primary toggle on the highlighted row
+    /// (context active / resource availability / user membership).
+    StateToggle,
+    /// While in [`Mode::StatePanel`]: secondary toggle — only contexts use it,
+    /// to toggle the highlighted context's *excluded* flag.
+    StateToggleExcluded,
+    /// While in [`Mode::StatePanel`]: clear the focused section's set
+    /// (active+excluded contexts / all users; no-op for resources).
+    StateClear,
+    /// Close the state panel and return to [`Mode::Normal`].
+    StateClose,
+
+    /// Trigger a background sync (no-op if one is already in flight).
+    SyncNow,
 }
 
 /// Everything the detail pane needs for one task, resolved from the cached
@@ -293,10 +323,19 @@ pub struct App {
     edit_form: Option<super::edit::EditForm>,
     /// The live move (parent-picker) state, present only in [`Mode::MovePicker`].
     move_picker: Option<MovePicker>,
+    /// The live state-management panel, present only in [`Mode::StatePanel`].
+    state_panel: Option<StatePanel>,
     /// A transient status message shown in the footer.
     status: Option<String>,
     /// Set when the user asks to quit; the event loop checks this.
     should_quit: bool,
+
+    /// True while a background sync worker is in flight; guards against starting
+    /// a second concurrent sync.
+    syncing: bool,
+    /// Receiver for the in-flight sync worker's result, drained each tick by
+    /// [`App::poll_sync`]. `None` when no sync is running.
+    sync_rx: Option<Receiver<SyncMsg>>,
 }
 
 impl App {
@@ -325,8 +364,11 @@ impl App {
             mode: Mode::Normal,
             edit_form: None,
             move_picker: None,
+            state_panel: None,
             status: None,
             should_quit: false,
+            syncing: false,
+            sync_rx: None,
         }
     }
 
@@ -414,6 +456,17 @@ impl App {
     /// popup. Present only while in [`Mode::MovePicker`].
     pub fn move_picker(&self) -> Option<&MovePicker> {
         self.move_picker.as_ref()
+    }
+
+    /// The live state-management panel, for the drawing layer to render the
+    /// popup. Present only while in [`Mode::StatePanel`].
+    pub fn state_panel(&self) -> Option<&StatePanel> {
+        self.state_panel.as_ref()
+    }
+
+    /// Whether a background sync is currently in flight (for the footer hint).
+    pub fn syncing(&self) -> bool {
+        self.syncing
     }
 
     /// The scored, sorted, currently-visible tasks.
@@ -601,6 +654,7 @@ impl App {
             Mode::Edit => self.edit_key(key),
             Mode::ConfirmDelete => Self::confirm_delete_key(key),
             Mode::MovePicker => Self::move_picker_key(key),
+            Mode::StatePanel => Self::state_panel_key(key),
         }
     }
 
@@ -617,6 +671,10 @@ impl App {
             KeyCode::Char('3') => Some(Action::SwitchView(View::Forecast)),
             KeyCode::Char('r') => Some(Action::Reload),
             KeyCode::Char('/') => Some(Action::OpenFilter),
+            // `S` (uppercase) opens the state panel; lowercase `s` is start/stop.
+            KeyCode::Char('S') => Some(Action::OpenStatePanel),
+            // `y` triggers a background sync (avoids `s`/`r`).
+            KeyCode::Char('y') => Some(Action::SyncNow),
             _ => None,
         }
     }
@@ -750,6 +808,24 @@ impl App {
         }
     }
 
+    /// Key mapping for the state-management panel. `Esc`/`q`/`S` closes; `Tab`
+    /// cycles sections; `j/k` (and arrows) move within a section; `Space`/Enter
+    /// applies the primary toggle; `x` toggles a context's excluded flag; `C`
+    /// clears the focused section.
+    fn state_panel_key(key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('S') => Some(Action::StateClose),
+            KeyCode::Tab => Some(Action::StateSectionNext),
+            KeyCode::BackTab => Some(Action::StateSectionPrev),
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::StateNext),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::StatePrev),
+            KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Char('a') => Some(Action::StateToggle),
+            KeyCode::Char('x') => Some(Action::StateToggleExcluded),
+            KeyCode::Char('C') => Some(Action::StateClear),
+            _ => None,
+        }
+    }
+
     /// Key mapping for the edit modal. Modal-level keys (save/cancel/field
     /// navigation) win; everything else is routed to the focused field.
     ///
@@ -879,6 +955,38 @@ impl App {
                 self.forecast_view.narrow(30);
                 self.status = Some(format!("horizon {} days", self.forecast_view.horizon()));
             }
+
+            Action::OpenStatePanel => self.open_state_panel(),
+            Action::StateSectionNext => {
+                if let Some(p) = self.state_panel.as_mut() {
+                    p.focus_next();
+                }
+            }
+            Action::StateSectionPrev => {
+                if let Some(p) = self.state_panel.as_mut() {
+                    p.focus_prev();
+                }
+            }
+            Action::StateNext => {
+                if let Some(p) = self.state_panel.as_mut() {
+                    p.select_next();
+                }
+            }
+            Action::StatePrev => {
+                if let Some(p) = self.state_panel.as_mut() {
+                    p.select_prev();
+                }
+            }
+            Action::StateToggle => self.state_toggle(),
+            Action::StateToggleExcluded => self.state_toggle_excluded(),
+            Action::StateClear => self.state_clear(),
+            Action::StateClose => {
+                self.state_panel = None;
+                self.mode = Mode::Normal;
+                self.status = None;
+            }
+
+            Action::SyncNow => self.start_sync(),
         }
     }
 
@@ -1323,6 +1431,240 @@ impl App {
         }
     }
 
+    // ── State-management panel ────────────────────────────────────────────
+    //
+    // The panel reads the current `GlobalState`, presents discovered+stored
+    // contexts/resources/users, and applies toggles via `state_transaction`
+    // (the same lock the CLI's context/resource/user commands use). After each
+    // mutation the list reloads (so the context/resource/user filters take
+    // effect immediately) and the panel is rebuilt from the fresh state.
+
+    /// Opens the state panel, building it from the current state + cached tasks.
+    fn open_state_panel(&mut self) {
+        let state = match self.repo.store().get_state() {
+            Ok(s) => s,
+            Err(e) => {
+                self.status = Some(format!("state error: {e}"));
+                return;
+            }
+        };
+        self.state_panel = Some(StatePanel::build(&self.all_tasks, &state));
+        self.mode = Mode::StatePanel;
+        self.status = None;
+    }
+
+    /// Rebuilds the open panel from a freshly read state (after a mutation).
+    fn refresh_state_panel(&mut self) {
+        let Ok(state) = self.repo.store().get_state() else {
+            return;
+        };
+        let all_tasks = self.all_tasks.clone();
+        if let Some(panel) = self.state_panel.as_mut() {
+            panel.refresh(&all_tasks, &state);
+        }
+    }
+
+    /// Applies a `state_transaction` mutation, then (on success) reloads the
+    /// list and rebuilds the panel. Surfaces validation/store errors in the
+    /// status line without closing the panel.
+    fn apply_state_mutation<F>(&mut self, ok_msg: String, mutate: F)
+    where
+        F: FnOnce(&mut crate::core::domain::state::GlobalState) -> Result<(), String>,
+    {
+        let result = self.repo.state_transaction(|store| {
+            let mut state = store.get_state()?;
+            mutate(&mut state).map_err(|e| anyhow::anyhow!("{e}"))?;
+            store.save_state(&state)?;
+            Ok(())
+        });
+        match result {
+            Ok(()) => {
+                // The context/resource/user filters feed the list pipeline, so
+                // reload to reflect the change immediately.
+                if let Err(e) = self.reload() {
+                    self.status = Some(format!("{ok_msg}; reload failed: {e}"));
+                } else {
+                    self.status = Some(ok_msg);
+                }
+                self.refresh_state_panel();
+            }
+            Err(e) => self.status = Some(format!("state error: {e}")),
+        }
+    }
+
+    /// Primary toggle on the highlighted row of the focused section:
+    /// * Contexts → toggle the context's membership in `active_contexts`.
+    /// * Resources → toggle the resource's availability.
+    /// * Users → toggle the user's membership in `active_users`.
+    fn state_toggle(&mut self) {
+        let Some(panel) = self.state_panel.as_ref() else {
+            return;
+        };
+        match panel.section {
+            Section::Contexts => {
+                let Some(row) = panel.selected_context() else {
+                    return;
+                };
+                let tag = row.tag.clone();
+                let now_active = !row.active;
+                let msg = if now_active {
+                    format!("context {tag} active")
+                } else {
+                    format!("context {tag} inactive")
+                };
+                self.apply_state_mutation(msg, move |state| {
+                    crate::core::domain::tag::validate_context_tag(&tag)?;
+                    toggle_vec(&mut state.active_contexts, &tag, now_active);
+                    Ok(())
+                });
+            }
+            Section::Resources => {
+                let Some(row) = panel.selected_resource() else {
+                    return;
+                };
+                let tag = row.tag.clone();
+                let now_available = !row.available;
+                let msg = if now_available {
+                    format!("resource {tag} available")
+                } else {
+                    format!("resource {tag} unavailable")
+                };
+                self.apply_state_mutation(msg, move |state| {
+                    crate::core::domain::tag::validate_resource_tag(&tag)?;
+                    let bare = tag.trim_start_matches('#').to_owned();
+                    state.resources.insert(bare, now_available);
+                    Ok(())
+                });
+            }
+            Section::Users => {
+                let Some(row) = panel.selected_user() else {
+                    return;
+                };
+                let name = row.name.clone();
+                let now_active = !row.active;
+                let msg = if now_active {
+                    format!("user {name} active")
+                } else {
+                    format!("user {name} inactive")
+                };
+                self.apply_state_mutation(msg, move |state| {
+                    toggle_vec(&mut state.active_users, &name, now_active);
+                    Ok(())
+                });
+            }
+        }
+    }
+
+    /// Secondary toggle: only contexts use it, to toggle the highlighted
+    /// context's membership in `excluded_contexts`. A no-op for the other
+    /// sections (with a hint).
+    fn state_toggle_excluded(&mut self) {
+        let Some(panel) = self.state_panel.as_ref() else {
+            return;
+        };
+        if panel.section != Section::Contexts {
+            self.status = Some("exclude toggle applies to contexts only".to_owned());
+            return;
+        }
+        let Some(row) = panel.selected_context() else {
+            return;
+        };
+        let tag = row.tag.clone();
+        let now_excluded = !row.excluded;
+        let msg = if now_excluded {
+            format!("context {tag} excluded")
+        } else {
+            format!("context {tag} not excluded")
+        };
+        self.apply_state_mutation(msg, move |state| {
+            crate::core::domain::tag::validate_context_tag(&tag)?;
+            toggle_vec(&mut state.excluded_contexts, &tag, now_excluded);
+            Ok(())
+        });
+    }
+
+    /// Clears the focused section's set: contexts clear both active and excluded;
+    /// users clear the active filter. Resources have no "clear" (availability is
+    /// a per-resource bool), so this is a no-op there with a hint.
+    fn state_clear(&mut self) {
+        let Some(panel) = self.state_panel.as_ref() else {
+            return;
+        };
+        match panel.section {
+            Section::Contexts => self.apply_state_mutation("contexts cleared".to_owned(), |state| {
+                state.active_contexts.clear();
+                state.excluded_contexts.clear();
+                Ok(())
+            }),
+            Section::Users => self.apply_state_mutation("users cleared".to_owned(), |state| {
+                state.active_users.clear();
+                Ok(())
+            }),
+            Section::Resources => {
+                self.status = Some("nothing to clear for resources".to_owned());
+            }
+        }
+    }
+
+    // ── Background sync ───────────────────────────────────────────────────
+
+    /// Triggers a background sync, unless one is already in flight. Opens a
+    /// second repository handle on a worker thread (so the App's `repo` is never
+    /// moved across threads) and stores the result receiver for [`App::poll_sync`].
+    fn start_sync(&mut self) {
+        if self.syncing {
+            self.status = Some("sync already in progress…".to_owned());
+            return;
+        }
+        let (tx, rx): (Sender<SyncMsg>, Receiver<SyncMsg>) = mpsc::channel();
+        let root = self.repo.repo_root.clone();
+        let config = self.config.clone();
+        super::sync::spawn(root, config, tx);
+        self.sync_rx = Some(rx);
+        self.syncing = true;
+        self.status = Some("syncing…".to_owned());
+    }
+
+    /// Drains a finished background sync result (if any). Called each tick by
+    /// the event loop. On a clean sync the list reloads to pick up pulled
+    /// changes; conflicts/errors land in the status line. Clears the syncing
+    /// flag once a result arrives.
+    pub fn poll_sync(&mut self) {
+        let Some(rx) = self.sync_rx.as_ref() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(msg) => {
+                self.sync_rx = None;
+                self.syncing = false;
+                self.handle_sync_result(SyncResult::from_msg(msg));
+            }
+            // Still running: leave the receiver in place for the next tick.
+            Err(mpsc::TryRecvError::Empty) => {}
+            // The worker dropped the sender without sending (shouldn't happen):
+            // treat as finished so we don't get stuck in the syncing state.
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.sync_rx = None;
+                self.syncing = false;
+                self.status = Some("sync error: worker disconnected".to_owned());
+            }
+        }
+    }
+
+    /// Applies a folded [`SyncResult`]: sets the status and reloads when the
+    /// result asks for it (a clean sync may have pulled new tasks). Split out so
+    /// the message handling is unit-testable without spawning a real sync.
+    fn handle_sync_result(&mut self, result: SyncResult) {
+        if result.reload {
+            match self.reload() {
+                Ok(()) => self.status = Some(result.status),
+                Err(e) => self.status = Some(format!("{}; reload failed: {e}", result.status)),
+            }
+        } else {
+            self.status = Some(result.status);
+        }
+    }
+
     /// Runs [`App::reload`], reporting either `ok_msg` or the error into the
     /// status line. On error the previous list is preserved (see [`App::reload`]).
     fn reload_with_status(&mut self, ok_msg: &str) {
@@ -1426,6 +1768,19 @@ impl App {
         if self.detail_scroll > max {
             self.detail_scroll = max;
         }
+    }
+}
+
+/// Adds or removes `value` from `vec` to match `present`, preserving order and
+/// avoiding duplicates. Used by the state panel to toggle membership in the
+/// active/excluded context and active-user lists.
+fn toggle_vec(vec: &mut Vec<String>, value: &str, present: bool) {
+    if present {
+        if !vec.iter().any(|v| v == value) {
+            vec.push(value.to_owned());
+        }
+    } else {
+        vec.retain(|v| v != value);
     }
 }
 
@@ -2182,6 +2537,213 @@ mod tests {
         app.reload().unwrap();
         let titles: Vec<String> = app.forecast_entries().into_iter().map(|e| e.title).collect();
         assert_eq!(titles, vec!["tagged".to_owned()]);
+    }
+
+    // ── state panel + sync (T9) ─────────────────────────────────────────────
+
+    use crate::tui::state_panel::Section;
+    use crate::tui::sync::SyncResult;
+
+    /// A task tagged with the given context/resource tags and optional assignee.
+    fn tagged_task(title: &str, tags: &[&str], assignee: Option<&str>) -> Task {
+        let mut t = Task::new(title.to_owned());
+        t.tags = tags.iter().map(|s| s.to_string()).collect();
+        t.assignee = assignee.map(str::to_owned);
+        t
+    }
+
+    #[test]
+    fn open_state_panel_builds_from_tasks_and_state() {
+        let app_tasks = vec![tagged_task("a", &["@work", "#printer"], Some("alice"))];
+        let mut app = app_with_repo_tasks(app_tasks);
+        app.update(Action::OpenStatePanel);
+        assert_eq!(app.mode(), Mode::StatePanel);
+        let panel = app.state_panel().unwrap();
+        assert!(panel.contexts.iter().any(|r| r.tag == "@work"));
+        assert!(panel.resources.iter().any(|r| r.tag == "#printer"));
+        assert!(panel.users.iter().any(|r| r.name == "alice"));
+        // Esc closes it.
+        app.update(Action::StateClose);
+        assert_eq!(app.mode(), Mode::Normal);
+        assert!(app.state_panel().is_none());
+    }
+
+    #[test]
+    fn toggle_context_active_changes_visible_set() {
+        // A context-tagged task and a neutral task. Activating @work hides
+        // tasks tagged with other contexts; here neutral + @work stay visible,
+        // but a @home task disappears once @work is the only active context.
+        let work = tagged_task("work task", &["@work"], None);
+        let home = tagged_task("home task", &["@home"], None);
+        let mut app = app_with_repo_tasks(vec![work, home]);
+        assert_eq!(visible_titles(&app).len(), 2);
+
+        app.update(Action::OpenStatePanel);
+        // Focus contexts, highlight @work, toggle it active.
+        let idx = app
+            .state_panel()
+            .unwrap()
+            .contexts
+            .iter()
+            .position(|r| r.tag == "@work")
+            .unwrap();
+        app.state_panel.as_mut().unwrap().ctx_idx = idx;
+        app.update(Action::StateToggle);
+
+        // State now has @work active.
+        let state = app.repo.store().get_state().unwrap();
+        assert_eq!(state.active_contexts, vec!["@work".to_owned()]);
+        // The @home task is filtered out; the @work task stays.
+        let titles = visible_titles(&app);
+        assert!(titles.contains(&"work task".to_owned()));
+        assert!(!titles.contains(&"home task".to_owned()));
+        // The panel was rebuilt to reflect the new active flag.
+        assert!(
+            app.state_panel()
+                .unwrap()
+                .contexts
+                .iter()
+                .find(|r| r.tag == "@work")
+                .unwrap()
+                .active
+        );
+    }
+
+    #[test]
+    fn toggle_context_excluded_hides_task() {
+        let work = tagged_task("work task", &["@work"], None);
+        let mut app = app_with_repo_tasks(vec![work]);
+        assert_eq!(visible_titles(&app).len(), 1);
+
+        app.update(Action::OpenStatePanel);
+        // Contexts section is focused by default; @work is the only row.
+        app.update(Action::StateToggleExcluded);
+        let state = app.repo.store().get_state().unwrap();
+        assert_eq!(state.excluded_contexts, vec!["@work".to_owned()]);
+        // The excluded task disappears from the list.
+        assert!(visible_titles(&app).is_empty());
+    }
+
+    #[test]
+    fn toggle_resource_unavailable_hides_tagged_task() {
+        // A task requiring an unavailable resource is hidden by the default
+        // filter pipeline.
+        let needs = tagged_task("needs printer", &["#printer"], None);
+        let mut app = app_with_repo_tasks(vec![needs]);
+        assert_eq!(visible_titles(&app), vec!["needs printer".to_owned()]);
+
+        app.update(Action::OpenStatePanel);
+        app.update(Action::StateSectionNext); // → Resources
+        assert_eq!(app.state_panel().unwrap().section, Section::Resources);
+        app.update(Action::StateToggle); // mark #printer unavailable
+
+        let state = app.repo.store().get_state().unwrap();
+        assert_eq!(state.resources.get("printer"), Some(&false));
+        assert!(visible_titles(&app).is_empty(), "unavailable-resource task hidden");
+    }
+
+    #[test]
+    fn toggle_user_filters_tasks() {
+        let alice = tagged_task("alice task", &[], Some("alice"));
+        let bob = tagged_task("bob task", &[], Some("bob"));
+        let mut app = app_with_repo_tasks(vec![alice, bob]);
+        assert_eq!(visible_titles(&app).len(), 2);
+
+        app.update(Action::OpenStatePanel);
+        app.update(Action::StateSectionNext); // Resources
+        app.update(Action::StateSectionNext); // Users
+        assert_eq!(app.state_panel().unwrap().section, Section::Users);
+        // Highlight bob and activate him.
+        let idx = app
+            .state_panel()
+            .unwrap()
+            .users
+            .iter()
+            .position(|r| r.name == "bob")
+            .unwrap();
+        app.state_panel.as_mut().unwrap().user_idx = idx;
+        app.update(Action::StateToggle);
+
+        let state = app.repo.store().get_state().unwrap();
+        assert_eq!(state.active_users, vec!["bob".to_owned()]);
+        // Only bob's task (and unassigned, of which there are none) remains.
+        assert_eq!(visible_titles(&app), vec!["bob task".to_owned()]);
+    }
+
+    #[test]
+    fn state_clear_contexts_resets_active_and_excluded() {
+        let mut app = app_with_repo_tasks(vec![tagged_task("t", &["@work"], None)]);
+        app.update(Action::OpenStatePanel);
+        app.update(Action::StateToggle); // @work active
+        app.update(Action::StateToggleExcluded); // @work excluded too
+        assert!(!app.repo.store().get_state().unwrap().active_contexts.is_empty());
+
+        app.update(Action::StateClear);
+        let state = app.repo.store().get_state().unwrap();
+        assert!(state.active_contexts.is_empty());
+        assert!(state.excluded_contexts.is_empty());
+    }
+
+    #[test]
+    fn poll_sync_clean_clears_flag_and_reloads() {
+        let mut app = app_with_repo_tasks(vec![Task::new("t")]);
+        // Wire a fake in-flight sync and deliver a clean result through it.
+        let (tx, rx) = std::sync::mpsc::channel::<crate::tui::sync::SyncMsg>();
+        app.sync_rx = Some(rx);
+        app.syncing = true;
+        tx.send(Ok(crate::core::SyncOutcome::Clean)).unwrap();
+        app.poll_sync();
+        // poll_sync drains the result, clears the flag, drops the receiver, and
+        // reports up-to-date (a clean sync reloads).
+        assert!(!app.syncing());
+        assert!(app.sync_rx.is_none());
+        assert!(app.status().unwrap().contains("up to date"));
+    }
+
+    #[test]
+    fn poll_sync_noop_when_empty() {
+        let mut app = app_with_repo_tasks(Vec::new());
+        // A receiver with no message yet: poll_sync leaves the flag set and the
+        // receiver in place for the next tick.
+        let (_tx, rx) = std::sync::mpsc::channel::<crate::tui::sync::SyncMsg>();
+        app.sync_rx = Some(rx);
+        app.syncing = true;
+        app.poll_sync();
+        assert!(app.syncing());
+        assert!(app.sync_rx.is_some());
+    }
+
+    #[test]
+    fn sync_conflicts_report_paths() {
+        let mut app = app_with_repo_tasks(Vec::new());
+        let paths = vec![std::path::PathBuf::from("tasks/x.toml")];
+        app.handle_sync_result(SyncResult::from_msg(Ok(
+            crate::core::SyncOutcome::Conflicts(paths),
+        )));
+        let status = app.status().unwrap();
+        assert!(status.starts_with("Merge conflicts — resolve manually:"));
+        assert!(status.contains("tasks/x.toml"));
+    }
+
+    #[test]
+    fn sync_error_reports_message() {
+        let mut app = app_with_repo_tasks(Vec::new());
+        app.handle_sync_result(SyncResult::from_msg(Err(anyhow::anyhow!("offline"))));
+        assert!(app.status().unwrap().contains("sync error"));
+        assert!(app.status().unwrap().contains("offline"));
+    }
+
+    #[test]
+    fn second_sync_blocked_while_in_flight() {
+        let mut app = app_with_repo_tasks(Vec::new());
+        // Pretend a sync is already running.
+        app.syncing = true;
+        let (tx, rx) = std::sync::mpsc::channel::<crate::tui::sync::SyncMsg>();
+        app.sync_rx = Some(rx);
+        app.update(Action::SyncNow);
+        // The guard reports the in-progress state and does not replace the rx.
+        assert!(app.status().unwrap().contains("already in progress"));
+        drop(tx);
     }
 
     #[test]

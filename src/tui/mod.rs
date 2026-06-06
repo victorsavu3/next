@@ -13,6 +13,8 @@ pub mod app;
 pub mod config;
 pub mod edit;
 pub mod forecast;
+pub mod state_panel;
+pub mod sync;
 pub mod tree;
 pub mod ui;
 
@@ -57,8 +59,13 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> anyhow::Result<(
     while !app.should_quit() {
         terminal.draw(|frame| ui::draw(frame, app))?;
 
+        // Drain any finished background sync result before waiting for input, so
+        // the outcome surfaces promptly even when the user is idle (the loop
+        // still wakes every TICK, so this runs regularly without input).
+        app.poll_sync();
+
         // Block up to one tick for input; redraw on timeout so transient state
-        // (e.g. a status message) stays fresh.
+        // (e.g. a status message, or a sync result) stays fresh.
         if event::poll(TICK)? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
