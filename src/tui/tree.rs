@@ -9,11 +9,14 @@
 
 use std::collections::{HashMap, HashSet};
 
+use chrono::NaiveDate;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use tui_tree_widget::{TreeItem, TreeState};
 use uuid::Uuid;
 
+use crate::core::domain::filter::{self, FilterSet};
+use crate::core::domain::state::GlobalState;
 use crate::core::domain::tag;
 use crate::core::domain::task::{Status, Task};
 
@@ -83,13 +86,45 @@ impl TreeView {
 }
 
 /// Builds the displayable tree (roots + nested children) from `all_tasks`,
-/// honouring the `include_all` toggle. Returns the widget items; node ids are
-/// task [`Uuid`]s.
+/// honouring the active `filter_set` and `include_all` toggle. Returns the
+/// widget items; node ids are task [`Uuid`]s.
+///
+/// Filtering is applied in two stages:
+/// 1. `filter::apply` runs first, restricting to tasks that pass the user's
+///    `FilterSet` (tags, contexts, users, etc.). The `FilterSet`'s own
+///    `disable_implicit` field (set by `filter_all`) determines whether the
+///    implicit status/blocking/resource gate is skipped.
+/// 2. If `include_all` is false, done/cancelled tasks that survived step 1 are
+///    additionally excluded — the tree-local `.` toggle controls this.
 ///
 /// Roots are visible tasks whose parent is absent or not visible, sorted by
 /// title; children follow the same visibility + sort, mirroring `next tree`.
-pub fn build_items(all_tasks: &[Task], include_all: bool) -> Vec<TreeItem<'static, Uuid>> {
-    let visible_ids: HashSet<Uuid> = all_tasks
+pub fn build_items(
+    all_tasks: &[Task],
+    filter_set: &FilterSet,
+    state: &GlobalState,
+    today: NaiveDate,
+    include_all: bool,
+) -> Vec<TreeItem<'static, Uuid>> {
+    // Stage 1: apply the user's FilterSet.
+    //
+    // When the tree-local `include_all` toggle is on we want done/cancelled
+    // tasks to pass through the implicit gate (status/blocking/resource
+    // checks), so we force `disable_implicit = true` in that case.  The
+    // explicit tag / context / user filters are always applied regardless.
+    let effective_filter = if include_all && !filter_set.disable_implicit {
+        FilterSet {
+            disable_implicit: true,
+            ..filter_set.clone()
+        }
+    } else {
+        filter_set.clone()
+    };
+    let filtered = filter::apply(all_tasks.to_vec(), &effective_filter, state, today);
+
+    // Stage 2: if the tree-local include_all toggle is off, additionally
+    // exclude done/cancelled tasks that survived the filter.
+    let visible_ids: HashSet<Uuid> = filtered
         .iter()
         .filter(|t| include_all || t.is_active())
         .map(|t| t.id)
@@ -180,7 +215,24 @@ fn is_project_tagged(task: &Task) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use chrono::NaiveDate;
+
     use super::*;
+    use crate::core::domain::state::GlobalState;
+
+    /// A fixed "today" used by all tree tests.
+    fn today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 6, 6).unwrap()
+    }
+
+    /// Default (pass-all) filter + state helpers to keep call sites terse.
+    fn no_filter() -> FilterSet {
+        FilterSet::default()
+    }
+
+    fn no_state() -> GlobalState {
+        GlobalState::default()
+    }
 
     fn child_of(title: &str, parent: Uuid) -> Task {
         let mut t = Task::new(title.to_owned());
@@ -188,12 +240,24 @@ mod tests {
         t
     }
 
+    /// A filter that bypasses the implicit gate (status / blocking / parent
+    /// hiding) so tests that care only about structure can use a flat task list
+    /// without worrying about "parent hidden because it has open children".
+    fn all_filter() -> FilterSet {
+        FilterSet {
+            disable_implicit: true,
+            ..FilterSet::default()
+        }
+    }
+
     #[test]
     fn roots_are_top_level_visible_tasks() {
         let root = Task::new("root".to_owned());
         let child = child_of("child", root.id);
         let other = Task::new("other".to_owned());
-        let items = build_items(&[root, child, other], false);
+        // Use disable_implicit so the parent-with-open-children gate doesn't
+        // hide `root`, letting us test structural placement only.
+        let items = build_items(&[root, child, other], &all_filter(), &no_state(), today(), false);
         // Two roots: "root" and "other" (child is nested under root).
         assert_eq!(items.len(), 2);
     }
@@ -202,7 +266,14 @@ mod tests {
     fn child_nests_under_parent() {
         let root = Task::new("root".to_owned());
         let child = child_of("child", root.id);
-        let items = build_items(&[root.clone(), child], false);
+        // disable_implicit so the parent is not hidden by the open-children gate.
+        let items = build_items(
+            &[root.clone(), child],
+            &all_filter(),
+            &no_state(),
+            today(),
+            false,
+        );
         let root_item = items.iter().find(|i| *i.identifier() == root.id).unwrap();
         assert_eq!(root_item.children().len(), 1);
     }
@@ -215,12 +286,15 @@ mod tests {
         let tasks = vec![root.clone(), done];
 
         // Without --all the done child is hidden, so root has no children.
-        let items = build_items(&tasks, false);
+        let items = build_items(&tasks, &no_filter(), &no_state(), today(), false);
         let root_item = items.iter().find(|i| *i.identifier() == root.id).unwrap();
         assert_eq!(root_item.children().len(), 0);
 
         // With --all the done child appears.
-        let items = build_items(&tasks, true);
+        // Use disable_implicit so filter::apply also passes done tasks through.
+        let mut all_filter = no_filter();
+        all_filter.disable_implicit = true;
+        let items = build_items(&tasks, &all_filter, &no_state(), today(), true);
         let root_item = items.iter().find(|i| *i.identifier() == root.id).unwrap();
         assert_eq!(root_item.children().len(), 1);
     }
@@ -232,7 +306,7 @@ mod tests {
         let mut parent = Task::new("done parent".to_owned());
         parent.mark_done();
         let child = child_of("active child", parent.id);
-        let items = build_items(&[parent, child.clone()], false);
+        let items = build_items(&[parent, child.clone()], &no_filter(), &no_state(), today(), false);
         // Only the child is visible, promoted to root.
         assert_eq!(items.len(), 1);
         assert_eq!(*items[0].identifier(), child.id);
@@ -245,7 +319,14 @@ mod tests {
         proj.tags = vec!["project".to_owned()];
         let child = child_of("c", proj.id);
         assert!(is_project_tagged(&proj));
-        let items = build_items(&[proj.clone(), child], false);
+        // disable_implicit so the parent-with-open-children gate doesn't hide `proj`.
+        let items = build_items(
+            &[proj.clone(), child],
+            &all_filter(),
+            &no_state(),
+            today(),
+            false,
+        );
         let line = node_line(&proj, true);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("[project]"), "{text}");
@@ -266,5 +347,62 @@ mod tests {
         let mut t = Task::new("p".to_owned());
         t.tags = vec!["#project".to_owned()];
         assert!(is_project_tagged(&t));
+    }
+
+    /// A required-tag filter restricts the tree to only matching tasks.
+    /// The non-matching task must not appear even in the tree root list.
+    #[test]
+    fn filter_set_restricts_tree_to_matching_tasks() {
+        let mut tagged = Task::new("tagged task".to_owned());
+        tagged.tags = vec!["#work".to_owned()];
+
+        let untagged = Task::new("untagged task".to_owned());
+
+        let filter_set = FilterSet {
+            required_tags: vec!["#work".to_owned()],
+            disable_implicit: true, // show all statuses so only tag filtering applies
+            ..FilterSet::default()
+        };
+
+        let items = build_items(
+            &[tagged.clone(), untagged.clone()],
+            &filter_set,
+            &no_state(),
+            today(),
+            true, // include_all: show done/cancelled too, if any
+        );
+
+        // Only the tagged task should appear.
+        assert_eq!(items.len(), 1, "expected 1 root, got {}", items.len());
+        assert_eq!(*items[0].identifier(), tagged.id);
+    }
+
+    /// A required-tag filter applies even when include_all (tree `.` toggle) is on.
+    /// Done tasks that pass the filter appear; done tasks that fail it do not.
+    #[test]
+    fn filter_applies_on_top_of_include_all() {
+        let mut done_matching = Task::new("done + tagged".to_owned());
+        done_matching.tags = vec!["#work".to_owned()];
+        done_matching.mark_done();
+
+        let mut done_not_matching = Task::new("done + untagged".to_owned());
+        done_not_matching.mark_done();
+
+        let filter_set = FilterSet {
+            required_tags: vec!["#work".to_owned()],
+            disable_implicit: true,
+            ..FilterSet::default()
+        };
+
+        let items = build_items(
+            &[done_matching.clone(), done_not_matching.clone()],
+            &filter_set,
+            &no_state(),
+            today(),
+            true, // include_all: include done/cancelled
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(*items[0].identifier(), done_matching.id);
     }
 }

@@ -415,9 +415,24 @@ impl App {
     }
 
     /// Builds the displayable tree items from the cached task list, honouring
-    /// the tree-local include-all toggle. Recomputed each frame (cheap).
+    /// the active filter and the tree-local include-all toggle.
+    /// Recomputed each frame (cheap). Falls back to a default (pass-all) filter
+    /// on parse error so the tree still renders rather than crashing.
     pub fn tree_items(&self) -> Vec<tui_tree_widget::TreeItem<'static, uuid::Uuid>> {
-        super::tree::build_items(&self.all_tasks, self.tree_view.include_all())
+        let mut fa = FilterArgs::parse(self.filter_tokens.clone());
+        fa.future = self.filter_future;
+        fa.all = self.filter_all;
+        fa.all_users = self.filter_all_users;
+        let filter_set = fa.to_filter_set().unwrap_or_default();
+        let store = self.repo.store();
+        let state = store.get_state().unwrap_or_default();
+        super::tree::build_items(
+            &self.all_tasks,
+            &filter_set,
+            &state,
+            self.today,
+            self.tree_view.include_all(),
+        )
     }
 
     /// Computes the forecast entries for the current horizon, honouring the
