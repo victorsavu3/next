@@ -44,10 +44,11 @@ All MCP modules live in `src/mcp/` and are gated by the `mcp` Cargo feature.
 
 ## 2. Module layout
 
-The project is a single crate named `next` with a library (`src/lib.rs`) and three
+The project is a single crate named `next` with a library (`src/lib.rs`) and four
 feature-gated binaries: `src/cli/main.rs` (CLI, requires `cli` — on by default),
-`src/mcp/main.rs` (MCP server, requires `mcp`), and `src/forgejo/main.rs`
-(`next-forgejo`, requires `forgejo`). With **no features** the crate is just the `core`
+`src/mcp/main.rs` (MCP server, requires `mcp`), `src/forgejo/main.rs`
+(`next-forgejo`, requires `forgejo`), and `src/tui/main.rs` (`next-tui`, requires `tui`).
+With **no features** the crate is just the `core`
 module — the task store, git backend, domain types, scoring/service/recurrence, the
 plugin registry, and `TaskRepository` — which other crates can link without the CLI or
 `clap`. The CLI's `AppContext` (config-file handling) and the feature modules sit on top.
@@ -55,7 +56,7 @@ See §2.1.
 
 ```
 next/                             # crate root (also git repo)
-  Cargo.toml                      # features: cli (default), mcp, forgejo; clap/tracing-subscriber optional
+  Cargo.toml                      # features: cli (default), mcp, forgejo, tui; clap/tracing-subscriber optional
   Containerfile                   # multi-stage build for next-mcp container image
   quadlets/
     next-mcp.container            # Podman Quadlet systemd unit file
@@ -94,6 +95,16 @@ next/                             # crate root (also git repo)
       sync_manager.rs  server.rs  tools/{mod,tasks,state,tags,data,view}.rs
     forgejo/                      # feature = "forgejo"; `next-forgejo` binary
       main.rs  mod.rs  config.rs  issues.rs  tasks.rs  reconcile.rs  hook.rs
+    tui/                          # feature = "tui"; `next-tui` binary (ratatui front-end)
+      main.rs                     # `next-tui` entry: arg parse (--repo/--config/--version) + run()
+      mod.rs                      # VERSION (= CARGO_PKG_VERSION), run(), synchronous poll event_loop()
+      app.rs                      # App state + Mode/View/Action; handle_key -> Action -> update()
+      ui.rs                       # draw(): renders the active view, detail pane, modals/popups
+      config.rs                   # ConfigSource + tui.toml -> config.toml -> defaults loader; bootstrap()
+      edit.rs                     # EditForm: the edit-modal field model + validation
+      tree.rs  forecast.rs        # TreeView / ForecastView state (build on cached tasks)
+      state_panel.rs              # StatePanel: contexts/resources/users panel model
+      sync.rs                     # background sync worker (worker thread + mpsc channel)
   tests/
     common/mod.rs                 # shared test helpers (TestEnv, setup())
     test_add.rs   test_data.rs    test_done.rs   test_edit.rs
@@ -110,6 +121,18 @@ next/                             # crate root (also git repo)
 | `cli` | ✓ | `next` binary, `src/cli/**` | `clap`, `tracing-subscriber` |
 | `mcp` | | `next-mcp` binary, `src/mcp/**` | `tokio`, `axum`, `tracing-subscriber` |
 | `forgejo` | | `next-forgejo` binary, `src/forgejo/**` | `forgejo-api`, `url`, `tokio`, `clap`, `tracing-subscriber` |
+| `tui` | | `next-tui` binary, `src/tui/**` | `ratatui`, `tui-input`, `tui-textarea-2`, `tui-tree-widget`, `tracing-subscriber` |
+
+The `tui` feature builds the `next-tui` terminal UI. Like the other feature modules it
+depends only on `core`: it opens a [`TaskRepository`] via `core::bootstrap` and runs every
+mutation through the same `core::service` / transaction code paths (and git commits) as the
+CLI and MCP server, never shelling out to `next`. The event loop is a **synchronous poll
+loop** (`mod.rs::event_loop`, ~200 ms tick) — a worker thread is used **only** for
+background sync (`src/tui/sync.rs`, results delivered over an `mpsc` channel and drained each
+tick). It reuses the shared refactors lifted into core for both CLI and TUI:
+`core::recurrence::parse_recurrence` (recurrence-flag parsing), `core::forecast` (forecast
+projection), `core::scoring::nonzero_factors` (score-breakdown rows), and `core::bootstrap`
+(repo/config resolution + opening).
 
 With **no features** (`--no-default-features`) the crate is just the core library —
 `domain`, `storage`, `store`, `plugin`, `config`, `resolve`, `error`, `scoring`, `service`,

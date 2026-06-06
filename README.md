@@ -234,6 +234,24 @@ Remote access is provided via MCP — see the MCP server section below.
 
 ---
 
+## Terminal UI (`next-tui`)
+
+`next-tui` is an optional full-screen terminal UI built on [ratatui](https://ratatui.rs/).
+It links the core library directly (no shelling out to `next`) and edits the repository
+through the same transactions and git commits as the CLI, so it is safe to run alongside
+the CLI and the MCP server. It offers list / tree / forecast views, a full edit modal,
+per-task actions, a context/resource/user state panel, and background sync.
+
+```sh
+cargo build --release --features tui --bin next-tui
+next-tui                     # or: next-tui --repo <path> --config <path>
+```
+
+It loads its own `tui.toml`, falling back to the CLI's `config.toml`, then defaults.
+See [`TUI.md`](TUI.md) for the full keymap and view reference.
+
+---
+
 ## MCP server (`next-mcp`)
 
 `next-mcp` is an optional HTTP server that exposes the full task management API over the
@@ -453,12 +471,14 @@ Run `sync` periodically (cron / systemd timer) to keep imports current.
 | `cli` | ✓ | the `next` CLI binary (pulls in `clap`) |
 | `mcp` | | the `next-mcp` server (`--features mcp`) |
 | `forgejo` | | the `next-forgejo` plugin (`--features forgejo`) |
+| `tui` | | the `next-tui` terminal UI (`--features tui`) |
 
 ```sh
 cargo build                          # the next CLI (default)
 cargo build --no-default-features    # core library only — no CLI, no clap
 cargo build --features mcp           # + the MCP server
 cargo build --features forgejo       # + the Forgejo plugin
+cargo build --features tui           # + the terminal UI
 ```
 
 With `--no-default-features` the crate is just the core library under `src/core/` (`domain`,
@@ -474,3 +494,4 @@ and plugins lives in the `core` module so the feature modules depend only on the
 - `REQUIREMENTS.md` — functional requirements
 - `ARCHITECTURE.md` — internal design and module layout
 - `CLI.md` — full command reference
+- `TUI.md` — terminal UI keymap and view reference

@@ -2,6 +2,8 @@
 
 A task manager with automatic urgency scoring. The binary is called `next`.
 
+A full-screen terminal front-end, `next-tui`, is also available — see [`TUI.md`](TUI.md).
+
 ---
 
 ## Command Summary
