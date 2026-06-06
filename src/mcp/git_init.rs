@@ -206,6 +206,9 @@ mod tests {
             deferred_sync_delay: Duration::from_secs(30),
             git_author_name: None,
             git_author_email: None,
+            pull_before_query: true,
+            staleness: Duration::from_secs(3600),
+            pull_timeout: Duration::from_secs(10),
         };
 
         let err = clone_or_open(&config)

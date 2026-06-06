@@ -47,6 +47,11 @@ async fn start_test_server(
         bearer_token: bearer_token.to_owned(),
         webhook_token: webhook_token.map(str::to_owned),
         scheduler,
+        // Exercise the Req A pull-before-query path with its real default.
+        // The test repo has no remote, so the staleness pull fails internally
+        // (logged, never fatal) and tool calls must still succeed.
+        pull_before_query: true,
+        staleness: std::time::Duration::from_secs(3600),
     };
 
     let router = build_router(state);

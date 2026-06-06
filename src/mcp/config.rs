@@ -25,6 +25,27 @@ pub struct McpConfig {
     pub git_author_name: Option<String>,
     /// git committer email written to the repo-local config when no identity is set.
     pub git_author_email: Option<String>,
+    /// Whether to run a staleness pull before a task-touching tool (Req A).
+    pub pull_before_query: bool,
+    /// How long a local copy stays "fresh" after a pull, before a query triggers one.
+    pub staleness: Duration,
+    /// Timeout for the pre-query pull. Stored only; not yet enforced by the core.
+    pub pull_timeout: Duration,
+}
+
+/// Parses a boolean env var that defaults to `true` and treats
+/// `"0"`/`"false"`/`"no"` (case-insensitive) as `false`. Any other value is `true`.
+fn parse_bool_default_true(raw: Option<&str>) -> bool {
+    match raw {
+        Some(s) => !matches!(s.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no"),
+        None => true,
+    }
+}
+
+/// Parses a `u64` seconds env var, falling back to `default` when unset, empty,
+/// or unparseable.
+fn parse_secs_or(raw: Option<&str>, default: u64) -> u64 {
+    raw.and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(default)
 }
 
 impl McpConfig {
@@ -72,6 +93,18 @@ impl McpConfig {
         let git_author_name  = std::env::var("NEXT_GIT_AUTHOR_NAME").ok().filter(|s| !s.is_empty());
         let git_author_email = std::env::var("NEXT_GIT_AUTHOR_EMAIL").ok().filter(|s| !s.is_empty());
 
+        // ── Pull-before-query staleness (Req A) ──────────────────────────────
+        let pull_before_query =
+            parse_bool_default_true(std::env::var("NEXT_PULL_BEFORE_QUERY").ok().as_deref());
+        let staleness = Duration::from_secs(parse_secs_or(
+            std::env::var("NEXT_STALENESS_SECS").ok().as_deref(),
+            3600,
+        ));
+        let pull_timeout = Duration::from_secs(parse_secs_or(
+            std::env::var("NEXT_PULL_TIMEOUT_SECS").ok().as_deref(),
+            10,
+        ));
+
         Ok(Self {
             bearer_token,
             webhook_token,
@@ -84,6 +117,49 @@ impl McpConfig {
             deferred_sync_delay,
             git_author_name,
             git_author_email,
+            pull_before_query,
+            staleness,
+            pull_timeout,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pull_before_query_defaults_to_true_when_unset() {
+        assert!(parse_bool_default_true(None));
+    }
+
+    #[test]
+    fn pull_before_query_falsey_values() {
+        for v in ["0", "false", "no", "False", "NO", " false "] {
+            assert!(!parse_bool_default_true(Some(v)), "expected false for {v:?}");
+        }
+    }
+
+    #[test]
+    fn pull_before_query_truthy_values() {
+        for v in ["1", "true", "yes", "on", "anything"] {
+            assert!(parse_bool_default_true(Some(v)), "expected true for {v:?}");
+        }
+    }
+
+    #[test]
+    fn staleness_secs_default_and_parse() {
+        assert_eq!(parse_secs_or(None, 3600), 3600);
+        assert_eq!(parse_secs_or(Some("7200"), 3600), 7200);
+        assert_eq!(parse_secs_or(Some("0"), 3600), 0);
+        // Unparseable falls back to the default.
+        assert_eq!(parse_secs_or(Some("nope"), 3600), 3600);
+        assert_eq!(parse_secs_or(Some(""), 3600), 3600);
+    }
+
+    #[test]
+    fn pull_timeout_secs_default() {
+        assert_eq!(parse_secs_or(None, 10), 10);
+        assert_eq!(parse_secs_or(Some("30"), 10), 30);
     }
 }

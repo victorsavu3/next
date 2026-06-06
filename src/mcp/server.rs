@@ -28,6 +28,10 @@ pub struct AppState {
     pub bearer_token: String,
     pub webhook_token: Option<String>,
     pub scheduler: SyncScheduler,
+    /// Whether a staleness pull runs before each task-touching tool (Req A).
+    pub pull_before_query: bool,
+    /// How long a local copy stays "fresh" before a query triggers a pull.
+    pub staleness: std::time::Duration,
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -125,6 +129,12 @@ async fn handle_tools_call(
 
     let tool_params = params.get("arguments").cloned().unwrap_or(json!({}));
 
+    // Req A: pull before a (potentially stale) query/mutation. The `sync` tool
+    // pulls on its own, so it is excluded. Failures are logged, never fatal.
+    if state.pull_before_query && tool_name != "sync" {
+        maybe_pull_before_query(state).await;
+    }
+
     let ctx = state.ctx.clone();
     let scheduler = state.scheduler.clone();
     let result: CallToolResult = tokio::task::spawn_blocking(move || {
@@ -135,6 +145,56 @@ async fn handle_tools_call(
     .unwrap_or_else(|e| CallToolResult::error(format!("internal panic: {e}")));
 
     JsonRpcResponse::ok(id, json!(result))
+}
+
+/// Runs a staleness pull (Req A) before a task-touching tool, coordinated with
+/// the sync semaphore so it never races a background or explicit sync.
+///
+/// Concurrency: the sync semaphore is acquired NON-BLOCKING. If a sync is
+/// already running we skip the pull entirely — that sync makes the data fresh.
+/// The blocking git work is offloaded to `spawn_blocking` (mirroring
+/// `run_sync_background`); the `ctx` mutex is locked *inside* the blocking
+/// closure and never held across an `.await`, and the permit is dropped only
+/// after the pull finishes. `pull_if_stale` itself checks `last_pull`, so this
+/// is a cheap no-op when the copy is fresh.
+async fn maybe_pull_before_query(state: &AppState) {
+    let permit = match state.scheduler.try_acquire() {
+        Some(p) => p,
+        None => {
+            // A sync is already in flight; it will refresh the data.
+            tracing::debug!("auto-pull skipped: sync already in progress");
+            return;
+        }
+    };
+
+    let ctx = state.ctx.clone();
+    let staleness = state.staleness;
+    let result = tokio::task::spawn_blocking(move || {
+        let mut ctx = ctx.blocking_lock();
+        let opts = crate::core::sync::StaleOpts {
+            enabled: true,
+            staleness,
+            now: chrono::Utc::now(),
+        };
+        let status = crate::core::sync::pull_if_stale(&mut ctx, &opts);
+        drop(permit);
+        status
+    })
+    .await;
+
+    match result {
+        Ok(crate::core::sync::PullStatus::Pulled) => {
+            tracing::info!("auto-pull: refreshed stale local copy");
+        }
+        Ok(crate::core::sync::PullStatus::Failed(msg)) => {
+            tracing::warn!("auto-pull failed: {msg}; results may be out of date");
+        }
+        // Fresh / Disabled: nothing to report.
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!("auto-pull task panicked: {e}; results may be out of date");
+        }
+    }
 }
 
 // ── Webhook handler ───────────────────────────────────────────────────────────

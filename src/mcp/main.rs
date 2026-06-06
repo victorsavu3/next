@@ -42,6 +42,8 @@ async fn main() -> anyhow::Result<()> {
         bearer_token: config.bearer_token,
         webhook_token: config.webhook_token,
         scheduler,
+        pull_before_query: config.pull_before_query,
+        staleness: config.staleness,
     };
 
     let router = build_router(state);
