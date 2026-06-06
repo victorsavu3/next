@@ -245,6 +245,89 @@ fn migration_list_returns_all_migrated_descriptions() {
     assert_eq!(all.len(), 3);
 }
 
+// ---------------------------------------------------------------------------
+// Merge of the legacy three machine-local files into one `state.toml`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn migration_merges_legacy_plugins_and_sync_into_state() {
+    let dir = TempDir::new().unwrap();
+    init_git(dir.path());
+
+    // The state dir is the parent of the external state path.
+    let state_path = next::core::storage::state_path_for_repo(dir.path());
+    let state_dir = state_path.parent().unwrap();
+    fs::create_dir_all(state_dir).unwrap();
+
+    // Seed an existing state.toml with global data only.
+    fs::write(&state_path, "active_contexts = [\"@work\"]\n").unwrap();
+
+    // Legacy plugins.toml and sync_state.toml beside it.
+    let uuid = "11111111-2222-3333-4444-555555555555";
+    fs::write(
+        state_dir.join("plugins.toml"),
+        format!(
+            "[[plugin]]\nname = \"forgejo\"\ncommand = [\"next-forgejo\", \"hook\"]\ntasks = [\"{uuid}\"]\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        state_dir.join("sync_state.toml"),
+        "last_pull = \"2026-06-06T12:00:00Z\"\n\n[plugins.forgejo]\nlast_sync = \"2026-06-06T11:00:00Z\"\n",
+    )
+    .unwrap();
+
+    // Open triggers the merge migration.
+    let _ = open(&dir);
+
+    // Old files are gone.
+    assert!(!state_dir.join("plugins.toml").exists(), "legacy plugins.toml must be removed");
+    assert!(!state_dir.join("sync_state.toml").exists(), "legacy sync_state.toml must be removed");
+
+    // The merged state.toml contains all three sections.
+    let merged = fs::read_to_string(&state_path).unwrap();
+    assert!(merged.contains("active_contexts"), "global section preserved");
+    assert!(merged.contains("[[plugin]]"), "plugin section merged in");
+    assert!(merged.contains("forgejo"), "plugin name merged in");
+    assert!(merged.contains("[sync]"), "sync section merged in");
+    assert!(merged.contains("last_pull"), "last_pull merged in");
+
+    // Verify via the typed APIs.
+    let reg = next::core::plugin::registry::load(dir.path()).unwrap();
+    assert_eq!(reg.plugins.len(), 1);
+    assert_eq!(reg.plugins[0].name, "forgejo");
+    assert_eq!(reg.plugins[0].tasks.len(), 1);
+
+    let sync = next::core::sync_state::load(dir.path()).unwrap();
+    assert!(sync.last_pull.is_some());
+    assert!(sync.plugins.contains_key("forgejo"));
+
+    let store = open(&dir);
+    assert_eq!(store.get_state().unwrap().active_contexts, vec!["@work"]);
+
+    // A second open is a no-op (legacy files absent) and preserves everything.
+    let _ = open(&dir);
+    let reg2 = next::core::plugin::registry::load(dir.path()).unwrap();
+    assert_eq!(reg2.plugins.len(), 1, "second open must not duplicate or drop plugins");
+    let sync2 = next::core::sync_state::load(dir.path()).unwrap();
+    assert!(sync2.last_pull.is_some(), "second open must preserve sync state");
+}
+
+#[test]
+fn migration_merge_is_noop_without_legacy_files() {
+    let dir = TempDir::new().unwrap();
+    init_git(dir.path());
+
+    // No legacy plugins.toml/sync_state.toml; open must succeed and leave the
+    // registry/sync empty.
+    let _ = open(&dir);
+    assert!(next::core::plugin::registry::load(dir.path()).unwrap().plugins.is_empty());
+    assert_eq!(
+        next::core::sync_state::load(dir.path()).unwrap(),
+        next::core::sync_state::SyncState::default()
+    );
+}
+
 #[test]
 fn migration_existing_tag_files_are_not_overwritten() {
     let dir = TempDir::new().unwrap();

@@ -363,9 +363,12 @@ fn concurrent_state_edits_do_not_lose_updates() {
 }
 
 /// N concurrent "processes" each subscribe one plugin to a distinct task via
-/// `registry::watch`, which holds the re-entrant plugins lock across its
-/// load → modify → save. Without that lock the concurrent writers would clobber
-/// each other; with it, every subscription must survive.
+/// `registry::watch`. Since the consolidation, the plugin registry lives in the
+/// `[[plugin]]` section of the combined `state.toml`, so `watch` holds the
+/// single re-entrant *state* lock (`.state.toml.lock`) across its
+/// load → modify → save — there is no longer a separate `.plugins.toml.lock`.
+/// Without that lock the concurrent writers would clobber each other; with it,
+/// every subscription must survive.
 #[test]
 fn concurrent_plugin_watches_do_not_lose_updates() {
     use next::core::plugin::registry;
@@ -402,6 +405,94 @@ fn concurrent_plugin_watches_do_not_lose_updates() {
     assert_eq!(
         watched, expected,
         "all {N} concurrent subscriptions must survive; lost updates indicate a broken plugins lock"
+    );
+}
+
+/// The three machine-local subsystems — global state, plugin registry, and
+/// sync state — now share ONE file (`state.toml`) guarded by ONE lock
+/// (`.state.toml.lock`). This test drives all three concurrently against the
+/// same repo and asserts that none clobbers another's section: a `save_state`
+/// must not drop a concurrently-written plugin, a `watch` must not drop a
+/// concurrently-recorded `last_pull`, and vice versa. Before the consolidation
+/// these used three independent locks; the single lock must still prevent
+/// cross-section lost updates because every writer does a locked
+/// read-modify-write of the whole file.
+#[test]
+fn concurrent_machine_state_sections_do_not_clobber() {
+    use next::core::plugin::registry;
+    use next::core::sync_state;
+
+    let dir = TempDir::new().unwrap();
+    let root = Arc::new(dir.path().to_path_buf());
+    // Pre-register the plugin so the watchers have a target.
+    registry::register(&root, "p", vec!["cmd".to_string()]).unwrap();
+
+    const N: usize = 8;
+    let barrier = Arc::new(std::sync::Barrier::new(3 * N));
+    let mut handles = Vec::new();
+
+    // Writers appending distinct active users (global section).
+    for i in 0..N {
+        let root = Arc::clone(&root);
+        let barrier = Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            let mut store = TomlStore::open((*root).clone(), root.join("state.toml")).unwrap();
+            barrier.wait();
+            let _lock = FileLock::acquire(&next::core::storage::state_lock_path(
+                &root.join("state.toml"),
+            ))
+            .unwrap();
+            let mut state = store.get_state().unwrap();
+            state.active_users.push(format!("user{i}"));
+            store.save_state(&state).unwrap();
+        }));
+    }
+
+    // Writers subscribing the plugin to distinct tasks (plugin section).
+    let ids: Vec<uuid::Uuid> = (0..N).map(|_| uuid::Uuid::new_v4()).collect();
+    for id in ids.clone() {
+        let root = Arc::clone(&root);
+        let barrier = Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            registry::watch(&root, "p", id).unwrap();
+        }));
+    }
+
+    // Writers recording a pull (sync section).
+    for _ in 0..N {
+        let root = Arc::clone(&root);
+        let barrier = Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            sync_state::record_pull(&root, chrono::Utc::now()).unwrap();
+        }));
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    // Every global user survived.
+    let store = TomlStore::open((*root).clone(), root.join("state.toml")).unwrap();
+    let mut users = store.get_state().unwrap().active_users;
+    users.sort();
+    let mut expected_users: Vec<String> = (0..N).map(|i| format!("user{i}")).collect();
+    expected_users.sort();
+    assert_eq!(users, expected_users, "no global user lost across sections");
+
+    // Every plugin subscription survived.
+    let reg = registry::load(&root).unwrap();
+    let mut watched = reg.plugins[0].tasks.clone();
+    watched.sort();
+    let mut expected_ids = ids;
+    expected_ids.sort();
+    assert_eq!(watched, expected_ids, "no plugin subscription lost across sections");
+
+    // last_pull was recorded (sync section preserved).
+    assert!(
+        sync_state::load(&root).unwrap().last_pull.is_some(),
+        "sync last_pull lost across sections"
     );
 }
 

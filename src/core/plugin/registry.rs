@@ -1,10 +1,12 @@
 //! Machine-local plugin registry.
 //!
 //! Plugins subscribe to individual tasks; when a subscribed task is updated,
-//! `next` notifies the plugin (see [`super::notify`]).  The registry is stored
-//! as `plugins.toml` beside the state file under `$XDG_STATE_HOME` (never
-//! committed to git — plugin binaries are per-machine), guarded by its own
-//! re-entrant lock (`.plugins.toml.lock`) via [`crate::core::storage::lock_plugins`].
+//! `next` notifies the plugin (see [`super::notify`]).  The registry is the
+//! `[[plugin]]` section of the combined machine-local `state.toml` under
+//! `$XDG_STATE_HOME` (never committed to git — plugin binaries are
+//! per-machine), persisted via the shared
+//! [`crate::core::storage::machine_state`] helpers under the single state lock
+//! (`.state.toml.lock`).
 
 use std::fs;
 use std::path::Path;
@@ -14,7 +16,7 @@ use uuid::Uuid;
 
 use crate::core::{
     error::{TaskError, Result},
-    storage,
+    storage::{self, machine_state::update_machine_state},
 };
 
 /// The full set of registered plugins.
@@ -96,8 +98,13 @@ impl PluginRegistry {
     }
 }
 
-// ── Path-based I/O (no locking; for the lock-wrapped store fns and tests) ──────
+// ── Path-based read (no locking; for the legacy-file migration) ────────────────
 
+/// Reads a standalone legacy `plugins.toml` at `path` (empty if absent).
+///
+/// Retained only for the one-time migration that folds the old separate
+/// `plugins.toml` into the combined `state.toml`; live persistence goes through
+/// the `machine_state` helpers.
 pub(crate) fn load_from(path: &Path) -> Result<PluginRegistry> {
     if !path.exists() {
         return Ok(PluginRegistry::default());
@@ -107,35 +114,31 @@ pub(crate) fn load_from(path: &Path) -> Result<PluginRegistry> {
         .map_err(|e| TaskError::Other(format!("parse plugins.toml: {e}")))
 }
 
-pub(crate) fn save_to(path: &Path, reg: &PluginRegistry) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let content = toml::to_string_pretty(reg)
-        .map_err(|e| TaskError::Other(format!("serialize plugins.toml: {e}")))?;
-    storage::toml_store::atomic_write(path, &content)
-}
-
-// ── Lock-wrapped store operations (the public API) ─────────────────────────────
+// ── Persistence via the combined machine state (the public API) ────────────────
 //
-// Each holds the plugins lock for the whole load → modify → save so concurrent
-// edits cannot lose updates.
+// Each operation runs inside `update_machine_state`, which holds the single
+// state lock across the whole load → modify → save so concurrent edits to any
+// machine-local section cannot lose updates.
 
-/// Loads the registry (empty if no file exists yet).
+/// Loads the registry from the combined `state.toml` (empty if no file yet).
 pub fn load(root: &Path) -> Result<PluginRegistry> {
-    let _lock = storage::lock_plugins(root)?;
-    load_from(&storage::plugins_path_for_repo(root))
+    let machine = storage::load_machine_state(root)?;
+    Ok(PluginRegistry { plugins: machine.plugins })
 }
 
-fn modify<F>(root: &Path, f: F) -> Result<()>
+/// Mutates the plugin section in place, preserving the other state sections.
+fn modify<F, T>(root: &Path, f: F) -> Result<T>
 where
-    F: FnOnce(&mut PluginRegistry) -> Result<()>,
+    F: FnOnce(&mut PluginRegistry) -> Result<T>,
 {
-    let _lock = storage::lock_plugins(root)?;
-    let path = storage::plugins_path_for_repo(root);
-    let mut reg = load_from(&path)?;
-    f(&mut reg)?;
-    save_to(&path, &reg)
+    update_machine_state(root, |machine| {
+        let mut reg = PluginRegistry {
+            plugins: std::mem::take(&mut machine.plugins),
+        };
+        let out = f(&mut reg);
+        machine.plugins = reg.plugins;
+        out
+    })
 }
 
 pub fn register(root: &Path, name: &str, command: Vec<String>) -> Result<()> {
@@ -154,12 +157,7 @@ pub fn unwatch(root: &Path, name: &str, task_id: Uuid) -> Result<()> {
 }
 
 pub fn unregister(root: &Path, name: &str) -> Result<bool> {
-    let _lock = storage::lock_plugins(root)?;
-    let path = storage::plugins_path_for_repo(root);
-    let mut reg = load_from(&path)?;
-    let removed = reg.unregister(name);
-    save_to(&path, &reg)?;
-    Ok(removed)
+    modify(root, |reg| Ok(reg.unregister(name)))
 }
 
 pub fn prune_task(root: &Path, task_id: Uuid) -> Result<()> {
@@ -178,24 +176,21 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_via_path() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("plugins.toml");
-
+    fn round_trip_via_toml() {
         let mut reg = PluginRegistry::default();
         reg.set_command("forgejo", argv("next-forgejo sync"));
         let id = Uuid::new_v4();
         reg.watch("forgejo", id).unwrap();
-        save_to(&path, &reg).unwrap();
 
-        let loaded = load_from(&path).unwrap();
+        let s = toml::to_string_pretty(&reg).unwrap();
+        let loaded: PluginRegistry = toml::from_str(&s).unwrap();
         assert_eq!(loaded, reg);
         assert_eq!(loaded.plugins[0].command, vec!["next-forgejo", "sync"]);
         assert_eq!(loaded.plugins[0].tasks, vec![id]);
     }
 
     #[test]
-    fn absent_file_loads_empty() {
+    fn legacy_load_from_absent_file_is_empty() {
         let dir = tempfile::TempDir::new().unwrap();
         let reg = load_from(&dir.path().join("nope.toml")).unwrap();
         assert!(reg.plugins.is_empty());

@@ -150,9 +150,9 @@ mod stale_tests {
             now: Utc::now(),
         };
         assert_eq!(pull_if_stale(&mut ctx, &opts), PullStatus::Disabled);
-        // No sync_state file should have been written.
-        let path = crate::core::storage::sync_state_path_for_repo(&ctx.repo_root);
-        assert!(!path.exists(), "disabled must not touch sync_state");
+        // No sync state should have been written: last_pull stays unset.
+        let state = sync_state::load(&ctx.repo_root).unwrap();
+        assert!(state.last_pull.is_none(), "disabled must not touch sync state");
     }
 
     #[test]

@@ -2,11 +2,13 @@ pub mod cached_store;
 pub mod filenames;
 pub mod git_backend;
 pub mod lock;
+pub mod machine_state;
 pub mod toml_store;
 
 pub use cached_store::CachedStore;
 pub use git_backend::GitBackend;
 pub use lock::FileLock;
+pub(crate) use machine_state::{load_machine_state, load_machine_state_at, update_machine_state_at};
 pub use toml_store::TomlStore;
 
 use std::path::{Path, PathBuf};
@@ -181,7 +183,15 @@ pub fn state_lock_path_for_repo(root: &Path) -> PathBuf {
 /// Re-entrant within a thread, like [`lock_repo`], so the nested `get_state` /
 /// `save_state` calls re-acquire it harmlessly.
 pub fn lock_state(root: &Path) -> Result<FileLock> {
-    FileLock::acquire(&state_lock_path_for_repo(root))
+    let lock_path = state_lock_path_for_repo(root);
+    // The per-repo state dir may not exist yet when a plugin/sync operation
+    // takes this lock before `TomlStore::open` has created it; flock cannot
+    // create a file in a missing directory.
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| TaskError::Other(format!("create state dir: {e}")))?;
+    }
+    FileLock::acquire(&lock_path)
 }
 
 /// Returns the full path where `task` is (or will be) stored under `root`.
@@ -237,9 +247,9 @@ pub fn state_path_for_repo(root: &Path) -> PathBuf {
 
 /// Returns the per-repository machine-local directory under
 /// `$XDG_STATE_HOME/task-manager/<hash>` where `<hash>` is an FNV-1a hash of the
-/// canonical repository root path.  Both `state.toml` and `plugins.toml` live
-/// here, so they are guaranteed co-located.
-fn state_dir_for_repo(root: &Path) -> PathBuf {
+/// canonical repository root path.  Only `state.toml` lives here now; the
+/// former `plugins.toml` and `sync_state.toml` have been merged into it.
+pub(crate) fn state_dir_for_repo(root: &Path) -> PathBuf {
     let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let hash = fnv1a_hash(&canonical.to_string_lossy());
     let base = dirs::state_dir()
@@ -250,59 +260,6 @@ fn state_dir_for_repo(root: &Path) -> PathBuf {
         })
         .join("task-manager");
     base.join(hash)
-}
-
-/// Returns the path to the machine-local plugin registry for the repo at `root`.
-///
-/// Co-located with `state.toml` (`plugins.toml` in the same per-repo state dir).
-/// Like the state file it is never committed to git — plugin binaries are
-/// per-machine, so registrations are not synced.
-pub fn plugins_path_for_repo(root: &Path) -> PathBuf {
-    state_dir_for_repo(root).join("plugins.toml")
-}
-
-/// Acquires the exclusive plugin-registry lock for the repo rooted at `root`.
-///
-/// A third lock independent of the repo lock (`.next.lock`) and state lock
-/// (`.state.toml.lock`); guards concurrent edits to `plugins.toml` and is
-/// re-entrant within a thread so a load → modify → save sequence is atomic.
-pub fn lock_plugins(root: &Path) -> Result<FileLock> {
-    let lock_path = state_lock_path(&plugins_path_for_repo(root));
-    // The per-repo state dir may not exist yet on the first plugin operation
-    // (unlike the state lock, nothing else pre-creates it); flock cannot create
-    // a file in a missing directory.
-    if let Some(parent) = lock_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| TaskError::Other(format!("create plugins dir: {e}")))?;
-    }
-    FileLock::acquire(&lock_path)
-}
-
-/// Returns the path to the machine-local sync-state file for the repo at `root`.
-///
-/// Co-located with `state.toml` and `plugins.toml` (`sync_state.toml` in the
-/// same per-repo state dir).  Tracks `last_pull` (pull-before-query staleness)
-/// and per-plugin sync timestamps.  Like the other state files it is never
-/// committed to git — it is per-machine.
-pub fn sync_state_path_for_repo(root: &Path) -> PathBuf {
-    state_dir_for_repo(root).join("sync_state.toml")
-}
-
-/// Acquires the exclusive sync-state lock for the repo rooted at `root`.
-///
-/// A fourth lock independent of the repo lock (`.next.lock`), state lock
-/// (`.state.toml.lock`), and plugin lock (`.plugins.toml.lock`); guards
-/// concurrent edits to `sync_state.toml` and is re-entrant within a thread so a
-/// load → modify → save sequence is atomic.
-pub fn lock_sync_state(root: &Path) -> Result<FileLock> {
-    let lock_path = state_lock_path(&sync_state_path_for_repo(root));
-    // The per-repo state dir may not exist yet on the first sync-state
-    // operation; flock cannot create a file in a missing directory.
-    if let Some(parent) = lock_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| TaskError::Other(format!("create sync-state dir: {e}")))?;
-    }
-    FileLock::acquire(&lock_path)
 }
 
 /// FNV-1a 64-bit hash — deterministic, no dependencies.

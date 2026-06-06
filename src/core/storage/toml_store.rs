@@ -45,7 +45,46 @@ impl TomlStore {
         let mut this = Self { root, state_path, state_lock_path };
         this.migrate_state_file()?;
         this.migrate_tag_descriptions()?;
+        this.migrate_merge_machine_files()?;
         Ok(this)
+    }
+
+    /// Folds the former separate `plugins.toml` and `sync_state.toml` (in the
+    /// state directory) into the combined `state.toml`, then deletes them.
+    ///
+    /// Idempotent: a no-op when neither legacy file is present (the steady
+    /// state after the first run). Existing `state.toml` global data is
+    /// preserved — only the `[[plugin]]` / `[sync]` sections are populated.
+    fn migrate_merge_machine_files(&mut self) -> Result<()> {
+        let Some(state_dir) = self.state_path.parent() else {
+            return Ok(());
+        };
+        let plugins_path = state_dir.join("plugins.toml");
+        let sync_path = state_dir.join("sync_state.toml");
+        if !plugins_path.exists() && !sync_path.exists() {
+            return Ok(());
+        }
+
+        let legacy_plugins = crate::core::plugin::registry::load_from(&plugins_path)?;
+        let legacy_sync = crate::core::sync_state::load_from(&sync_path)?;
+
+        crate::core::storage::update_machine_state_at(
+            self.state_path(),
+            self.state_lock_path(),
+            |machine| {
+                if !legacy_plugins.plugins.is_empty() {
+                    machine.plugins = legacy_plugins.plugins;
+                }
+                if legacy_sync != crate::core::sync_state::SyncState::default() {
+                    machine.sync = legacy_sync;
+                }
+                Ok(())
+            },
+        )?;
+
+        let _ = fs::remove_file(&plugins_path);
+        let _ = fs::remove_file(&sync_path);
+        Ok(())
     }
 
     /// If the old `<root>/state.toml` exists and the new `state_path` does not,
@@ -129,23 +168,6 @@ impl TomlStore {
     /// thread (so a transaction may hold the lock across nested writes).
     pub(crate) fn acquire_repo_lock(&self) -> Result<crate::core::storage::FileLock> {
         crate::core::storage::FileLock::acquire(&self.repo_lock_path())
-    }
-
-    /// Acquires the exclusive state-file lock (`.state.toml.lock`).
-    ///
-    /// This is a *separate* lock from the repository lock (`.next.lock`): the
-    /// machine-local state file lives outside the git repository and is never
-    /// committed, so it has its own lock.  Like the repo lock it is re-entrant
-    /// within a thread via [`crate::core::storage::FileLock`], so a state transaction
-    /// can hold it across `get_state` → modify → `save_state` while those nested
-    /// calls re-acquire it harmlessly.
-    ///
-    /// Reads take the same exclusive lock rather than a shared one: state
-    /// mutations are infrequent and cheap, and atomic writes already guarantee a
-    /// reader never observes a half-written file.  A single lock mode keeps the
-    /// lock re-entrant, which is what the read-modify-write transaction needs.
-    pub(crate) fn acquire_state_lock(&self) -> Result<crate::core::storage::FileLock> {
-        crate::core::storage::FileLock::acquire(self.state_lock_path())
     }
 
     /// Finds the current on-disk path for `id`, or `None` if not found.
@@ -326,30 +348,24 @@ impl Store for TomlStore {
     }
 
     fn get_state(&self) -> Result<GlobalState> {
-        // Hold the state lock while reading so a state transaction's read and
-        // its later write are atomic with respect to other processes.  The lock
-        // is re-entrant, so calling this inside a held state transaction does
-        // not deadlock; it is released when `_lock` drops at end of scope.
-        let _lock = self.acquire_state_lock()?;
-        let path = self.state_path();
-        if !path.exists() {
-            return Ok(GlobalState::default());
-        }
-        let content = fs::read_to_string(path)?;
-        toml::from_str::<GlobalState>(&content)
-            .map_err(|e| TaskError::Other(format!("parse error in state.toml: {e}")))
+        // Reads the global section of the combined machine-local `state.toml`.
+        // Takes the (re-entrant) state lock so this read is consistent with
+        // concurrent writers and does not deadlock inside a held state
+        // transaction. Keyed off this store's own `state_path`.
+        Ok(crate::core::storage::load_machine_state_at(self.state_path(), self.state_lock_path())?.global)
     }
 
     fn save_state(&mut self, state: &GlobalState) -> Result<()> {
-        // Hold the (re-entrant, exclusive) state lock until the atomic rename
-        // completes.  When called inside a state transaction the lock is already
-        // held by this thread, so this acquisition just bumps the recursion
-        // depth and the write is part of the transaction's critical section.
-        let _lock = self.acquire_state_lock()?;
-        let content = toml::to_string_pretty(state)
-            .map_err(|e| TaskError::Other(format!("TOML serialization error: {e}")))?;
-        atomic_write(self.state_path(), &content)?;
-        Ok(())
+        // Rewrites only the global section, preserving the plugin and sync
+        // sections, under the single (re-entrant, exclusive) state lock.
+        crate::core::storage::update_machine_state_at(
+            self.state_path(),
+            self.state_lock_path(),
+            |machine| {
+                machine.global = state.clone();
+                Ok(())
+            },
+        )
     }
 
     fn get_tag_meta(&self, tag: &str) -> Result<Option<TagMeta>> {

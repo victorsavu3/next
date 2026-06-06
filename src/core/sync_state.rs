@@ -1,13 +1,11 @@
 //! Machine-local sync state.
 //!
 //! Tracks when the local repository last pulled from its remote (`last_pull`)
-//! and, for Req B, when each plugin last synced (`plugins`).  Stored as
-//! `sync_state.toml` beside the state and plugin files under `$XDG_STATE_HOME`
-//! (never committed to git — it is per-machine), guarded by its own re-entrant
-//! lock (`.sync_state.toml.lock`) via [`crate::core::storage::lock_sync_state`].
-//!
-//! This mirrors the plugin-registry pattern in [`crate::core::plugin::registry`]:
-//! path-based `load_from`/`save_to` helpers plus a lock-wrapped public API.
+//! and, for Req B, when each plugin last synced (`plugins`).  It is the
+//! `[sync]` section of the combined machine-local `state.toml` under
+//! `$XDG_STATE_HOME` (never committed to git — it is per-machine), persisted via
+//! the shared [`crate::core::storage::machine_state`] helpers under the single
+//! state lock (`.state.toml.lock`).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -18,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{
     error::{Result, TaskError},
-    storage,
+    storage::{self, machine_state::update_machine_state},
 };
 
 /// Machine-local sync bookkeeping for a single repository.
@@ -44,8 +42,13 @@ pub struct PluginSyncState {
     pub last_sync: Option<DateTime<Utc>>,
 }
 
-// ── Path-based I/O (no locking; for the lock-wrapped fns and tests) ────────────
+// ── Path-based read (no locking; for the legacy-file migration) ────────────────
 
+/// Reads a standalone legacy `sync_state.toml` at `path` (default if absent).
+///
+/// Retained only for the one-time migration that folds the old separate
+/// `sync_state.toml` into the combined `state.toml`; live persistence goes
+/// through the `machine_state` helpers.
 pub(crate) fn load_from(path: &Path) -> Result<SyncState> {
     if !path.exists() {
         return Ok(SyncState::default());
@@ -55,33 +58,23 @@ pub(crate) fn load_from(path: &Path) -> Result<SyncState> {
         .map_err(|e| TaskError::Other(format!("parse sync_state.toml: {e}")))
 }
 
-pub(crate) fn save_to(path: &Path, state: &SyncState) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let content = toml::to_string_pretty(state)
-        .map_err(|e| TaskError::Other(format!("serialize sync_state.toml: {e}")))?;
-    storage::toml_store::atomic_write(path, &content)
-}
-
-// ── Lock-wrapped operations (the public API) ───────────────────────────────────
+// ── Persistence via the combined machine state (the public API) ────────────────
 //
-// Each holds the sync-state lock for the whole load → modify → save so
-// concurrent edits cannot lose updates.
+// Each operation runs inside `update_machine_state`, which holds the single
+// state lock across the whole load → modify → save so concurrent edits to any
+// machine-local section cannot lose updates.
 
-/// Loads the sync state (default/empty if no file exists yet).
+/// Loads the sync state from the combined `state.toml` (default if no file yet).
 pub fn load(root: &Path) -> Result<SyncState> {
-    let _lock = storage::lock_sync_state(root)?;
-    load_from(&storage::sync_state_path_for_repo(root))
+    Ok(storage::load_machine_state(root)?.sync)
 }
 
 /// Records a successful pull at `now`, preserving the plugins map.
 pub fn record_pull(root: &Path, now: DateTime<Utc>) -> Result<()> {
-    let _lock = storage::lock_sync_state(root)?;
-    let path = storage::sync_state_path_for_repo(root);
-    let mut state = load_from(&path)?;
-    state.last_pull = Some(now);
-    save_to(&path, &state)
+    update_machine_state(root, |machine| {
+        machine.sync.last_pull = Some(now);
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -89,10 +82,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trip_via_path() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("sync_state.toml");
-
+    fn round_trip_via_toml() {
         let now = Utc::now();
         let mut state = SyncState {
             last_pull: Some(now),
@@ -101,21 +91,28 @@ mod tests {
         state
             .plugins
             .insert("forgejo".to_owned(), PluginSyncState { last_sync: Some(now) });
-        save_to(&path, &state).unwrap();
 
-        let loaded = load_from(&path).unwrap();
+        let s = toml::to_string_pretty(&state).unwrap();
+        let loaded: SyncState = toml::from_str(&s).unwrap();
         assert_eq!(loaded, state, "DateTime<Utc> must round-trip through TOML");
         assert_eq!(loaded.last_pull, Some(now));
         assert_eq!(loaded.plugins["forgejo"].last_sync, Some(now));
     }
 
     #[test]
-    fn absent_file_loads_default() {
+    fn legacy_load_from_absent_file_is_default() {
         let dir = tempfile::TempDir::new().unwrap();
         let state = load_from(&dir.path().join("nope.toml")).unwrap();
         assert_eq!(state, SyncState::default());
         assert!(state.last_pull.is_none());
         assert!(state.plugins.is_empty(), "plugins map defaults to empty");
+    }
+
+    #[test]
+    fn load_defaults_when_no_state_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let state = load(dir.path()).unwrap();
+        assert_eq!(state, SyncState::default());
     }
 
     #[test]
@@ -131,15 +128,21 @@ mod tests {
 
     #[test]
     fn record_pull_preserves_plugins() {
+        use crate::core::storage::machine_state::update_machine_state;
+
         let dir = tempfile::TempDir::new().unwrap();
         let root = dir.path();
-        let path = storage::sync_state_path_for_repo(root);
 
-        // Seed a plugins entry (as Req B would), then record a pull.
-        let mut seed = SyncState::default();
-        seed.plugins
-            .insert("forgejo".to_owned(), PluginSyncState { last_sync: Some(Utc::now()) });
-        save_to(&path, &seed).unwrap();
+        // Seed a plugins entry (as Req B would) directly in the combined state,
+        // then record a pull.
+        update_machine_state(root, |machine| {
+            machine.sync.plugins.insert(
+                "forgejo".to_owned(),
+                PluginSyncState { last_sync: Some(Utc::now()) },
+            );
+            Ok(())
+        })
+        .unwrap();
 
         let now = Utc::now();
         record_pull(root, now).unwrap();
@@ -147,5 +150,32 @@ mod tests {
         let loaded = load(root).unwrap();
         assert_eq!(loaded.last_pull, Some(now));
         assert!(loaded.plugins.contains_key("forgejo"), "record_pull must preserve plugins");
+    }
+
+    #[test]
+    fn record_pull_preserves_global_and_plugin_sections() {
+        use crate::core::storage::machine_state::{load_machine_state, update_machine_state};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Seed a global field and a plugin registration alongside sync state.
+        update_machine_state(root, |machine| {
+            machine.global.active_contexts = vec!["@work".into()];
+            machine.plugins.push(crate::core::plugin::registry::Plugin {
+                name: "forgejo".into(),
+                command: vec!["next-forgejo".into()],
+                tasks: vec![],
+            });
+            Ok(())
+        })
+        .unwrap();
+
+        record_pull(root, Utc::now()).unwrap();
+
+        let machine = load_machine_state(root).unwrap();
+        assert_eq!(machine.global.active_contexts, vec!["@work"]);
+        assert_eq!(machine.plugins.len(), 1, "record_pull must not drop plugins");
+        assert!(machine.sync.last_pull.is_some());
     }
 }
