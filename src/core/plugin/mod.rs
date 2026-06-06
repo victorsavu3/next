@@ -7,6 +7,8 @@
 
 pub mod notify;
 pub mod registry;
+pub mod run;
 
 pub use notify::{notify, TaskEvent};
 pub use registry::{Plugin, PluginRegistry};
+pub use run::{resolve_sync_interval, run_due_syncs};

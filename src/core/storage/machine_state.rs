@@ -148,6 +148,10 @@ mod tests {
             name: "forgejo".into(),
             command: vec!["next-forgejo".into(), "hook".into()],
             tasks: vec![Uuid::new_v4()],
+            sync_command: vec!["next-forgejo".into(), "sync".into()],
+            default_sync_interval_secs: None,
+            sync_interval_secs: Some(3600),
+            enabled: true,
         });
         m.sync.last_pull = Some(now);
         m.sync.plugins = BTreeMap::from([(

@@ -22,6 +22,16 @@ pub enum PluginSubcommand {
     Unwatch(WatchArgs),
     /// Remove a plugin and all its subscriptions.
     Unregister(NameArgs),
+    /// Set a plugin's periodic-sync (import) command (upserts the plugin).
+    #[command(name = "set-sync")]
+    SetSync(SetSyncArgs),
+    /// Set the user override for a plugin's sync interval (seconds).
+    #[command(name = "set-interval")]
+    SetInterval(SetIntervalArgs),
+    /// Enable a plugin's periodic sync.
+    Enable(NameArgs),
+    /// Disable a plugin's periodic sync.
+    Disable(NameArgs),
     /// List registered plugins and the tasks they watch.
     List,
 }
@@ -50,6 +60,32 @@ pub struct NameArgs {
     pub name: String,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct SetSyncArgs {
+    /// Plugin name (created if it does not exist).
+    pub name: String,
+    /// The plugin's advertised default sync interval, in seconds (PLUGIN
+    /// priority, below a user `set-interval` override).
+    #[arg(long)]
+    pub default_interval: Option<u64>,
+    /// Sync command to spawn (program followed by its arguments). Captured
+    /// verbatim; run with `NEXT_REPO` set when the plugin is due.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true, num_args = 1..)]
+    pub command: Vec<String>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SetIntervalArgs {
+    /// Plugin name (must already be registered).
+    pub name: String,
+    /// Interval in seconds (USER override). Omit with `--clear` to remove it.
+    #[arg(required_unless_present = "clear")]
+    pub secs: Option<u64>,
+    /// Clear the user override, falling back to the plugin/system default.
+    #[arg(long)]
+    pub clear: bool,
+}
+
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let root = ctx.repo.repo_root.clone();
     match args.subcommand {
@@ -74,19 +110,65 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
                 anyhow::bail!("no plugin named {:?}", a.name);
             }
         }
+        PluginSubcommand::SetSync(a) => {
+            registry::set_sync_command(&root, &a.name, a.command.clone())?;
+            if let Some(secs) = a.default_interval {
+                registry::set_default_sync_interval(&root, &a.name, Some(secs))?;
+            }
+            tracing::info!(cmd = "plugin", "{} sync -> {}", a.name, a.command.join(" "));
+        }
+        PluginSubcommand::SetInterval(a) => {
+            let secs = if a.clear { None } else { a.secs };
+            registry::set_sync_interval(&root, &a.name, secs)?;
+            match secs {
+                Some(s) => tracing::info!(cmd = "plugin", "{} sync interval -> {}s", a.name, s),
+                None => tracing::info!(cmd = "plugin", "{} sync interval cleared", a.name),
+            }
+        }
+        PluginSubcommand::Enable(a) => {
+            registry::set_enabled(&root, &a.name, true)?;
+            tracing::info!(cmd = "plugin", "{} enabled", a.name);
+        }
+        PluginSubcommand::Disable(a) => {
+            registry::set_enabled(&root, &a.name, false)?;
+            tracing::info!(cmd = "plugin", "{} disabled", a.name);
+        }
         PluginSubcommand::List => list(ctx)?,
     }
     Ok(())
 }
 
 fn list(ctx: &AppContext) -> anyhow::Result<()> {
-    let reg = registry::load(&ctx.repo.repo_root)?;
+    let root = &ctx.repo.repo_root;
+    let reg = registry::load(root)?;
     if reg.plugins.is_empty() {
         println!("No plugins registered.");
         return Ok(());
     }
+    let sync = crate::core::sync_state::load(root)?;
+    let system_default = ctx.config.sync.plugin_sync_default_secs;
     for plugin in &reg.plugins {
-        println!("{}  ({})", plugin.name, plugin.command.join(" "));
+        let status = if plugin.enabled { "" } else { "  [disabled]" };
+        if plugin.command.is_empty() {
+            println!("{}{status}", plugin.name);
+        } else {
+            println!("{}  ({}){status}", plugin.name, plugin.command.join(" "));
+        }
+        // Periodic-sync configuration, when set.
+        if !plugin.sync_command.is_empty() {
+            let interval = crate::core::plugin::resolve_sync_interval(plugin, system_default);
+            let last = sync
+                .plugins
+                .get(&plugin.name)
+                .and_then(|p| p.last_sync)
+                .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
+                .unwrap_or_else(|| "never".to_owned());
+            println!(
+                "  sync: {}  (every {}s, last {last})",
+                plugin.sync_command.join(" "),
+                interval.as_secs()
+            );
+        }
         if plugin.tasks.is_empty() {
             println!("  (no tasks watched)");
         } else {

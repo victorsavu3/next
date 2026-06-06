@@ -26,30 +26,98 @@ pub struct PluginRegistry {
     pub plugins: Vec<Plugin>,
 }
 
+fn default_enabled() -> bool { true }
+
 /// A single registered plugin and the tasks it watches.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Plugin {
     /// Unique plugin name; also used as the loop-guard origin token.
     pub name: String,
-    /// Command to spawn, as argv (`command[0]` is the program). Never shell-parsed.
+    /// Export-hook command to spawn, as argv (`command[0]` is the program).
+    /// Never shell-parsed. May be empty for a sync-only (import-only) plugin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub command: Vec<String>,
     /// Task ids this plugin is subscribed to.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tasks: Vec<Uuid>,
+    /// Periodic-sync (import) command, as argv — distinct from the export
+    /// `command`. Empty means this plugin has no periodic sync.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sync_command: Vec<String>,
+    /// The plugin's advertised default sync interval (seconds). Middle priority
+    /// in SYSTEM → PLUGIN → USER.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_sync_interval_secs: Option<u64>,
+    /// The user's override of the sync interval (seconds). Highest priority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_interval_secs: Option<u64>,
+    /// Whether the plugin's periodic sync is enabled. Defaults to `true`.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+impl Plugin {
+    /// A new plugin with the given name, enabled, and everything else empty.
+    fn new(name: &str) -> Self {
+        Plugin {
+            name: name.to_owned(),
+            command: Vec::new(),
+            tasks: Vec::new(),
+            sync_command: Vec::new(),
+            default_sync_interval_secs: None,
+            sync_interval_secs: None,
+            enabled: true,
+        }
+    }
 }
 
 impl PluginRegistry {
-    /// Creates or replaces the command for `name`, preserving its subscriptions.
+    /// Creates or replaces the export command for `name`, preserving everything else.
     pub fn set_command(&mut self, name: &str, command: Vec<String>) {
         if let Some(p) = self.plugins.iter_mut().find(|p| p.name == name) {
             p.command = command;
         } else {
-            self.plugins.push(Plugin {
-                name: name.to_owned(),
-                command,
-                tasks: Vec::new(),
-            });
+            let mut p = Plugin::new(name);
+            p.command = command;
+            self.plugins.push(p);
         }
+    }
+
+    /// Creates or replaces the periodic-sync command for `name` (upserts the
+    /// plugin if absent), preserving everything else.
+    pub fn set_sync_command(&mut self, name: &str, sync_command: Vec<String>) {
+        if let Some(p) = self.plugins.iter_mut().find(|p| p.name == name) {
+            p.sync_command = sync_command;
+        } else {
+            let mut p = Plugin::new(name);
+            p.sync_command = sync_command;
+            self.plugins.push(p);
+        }
+    }
+
+    /// Sets the plugin-advertised default sync interval. Errors if unknown.
+    pub fn set_default_sync_interval(&mut self, name: &str, secs: Option<u64>) -> Result<()> {
+        self.find_mut(name)?.default_sync_interval_secs = secs;
+        Ok(())
+    }
+
+    /// Sets the user sync-interval override. Errors if the plugin is unknown.
+    pub fn set_sync_interval(&mut self, name: &str, secs: Option<u64>) -> Result<()> {
+        self.find_mut(name)?.sync_interval_secs = secs;
+        Ok(())
+    }
+
+    /// Enables or disables a plugin's periodic sync. Errors if unknown.
+    pub fn set_enabled(&mut self, name: &str, enabled: bool) -> Result<()> {
+        self.find_mut(name)?.enabled = enabled;
+        Ok(())
+    }
+
+    fn find_mut(&mut self, name: &str) -> Result<&mut Plugin> {
+        self.plugins
+            .iter_mut()
+            .find(|p| p.name == name)
+            .ok_or_else(|| TaskError::Other(format!("unknown plugin {name:?}")))
     }
 
     /// Subscribes `name` to `task_id`. Errors if the plugin is not registered.
@@ -150,6 +218,25 @@ pub fn prune_task(root: &Path, task_id: Uuid) -> Result<()> {
     })
 }
 
+pub fn set_sync_command(root: &Path, name: &str, sync_command: Vec<String>) -> Result<()> {
+    modify(root, |reg| {
+        reg.set_sync_command(name, sync_command);
+        Ok(())
+    })
+}
+
+pub fn set_default_sync_interval(root: &Path, name: &str, secs: Option<u64>) -> Result<()> {
+    modify(root, |reg| reg.set_default_sync_interval(name, secs))
+}
+
+pub fn set_sync_interval(root: &Path, name: &str, secs: Option<u64>) -> Result<()> {
+    modify(root, |reg| reg.set_sync_interval(name, secs))
+}
+
+pub fn set_enabled(root: &Path, name: &str, enabled: bool) -> Result<()> {
+    modify(root, |reg| reg.set_enabled(name, enabled))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +257,40 @@ mod tests {
         assert_eq!(loaded, reg);
         assert_eq!(loaded.plugins[0].command, vec!["next-forgejo", "sync"]);
         assert_eq!(loaded.plugins[0].tasks, vec![id]);
+    }
+
+    #[test]
+    fn round_trip_with_sync_fields() {
+        let mut reg = PluginRegistry::default();
+        reg.set_sync_command("forgejo", argv("next-forgejo sync"));
+        reg.set_default_sync_interval("forgejo", Some(43200)).unwrap();
+        reg.set_sync_interval("forgejo", Some(7200)).unwrap();
+        reg.set_enabled("forgejo", false).unwrap();
+
+        let loaded: PluginRegistry = toml::from_str(&toml::to_string_pretty(&reg).unwrap()).unwrap();
+        let p = &loaded.plugins[0];
+        assert_eq!(p.sync_command, vec!["next-forgejo", "sync"]);
+        assert_eq!(p.default_sync_interval_secs, Some(43200));
+        assert_eq!(p.sync_interval_secs, Some(7200));
+        assert!(!p.enabled);
+    }
+
+    #[test]
+    fn pre_req_b_plugin_loads_with_defaults() {
+        // A `[[plugin]]` written before Req B (no sync fields, no `enabled`).
+        let toml = "[[plugin]]\nname = \"forgejo\"\ncommand = [\"next-forgejo\", \"hook\"]\n";
+        let reg: PluginRegistry = toml::from_str(toml).unwrap();
+        let p = &reg.plugins[0];
+        assert!(p.enabled, "enabled must default to true for legacy plugins");
+        assert!(p.sync_command.is_empty());
+        assert!(p.sync_interval_secs.is_none());
+        assert!(p.default_sync_interval_secs.is_none());
+    }
+
+    #[test]
+    fn set_enabled_unknown_plugin_errors() {
+        let mut reg = PluginRegistry::default();
+        assert!(reg.set_enabled("ghost", false).is_err());
     }
 
     #[test]

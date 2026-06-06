@@ -16,6 +16,13 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     match sync(&mut ctx.repo, args.push_only, args.pull_only)? {
         SyncOutcome::Clean => {
             tracing::info!(cmd = "sync", "ok");
+            // Trigger any registered plugin's periodic sync that is now due.
+            // Best-effort; runs after the sync (no repo lock held).
+            crate::core::plugin::run_due_syncs(
+                &ctx.repo.repo_root,
+                ctx.config.sync.plugin_sync_default_secs,
+                chrono::Local::now().to_utc(),
+            );
         }
         SyncOutcome::Conflicts(paths) => {
             let names: Vec<_> = paths.iter().map(|p| p.display().to_string()).collect();

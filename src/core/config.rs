@@ -10,6 +10,7 @@ fn default_next_count() -> usize { DEFAULT_NEXT_COUNT }
 fn default_pull_before_query() -> bool { true }
 fn default_staleness_secs() -> u64 { 3600 }
 fn default_pull_timeout_secs() -> u64 { 10 }
+fn default_plugin_sync_default_secs() -> u64 { 86400 }
 
 // ── SyncConfig ────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,13 @@ pub struct SyncConfig {
     /// abandoned.  Stored only — not yet enforced (deferred to a later task).
     #[serde(default = "default_pull_timeout_secs")]
     pub pull_timeout_secs: u64,
+
+    /// System-default interval (seconds) between a plugin's periodic syncs,
+    /// used when a plugin sets no default and the user sets no override.  This
+    /// is the lowest-priority value in the SYSTEM → PLUGIN → USER precedence.
+    /// Default 86400 (one day).
+    #[serde(default = "default_plugin_sync_default_secs")]
+    pub plugin_sync_default_secs: u64,
 }
 
 impl Default for SyncConfig {
@@ -50,6 +58,7 @@ impl Default for SyncConfig {
             pull_before_query: default_pull_before_query(),
             staleness_secs: default_staleness_secs(),
             pull_timeout_secs: default_pull_timeout_secs(),
+            plugin_sync_default_secs: default_plugin_sync_default_secs(),
         }
     }
 }

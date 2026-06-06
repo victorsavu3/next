@@ -60,6 +60,14 @@ pub fn record_pull(root: &Path, now: DateTime<Utc>) -> Result<()> {
     })
 }
 
+/// Records a successful periodic sync for `name` at `now`, preserving the rest.
+pub fn record_plugin_sync(root: &Path, name: &str, now: DateTime<Utc>) -> Result<()> {
+    update_machine_state(root, |machine| {
+        machine.sync.plugins.entry(name.to_owned()).or_default().last_sync = Some(now);
+        Ok(())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,6 +106,21 @@ mod tests {
         let state: SyncState = toml::from_str(&toml).unwrap();
         assert!(state.plugins.is_empty());
         assert!(state.last_pull.is_some());
+    }
+
+    #[test]
+    fn record_plugin_sync_round_trips_and_preserves_others() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        let earlier = Utc::now();
+        record_pull(root, earlier).unwrap();
+
+        let now = earlier + chrono::Duration::seconds(5);
+        record_plugin_sync(root, "forgejo", now).unwrap();
+
+        let loaded = load(root).unwrap();
+        assert_eq!(loaded.plugins["forgejo"].last_sync, Some(now));
+        assert_eq!(loaded.last_pull, Some(earlier), "record_plugin_sync must preserve last_pull");
     }
 
     #[test]
@@ -140,6 +163,10 @@ mod tests {
                 name: "forgejo".into(),
                 command: vec!["next-forgejo".into()],
                 tasks: vec![],
+                sync_command: vec![],
+                default_sync_interval_secs: None,
+                sync_interval_secs: None,
+                enabled: true,
             });
             Ok(())
         })
