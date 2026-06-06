@@ -1,8 +1,8 @@
 //! `next plugin` — manage machine-local export plugins.
 //!
 //! Plugins subscribe to individual tasks and are spawned when a watched task is
-//! updated.  Registrations live in a machine-local `plugins.toml` (not synced
-//! via git); see [`crate::core::plugin`].
+//! updated.  Registrations live in the `[[plugin]]` section of the machine-local
+//! `state.toml` (not synced via git); see [`crate::core::plugin`].
 
 use crate::{core::{plugin::registry, resolve::resolve_task_id}, AppContext};
 
