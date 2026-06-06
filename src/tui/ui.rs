@@ -235,6 +235,15 @@ fn list_item(scored: &ScoredTask, today: NaiveDate, width: usize) -> ListItem<'s
         .map(|d| d.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| "          ".to_owned());
 
+    // Blocked indicator: a dimmed glyph before the title when the task has
+    // open `blocked_by` entries. Shown even in the default view (which hides
+    // blocked tasks) so that `--all` users can tell at a glance.
+    let blocked_marker = if task.blocked_by.is_empty() {
+        Span::raw("  ")
+    } else {
+        Span::styled("⊘ ", base.add_modifier(Modifier::DIM))
+    };
+
     let mut spans = vec![
         Span::styled(format!("{:5.1}", scored.score), base.add_modifier(Modifier::DIM)),
         Span::raw(" "),
@@ -242,6 +251,7 @@ fn list_item(scored: &ScoredTask, today: NaiveDate, width: usize) -> ListItem<'s
         Span::raw(" "),
         Span::styled(due, base.add_modifier(Modifier::DIM)),
         Span::raw("  "),
+        blocked_marker,
         Span::styled(task.title.clone(), base),
     ];
 
@@ -388,6 +398,12 @@ fn detail_lines(detail: &DetailData, today: NaiveDate, width: usize) -> Vec<Line
     if !detail.blockers.is_empty() {
         lines.push(field("Blocked", detail.blockers.join(", ")));
     }
+    if !detail.blocks.is_empty() {
+        lines.push(Line::from(label_span("Blocks")));
+        for (id, title) in &detail.blocks {
+            lines.push(Line::from(Span::raw(format!("  [{id}] {title}"))));
+        }
+    }
     if let Some(assignee) = &task.assignee {
         lines.push(field("Assignee", assignee.clone()));
     }
@@ -528,10 +544,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let hint = match app.mode() {
         Mode::Normal => match app.view() {
             View::List => {
-                "q quit  1/2/3 view  j/k nav  e edit  d done  s start/stop  c cancel  m move  o open  x del  / filter  A/F/U flags  S state  y sync"
+                "q quit  1/2/3 view  j/k nav  e edit  d done  s start/stop  c cancel  m move  o open  x del  b blocker  / filter  A/F/U flags  S state  y sync"
             }
             View::Tree => {
-                "q quit  1/2/3 view  j/k nav  ←/→ fold  Space toggle  . all  e edit  d done  s start  m move  x del  / filter  S state  y sync"
+                "q quit  1/2/3 view  j/k nav  ←/→ fold  Space toggle  . all  e edit  d done  s start  m move  x del  b blocker  / filter  S state  y sync"
             }
             View::Forecast => {
                 "q quit  1/2/3 view  +/- horizon  r reload  / filter  A/F/U flags  S state  y sync"
@@ -1436,5 +1452,43 @@ mod tests {
             let mut terminal = Terminal::new(backend).unwrap();
             terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         }
+    }
+
+    /// A blocker and a blocked task. The blocker's detail shows a `Blocks`
+    /// section; the blocked task's list row shows the ⊘ indicator. Both render
+    /// without panicking.
+    #[test]
+    fn renders_blocker_and_blocked_relationship_without_panicking() {
+        let blocker = Task::new("the blocker");
+        let blocker_id = blocker.id;
+        let mut blocked = Task::new("the blocked task");
+        blocked.blocked_by = vec![blocker_id];
+
+        let mut app = app_with_tasks(vec![blocker, blocked]);
+        // --all reveals the blocked task in the list.
+        app.update(Action::ToggleAll);
+
+        // Select the blocker and render — its detail pane must show the
+        // `Blocks` section.
+        let idx = app.tasks().iter().position(|s| s.task.id == blocker_id).unwrap();
+        while app.selected() < idx {
+            app.update(Action::SelectNext);
+        }
+        assert_eq!(app.selected_task().unwrap().id, blocker_id);
+
+        let detail = app.selected_detail().unwrap();
+        let lines = detail_lines(&detail, app.today(), 200);
+        let text = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Blocks:"), "expected Blocks section: {text}");
+        assert!(text.contains("the blocked task"), "expected blocked title: {text}");
+
+        // Full render must not panic.
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }
 }

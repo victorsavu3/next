@@ -213,19 +213,26 @@ pub enum Action {
 
     /// Trigger a background sync (no-op if one is already in flight).
     SyncNow,
+
+    /// In [`View::List`] or [`View::Tree`]: jump the selection to the first
+    /// blocker of the selected task (the first entry in `blocked_by`). If the
+    /// blocker is not in the current filtered view, set a status hint.
+    JumpToBlocker,
 }
 
 /// Everything the detail pane needs for one task, resolved from the cached
 /// full task list so the draw path makes no store calls.
 ///
 /// `parent`, `children`, and `blockers` are pre-resolved `(short_id, title)`
-/// pairs (blockers fall back to the raw id string when unresolved). `breakdown`
+/// pairs (blockers fall back to the raw id string when unresolved). `blocks`
+/// is the reverse — tasks that have THIS task in their `blocked_by`. `breakdown`
 /// is recomputed from the cached tasks + tag metadata each frame (cheap).
 pub struct DetailData<'a> {
     pub task: &'a Task,
     pub parent: Option<(String, String)>,
     pub children: Vec<(String, String)>,
     pub blockers: Vec<String>,
+    pub blocks: Vec<(String, String)>,
     pub breakdown: ScoreBreakdown,
 }
 
@@ -594,6 +601,13 @@ impl App {
             })
             .collect();
 
+        let blocks: Vec<(String, String)> = self
+            .all_tasks
+            .iter()
+            .filter(|t| t.blocked_by.contains(&task.id))
+            .map(|t| (short_id(t), t.title.clone()))
+            .collect();
+
         let parent_task = task
             .parent_id
             .and_then(|pid| self.all_tasks.iter().find(|t| t.id == pid));
@@ -610,6 +624,7 @@ impl App {
             parent,
             children,
             blockers,
+            blocks,
             breakdown,
         })
     }
@@ -738,6 +753,7 @@ impl App {
             KeyCode::Char('A') => Some(Action::ToggleAll),
             KeyCode::Char('F') => Some(Action::ToggleFuture),
             KeyCode::Char('U') => Some(Action::ToggleAllUsers),
+            KeyCode::Char('b') => Some(Action::JumpToBlocker),
             KeyCode::PageDown => Some(Action::DetailPageDown),
             KeyCode::PageUp => Some(Action::DetailPageUp),
             _ => Self::task_action_key(key),
@@ -767,6 +783,7 @@ impl App {
             // `.` toggles include-done/cancelled (the list view's `A` is taken by
             // the global filter-all toggle, so the tree uses a distinct key).
             KeyCode::Char('.') => Some(Action::TreeToggleAll),
+            KeyCode::Char('b') => Some(Action::JumpToBlocker),
             KeyCode::PageDown => Some(Action::DetailPageDown),
             KeyCode::PageUp => Some(Action::DetailPageUp),
             _ => Self::task_action_key(key),
@@ -1002,6 +1019,8 @@ impl App {
             }
 
             Action::SyncNow => self.start_sync(),
+
+            Action::JumpToBlocker => self.do_jump_to_blocker(),
         }
     }
 
@@ -1782,6 +1801,31 @@ impl App {
     pub fn clamp_detail_scroll(&mut self, max: u16) {
         if self.detail_scroll > max {
             self.detail_scroll = max;
+        }
+    }
+
+    /// Jumps the list selection to the first blocker of the selected task.
+    ///
+    /// If the selected task has no `blocked_by` entries, sets a "no blockers"
+    /// status. If the first blocker is not in the current filtered view (e.g.
+    /// because `--all` is off), sets a hint to toggle the flag instead.
+    fn do_jump_to_blocker(&mut self) {
+        let Some(task) = self.selected_task() else {
+            self.status = Some("nothing selected".to_owned());
+            return;
+        };
+        let Some(&blocker_id) = task.blocked_by.first() else {
+            self.status = Some("no blockers".to_owned());
+            return;
+        };
+        if let Some(idx) = self.tasks.iter().position(|s| s.task.id == blocker_id) {
+            self.selected = idx;
+            self.detail_scroll = 0;
+            self.status = None;
+        } else {
+            self.status = Some(
+                "blocker not in current view — toggle --all to see it".to_owned(),
+            );
         }
     }
 }
@@ -2770,5 +2814,94 @@ mod tests {
         assert_eq!(app.forecast_horizon(), base + 30);
         app.update(Action::ForecastNarrow);
         assert_eq!(app.forecast_horizon(), base);
+    }
+
+    // ── dependency visibility (blocked indicator + b key) ───────────────────
+
+    /// `blocks` is populated when another task lists this task in its `blocked_by`.
+    #[test]
+    fn selected_detail_blocks_field_populated() {
+        let blocker = Task::new("the blocker");
+        let blocker_id = blocker.id;
+        let mut blocked = Task::new("the blocked task");
+        blocked.blocked_by = vec![blocker_id];
+
+        let mut app = app_with_repo_tasks(vec![blocker, blocked]);
+        // Enable --all so both tasks appear.
+        app.filter_all = true;
+        app.reload().unwrap();
+
+        // Select the blocker.
+        let idx = app.tasks().iter().position(|s| s.task.id == blocker_id).unwrap();
+        app.selected = idx;
+
+        let detail = app.selected_detail().unwrap();
+        // The blocker's `blocks` list must contain the blocked task.
+        assert_eq!(detail.blocks.len(), 1);
+        assert!(detail.blocks[0].1.contains("the blocked task"));
+        // The blocker itself has no `blocked_by` entries.
+        assert!(detail.blockers.is_empty());
+    }
+
+    /// The `b` key jumps selection to the first blocker when it is in the
+    /// current filtered view.
+    #[test]
+    fn jump_to_blocker_selects_blocker_in_view() {
+        let blocker = Task::new("blocker task");
+        let blocker_id = blocker.id;
+        let mut blocked = Task::new("blocked task");
+        blocked.blocked_by = vec![blocker_id];
+
+        let mut app = app_with_repo_tasks(vec![blocker, blocked]);
+        // Show all so both are visible.
+        app.filter_all = true;
+        app.reload().unwrap();
+
+        // Select the blocked task.
+        let blocked_idx = app.tasks().iter().position(|s| s.task.blocked_by.contains(&blocker_id)).unwrap();
+        app.selected = blocked_idx;
+        assert_eq!(app.selected_task().unwrap().title, "blocked task");
+
+        app.update(Action::JumpToBlocker);
+
+        // Selection must have moved to the blocker.
+        assert_eq!(app.selected_task().unwrap().id, blocker_id);
+        assert!(app.status().is_none());
+    }
+
+    /// The `b` key sets a status hint when the blocker is not in the current
+    /// filtered view (e.g. because `--all` is off and the blocker is in some
+    /// non-default state that hides it).
+    #[test]
+    fn jump_to_blocker_sets_status_when_blocker_filtered_out() {
+        let mut blocker = Task::new("hidden blocker");
+        let blocker_id = blocker.id;
+        blocker.mark_done(); // done tasks are hidden from the default view
+
+        let mut blocked = Task::new("blocked task");
+        blocked.blocked_by = vec![blocker_id];
+
+        let mut app = app_with_repo_tasks(vec![blocker, blocked]);
+        // Default filter: done task is hidden.
+        app.reload().unwrap();
+
+        // Only `blocked task` is visible; select it.
+        assert_eq!(app.tasks().len(), 1);
+        app.selected = 0;
+        assert_eq!(app.selected_task().unwrap().title, "blocked task");
+
+        app.update(Action::JumpToBlocker);
+
+        // The blocker is not in the current view.
+        let status = app.status().unwrap();
+        assert!(status.contains("not in current view"), "unexpected status: {status}");
+    }
+
+    /// The `b` key on a task with no `blocked_by` sets the "no blockers" status.
+    #[test]
+    fn jump_to_blocker_no_blockers_sets_status() {
+        let mut app = app_with_repo_tasks(vec![Task::new("free task")]);
+        app.update(Action::JumpToBlocker);
+        assert_eq!(app.status().unwrap(), "no blockers");
     }
 }
