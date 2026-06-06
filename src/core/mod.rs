@@ -15,6 +15,7 @@ pub mod service;
 pub mod storage;
 pub mod store;
 pub mod sync;
+pub mod sync_state;
 pub mod task_repository;
 pub mod value;
 

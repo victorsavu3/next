@@ -52,6 +52,12 @@ pub struct Cli {
     #[arg(long, global = true, conflicts_with = "autosync")]
     pub no_autosync: bool,
 
+    /// Skip the pull-before-query staleness check for this invocation, even if
+    /// `sync.pull_before_query = true` in config.  Operate on the local copy
+    /// only (no network pull).
+    #[arg(long, global = true)]
+    pub offline: bool,
+
     /// Subcommand to run. Defaults to `list` when omitted.
     #[command(subcommand)]
     pub command: Option<Command>,

@@ -7,11 +7,14 @@ pub const DEFAULT_NEXT_COUNT: usize = 10;
 
 fn default_forecast_horizon_days() -> u32 { DEFAULT_FORECAST_HORIZON_DAYS }
 fn default_next_count() -> usize { DEFAULT_NEXT_COUNT }
+fn default_pull_before_query() -> bool { true }
+fn default_staleness_secs() -> u64 { 3600 }
+fn default_pull_timeout_secs() -> u64 { 10 }
 
 // ── SyncConfig ────────────────────────────────────────────────────────────────
 
 /// Controls how `next sync` (and autosync) performs push/pull operations.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
     /// When `true`, `next sync` runs `git pull` / `git push` as shell
     /// subprocesses instead of using the libgit2 bindings.
@@ -21,6 +24,34 @@ pub struct SyncConfig {
     /// agent socket) while plain `git` commands work fine.
     #[serde(default)]
     pub git_subprocess: bool,
+
+    /// When `true` (the default), a command pulls from the remote before
+    /// reading/writing if the local copy is stale (see `staleness_secs`).  The
+    /// pull is best-effort: it never fails or blocks the command.  Bypass it for
+    /// a single invocation with `--offline`.
+    #[serde(default = "default_pull_before_query")]
+    pub pull_before_query: bool,
+
+    /// How long (seconds) a local copy stays "fresh" after a pull before
+    /// `pull_before_query` will pull again.  Default 3600 (one hour).
+    #[serde(default = "default_staleness_secs")]
+    pub staleness_secs: u64,
+
+    /// Maximum time (seconds) a pull-before-query pull may take before being
+    /// abandoned.  Stored only — not yet enforced (deferred to a later task).
+    #[serde(default = "default_pull_timeout_secs")]
+    pub pull_timeout_secs: u64,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            git_subprocess: false,
+            pull_before_query: default_pull_before_query(),
+            staleness_secs: default_staleness_secs(),
+            pull_timeout_secs: default_pull_timeout_secs(),
+        }
+    }
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -110,5 +141,44 @@ mod tests {
     fn sync_section_absent_defaults_correctly() {
         let cfg: Config = toml::from_str("").unwrap();
         assert!(!cfg.sync.git_subprocess);
+        // Pull-before-query defaults.
+        assert!(cfg.sync.pull_before_query);
+        assert_eq!(cfg.sync.staleness_secs, 3600);
+        assert_eq!(cfg.sync.pull_timeout_secs, 10);
+    }
+
+    #[test]
+    fn sync_config_defaults_match() {
+        let sync = SyncConfig::default();
+        assert!(!sync.git_subprocess);
+        assert!(sync.pull_before_query);
+        assert_eq!(sync.staleness_secs, 3600);
+        assert_eq!(sync.pull_timeout_secs, 10);
+    }
+
+    #[test]
+    fn sync_pull_before_query_fields_round_trip() {
+        let cfg: Config = toml::from_str(
+            "[sync]\npull_before_query = false\nstaleness_secs = 42\npull_timeout_secs = 7",
+        )
+        .unwrap();
+        assert!(!cfg.sync.pull_before_query);
+        assert_eq!(cfg.sync.staleness_secs, 42);
+        assert_eq!(cfg.sync.pull_timeout_secs, 7);
+
+        // Serialize back out and re-parse to confirm a full round-trip.
+        let text = toml::to_string(&cfg).unwrap();
+        let reparsed: Config = toml::from_str(&text).unwrap();
+        assert!(!reparsed.sync.pull_before_query);
+        assert_eq!(reparsed.sync.staleness_secs, 42);
+        assert_eq!(reparsed.sync.pull_timeout_secs, 7);
+    }
+
+    #[test]
+    fn sync_partial_section_uses_defaults_for_rest() {
+        let cfg: Config = toml::from_str("[sync]\nstaleness_secs = 100").unwrap();
+        assert_eq!(cfg.sync.staleness_secs, 100);
+        assert!(cfg.sync.pull_before_query, "unspecified field keeps its default");
+        assert_eq!(cfg.sync.pull_timeout_secs, 10);
     }
 }

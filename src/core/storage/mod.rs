@@ -278,6 +278,33 @@ pub fn lock_plugins(root: &Path) -> Result<FileLock> {
     FileLock::acquire(&lock_path)
 }
 
+/// Returns the path to the machine-local sync-state file for the repo at `root`.
+///
+/// Co-located with `state.toml` and `plugins.toml` (`sync_state.toml` in the
+/// same per-repo state dir).  Tracks `last_pull` (pull-before-query staleness)
+/// and per-plugin sync timestamps.  Like the other state files it is never
+/// committed to git — it is per-machine.
+pub fn sync_state_path_for_repo(root: &Path) -> PathBuf {
+    state_dir_for_repo(root).join("sync_state.toml")
+}
+
+/// Acquires the exclusive sync-state lock for the repo rooted at `root`.
+///
+/// A fourth lock independent of the repo lock (`.next.lock`), state lock
+/// (`.state.toml.lock`), and plugin lock (`.plugins.toml.lock`); guards
+/// concurrent edits to `sync_state.toml` and is re-entrant within a thread so a
+/// load → modify → save sequence is atomic.
+pub fn lock_sync_state(root: &Path) -> Result<FileLock> {
+    let lock_path = state_lock_path(&sync_state_path_for_repo(root));
+    // The per-repo state dir may not exist yet on the first sync-state
+    // operation; flock cannot create a file in a missing directory.
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| TaskError::Other(format!("create sync-state dir: {e}")))?;
+    }
+    FileLock::acquire(&lock_path)
+}
+
 /// FNV-1a 64-bit hash — deterministic, no dependencies.
 fn fnv1a_hash(s: &str) -> String {
     let mut hash: u64 = 14695981039346656037;

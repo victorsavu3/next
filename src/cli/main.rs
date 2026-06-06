@@ -1,9 +1,12 @@
+use std::time::Duration;
+
 use anyhow::Context as _;
 use clap::Parser;
 use next::{
     AppContext,
     cli::{Cli, Command, commands},
     cli::commands::sync as sync_cmd,
+    core,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -72,6 +75,26 @@ fn main() -> anyhow::Result<()> {
         cmd_name,
         "add" | "start" | "stop" | "done" | "cancel" | "edit" | "delete" | "move" | "tag" | "data"
     );
+
+    // Pull-before-query: before any command except `sync` (which pulls
+    // explicitly; init/tutorial were handled earlier), pull from the remote if
+    // the local copy is stale. Best-effort — it never fails the command.
+    if cmd_name != "sync" {
+        let opts = core::sync::StaleOpts {
+            enabled: ctx.config.sync.pull_before_query && !cli.offline,
+            staleness: Duration::from_secs(ctx.config.sync.staleness_secs),
+            now: chrono::Utc::now(),
+        };
+        match core::sync::pull_if_stale(&mut ctx.repo, &opts) {
+            core::sync::PullStatus::Pulled => {
+                eprintln!("note: pulled latest changes (local copy was stale)");
+            }
+            core::sync::PullStatus::Failed(msg) => {
+                eprintln!("warning: auto-pull failed: {msg}; results may be out of date");
+            }
+            core::sync::PullStatus::Fresh | core::sync::PullStatus::Disabled => {}
+        }
+    }
 
     let result = match command {
         Command::Init(_) => unreachable!("handled above"),
