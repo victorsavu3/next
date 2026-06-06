@@ -1645,6 +1645,36 @@ impl App {
     /// Triggers a background sync, unless one is already in flight. Opens a
     /// second repository handle on a worker thread (so the App's `repo` is never
     /// moved across threads) and stores the result receiver for [`App::poll_sync`].
+    /// Triggers a background sync at startup when the local copy is stale
+    /// (Req A pull-before-query, TUI variant — non-blocking so the UI never
+    /// freezes). Gated by `sync.pull_before_query`; a no-op when disabled, when
+    /// a sync is already running, or when the last pull is within the staleness
+    /// window. A clean sync updates `last_pull` (see `core::sync::sync`), so this
+    /// won't re-fire on every launch.
+    pub fn start_sync_if_stale(&mut self) {
+        if self.syncing || !self.config.sync.pull_before_query {
+            return;
+        }
+        let staleness = std::time::Duration::from_secs(self.config.sync.staleness_secs);
+        let last_pull = crate::core::sync_state::load(&self.repo.repo_root)
+            .ok()
+            .and_then(|s| s.last_pull);
+        let stale = match last_pull {
+            Some(t) => (chrono::Utc::now() - t)
+                .to_std()
+                .map(|elapsed| elapsed >= staleness)
+                .unwrap_or(true),
+            None => true,
+        };
+        if !stale {
+            return;
+        }
+        self.start_sync();
+        if self.syncing {
+            self.status = Some("syncing latest (local copy was stale)…".to_owned());
+        }
+    }
+
     fn start_sync(&mut self) {
         if self.syncing {
             self.status = Some("sync already in progress…".to_owned());
@@ -2741,6 +2771,32 @@ mod tests {
         let state = app.repo.store().get_state().unwrap();
         assert!(state.active_contexts.is_empty());
         assert!(state.excluded_contexts.is_empty());
+    }
+
+    #[test]
+    fn start_sync_if_stale_noop_when_disabled() {
+        let mut app = app_with_repo_tasks(vec![Task::new("t")]);
+        app.config.sync.pull_before_query = false;
+        app.start_sync_if_stale();
+        assert!(!app.syncing(), "must not sync when pull_before_query is off");
+    }
+
+    #[test]
+    fn start_sync_if_stale_noop_when_fresh() {
+        let mut app = app_with_repo_tasks(vec![Task::new("t")]);
+        // Record a pull just now → within the staleness window → not stale.
+        crate::core::sync_state::record_pull(&app.repo.repo_root, chrono::Utc::now()).unwrap();
+        app.start_sync_if_stale();
+        assert!(!app.syncing(), "must not sync when the last pull is recent");
+    }
+
+    #[test]
+    fn start_sync_if_stale_starts_when_stale() {
+        let mut app = app_with_repo_tasks(vec![Task::new("t")]);
+        // No prior last_pull recorded → stale → a background sync is kicked off.
+        app.start_sync_if_stale();
+        assert!(app.syncing(), "a stale local copy must trigger a background sync");
+        assert!(app.status().unwrap().contains("stale"));
     }
 
     #[test]

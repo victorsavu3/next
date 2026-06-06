@@ -30,6 +30,14 @@ pub fn sync(ctx: &mut TaskRepository, push_only: bool, pull_only: bool) -> anyho
             PullResult::Clean => {
                 let head = ctx.vcs.head_hash()?;
                 ctx.store.after_pull(&head)?;
+                // A clean pull means the local copy is fresh — reset the
+                // staleness clock so pull-before-query (Req A) won't re-pull.
+                // Best-effort: a metadata write failure must not fail the sync.
+                if let Err(e) =
+                    crate::core::sync_state::record_pull(&ctx.repo_root, chrono::Utc::now())
+                {
+                    tracing::warn!("failed to record last_pull: {e}");
+                }
             }
             PullResult::Conflicts(paths) => return Ok(SyncOutcome::Conflicts(paths)),
         }

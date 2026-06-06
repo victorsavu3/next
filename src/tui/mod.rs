@@ -46,6 +46,9 @@ pub fn run(config: Config, repo: TaskRepository, source: ConfigSource) -> anyhow
     let today = chrono::Local::now().date_naive();
     let mut app = App::new(config, repo, source, today);
     app.reload()?;
+    // Pull-before-query (Req A): kick off a background refresh if the local
+    // copy is stale. Non-blocking — the worker result is drained each tick.
+    app.start_sync_if_stale();
 
     let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal, &mut app);
