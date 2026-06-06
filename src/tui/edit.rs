@@ -1,0 +1,893 @@
+//! The edit-modal form state for the TUI.
+//!
+//! [`EditForm`] is a self-contained snapshot of an editable task: every field is
+//! seeded from the task when the modal opens, edited locally, and turned back
+//! into a [`EditTaskParams`] on save (via [`EditForm::to_edit_params`]). Applying
+//! those params, plus the out-of-band `data` edits, lives in
+//! [`super::app::App`] so this module stays free of store/VCS concerns and is
+//! cheap to unit-test.
+//!
+//! Clear semantics: each optional text field remembers whether the task
+//! originally had a value. If it did and the field is now empty, the matching
+//! `clear_*` flag is set; if it was empty and stays empty, nothing happens
+//! (no-op). Title is required (non-empty). Tags are edited as an explicit
+//! add/remove set diff against the original tag list.
+
+use std::collections::BTreeMap;
+
+use chrono::NaiveDate;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use tui_input::Input;
+use tui_input::backend::crossterm::EventHandler;
+use tui_textarea::TextArea;
+
+use crate::core::domain::date_parse::parse_date;
+use crate::core::domain::task::{Priority, Recurrence, Task};
+use crate::core::recurrence::parse_recurrence;
+use crate::core::service::EditTaskParams;
+
+/// Which recurrence flavour the sub-form is editing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecurMode {
+    /// No recurrence (clears any existing rule on save).
+    None,
+    /// Schedule-based (RRULE + anchor).
+    Schedule,
+    /// Completion-based (interval days).
+    Completion,
+}
+
+impl RecurMode {
+    fn label(self) -> &'static str {
+        match self {
+            RecurMode::None => "none",
+            RecurMode::Schedule => "schedule",
+            RecurMode::Completion => "completion",
+        }
+    }
+
+    /// Cycle to the next flavour (None → Schedule → Completion → None).
+    fn next(self) -> Self {
+        match self {
+            RecurMode::None => RecurMode::Schedule,
+            RecurMode::Schedule => RecurMode::Completion,
+            RecurMode::Completion => RecurMode::None,
+        }
+    }
+}
+
+/// The logical fields of the form, in navigation order. The `Tab`/`Shift-Tab`
+/// keys move between adjacent variants; the modal renders one row per field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Field {
+    Title,
+    Due,
+    Start,
+    Priority,
+    Tags,
+    Assignee,
+    Url,
+    ScoreAdjustment,
+    LongTerm,
+    RecurMode,
+    RecurRule,
+    RecurCompletion,
+    RecurSnap,
+    Description,
+    Notes,
+    DataKey,
+    DataValue,
+}
+
+impl Field {
+    /// Field navigation order.
+    const ORDER: [Field; 17] = [
+        Field::Title,
+        Field::Due,
+        Field::Start,
+        Field::Priority,
+        Field::Tags,
+        Field::Assignee,
+        Field::Url,
+        Field::ScoreAdjustment,
+        Field::LongTerm,
+        Field::RecurMode,
+        Field::RecurRule,
+        Field::RecurCompletion,
+        Field::RecurSnap,
+        Field::Description,
+        Field::Notes,
+        Field::DataKey,
+        Field::DataValue,
+    ];
+
+    fn index(self) -> usize {
+        Self::ORDER.iter().position(|f| *f == self).unwrap()
+    }
+
+    fn next(self) -> Self {
+        let i = self.index();
+        Self::ORDER[(i + 1) % Self::ORDER.len()]
+    }
+
+    fn prev(self) -> Self {
+        let i = self.index();
+        Self::ORDER[(i + Self::ORDER.len() - 1) % Self::ORDER.len()]
+    }
+}
+
+/// Editable form state for a single task. Built with [`EditForm::from_task`].
+pub struct EditForm {
+    /// Id of the task being edited; used by the apply step.
+    pub task_id: uuid::Uuid,
+    /// The currently focused field.
+    pub focus: Field,
+
+    pub title: Input,
+    pub due: Input,
+    pub start: Input,
+    pub priority: Priority,
+    /// Free-entry tag input; committed tags live in `tags`.
+    pub tag_input: Input,
+    /// The working tag list (mutated by add/remove during editing).
+    pub tags: Vec<String>,
+    pub assignee: Input,
+    pub url: Input,
+    pub score_adjustment: Input,
+    pub long_term: bool,
+
+    pub recur_mode: RecurMode,
+    pub recur_rule: Input,
+    pub recur_completion: Input,
+    pub recur_snap: Input,
+
+    pub description: TextArea<'static>,
+    pub notes: TextArea<'static>,
+
+    /// Working copy of the task's data map (sorted for stable display).
+    pub data: BTreeMap<String, serde_json::Value>,
+    pub data_key: Input,
+    pub data_value: Input,
+
+    // ── Originals, for clear-semantics & recurrence anchor preservation ──────
+    orig_due: Option<NaiveDate>,
+    orig_start: Option<NaiveDate>,
+    orig_assignee: Option<String>,
+    orig_url: Option<String>,
+    orig_description: Option<String>,
+    orig_notes: Option<String>,
+    orig_tags: Vec<String>,
+    orig_recurrence: Option<Recurrence>,
+    orig_data: BTreeMap<String, serde_json::Value>,
+}
+
+impl EditForm {
+    /// Seeds a form from `task`. Every field is populated from the task's
+    /// current value (dates rendered as ISO so the round-trip is loss-free).
+    pub fn from_task(task: &Task) -> Self {
+        let date_str = |d: Option<NaiveDate>| d.map(|d| d.to_string()).unwrap_or_default();
+
+        let (recur_mode, recur_rule, recur_completion, recur_snap) = match &task.recurrence {
+            Some(Recurrence::Schedule { rrule, snap, .. }) => (
+                RecurMode::Schedule,
+                rrule.clone(),
+                String::new(),
+                snap_to_str(snap),
+            ),
+            Some(Recurrence::Completion { interval_days, snap }) => (
+                RecurMode::Completion,
+                String::new(),
+                interval_days.to_string(),
+                snap_to_str(snap),
+            ),
+            None => (RecurMode::None, String::new(), String::new(), String::new()),
+        };
+
+        let mut description = TextArea::from(task.description.clone().unwrap_or_default().lines());
+        description.set_cursor_line_style(ratatui::style::Style::default());
+        let mut notes = TextArea::from(task.notes.clone().unwrap_or_default().lines());
+        notes.set_cursor_line_style(ratatui::style::Style::default());
+
+        let data: BTreeMap<String, serde_json::Value> =
+            task.data.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+        let score_adjustment = if task.score_adjustment == 0.0 {
+            String::new()
+        } else {
+            task.score_adjustment.to_string()
+        };
+
+        Self {
+            task_id: task.id,
+            focus: Field::Title,
+            title: Input::new(task.title.clone()),
+            due: Input::new(date_str(task.due)),
+            start: Input::new(date_str(task.start)),
+            priority: task.priority.clone(),
+            tag_input: Input::default(),
+            tags: task.tags.clone(),
+            assignee: Input::new(task.assignee.clone().unwrap_or_default()),
+            url: Input::new(task.url.clone().unwrap_or_default()),
+            score_adjustment: Input::new(score_adjustment),
+            long_term: task.long_term,
+            recur_mode,
+            recur_rule: Input::new(recur_rule),
+            recur_completion: Input::new(recur_completion),
+            recur_snap: Input::new(recur_snap),
+            description,
+            notes,
+            data: data.clone(),
+            data_key: Input::default(),
+            data_value: Input::default(),
+            orig_due: task.due,
+            orig_start: task.start,
+            orig_assignee: task.assignee.clone(),
+            orig_url: task.url.clone(),
+            orig_description: task.description.clone(),
+            orig_notes: task.notes.clone(),
+            orig_tags: task.tags.clone(),
+            orig_recurrence: task.recurrence.clone(),
+            orig_data: data,
+        }
+    }
+
+    // ── Navigation ───────────────────────────────────────────────────────────
+
+    /// Move focus to the next field.
+    pub fn focus_next(&mut self) {
+        self.focus = self.focus.next();
+    }
+
+    /// Move focus to the previous field.
+    pub fn focus_prev(&mut self) {
+        self.focus = self.focus.prev();
+    }
+
+    /// Whether the focused field is a multi-line textarea (so the modal knows
+    /// `Tab` must still move fields rather than insert a tab).
+    pub fn focus_is_multiline(&self) -> bool {
+        matches!(self.focus, Field::Description | Field::Notes)
+    }
+
+    /// The current recurrence mode as a display label.
+    pub fn recur_mode_label(&self) -> &'static str {
+        self.recur_mode.label()
+    }
+
+    // ── Per-field key handling ────────────────────────────────────────────────
+
+    /// Feeds a key event to the currently focused field. Returns `true` when the
+    /// key was consumed as field editing. Field navigation (Tab) and modal-level
+    /// keys (Esc/Ctrl-S) are handled by the caller before this is reached.
+    pub fn handle_field_key(&mut self, key: KeyEvent) {
+        let ev = ratatui::crossterm::event::Event::Key(key);
+        match self.focus {
+            Field::Title => {
+                self.title.handle_event(&ev);
+            }
+            Field::Due => {
+                self.due.handle_event(&ev);
+            }
+            Field::Start => {
+                self.start.handle_event(&ev);
+            }
+            Field::Priority => self.handle_priority_key(key),
+            Field::Tags => self.handle_tags_key(key, &ev),
+            Field::Assignee => {
+                self.assignee.handle_event(&ev);
+            }
+            Field::Url => {
+                self.url.handle_event(&ev);
+            }
+            Field::ScoreAdjustment => {
+                self.score_adjustment.handle_event(&ev);
+            }
+            Field::LongTerm => self.handle_long_term_key(key),
+            Field::RecurMode => self.handle_recur_mode_key(key),
+            Field::RecurRule => {
+                self.recur_rule.handle_event(&ev);
+            }
+            Field::RecurCompletion => {
+                self.recur_completion.handle_event(&ev);
+            }
+            Field::RecurSnap => {
+                self.recur_snap.handle_event(&ev);
+            }
+            Field::Description => {
+                self.description.input(key);
+            }
+            Field::Notes => {
+                self.notes.input(key);
+            }
+            Field::DataKey => {
+                self.data_key.handle_event(&ev);
+            }
+            Field::DataValue => self.handle_data_value_key(key, &ev),
+        }
+    }
+
+    fn handle_priority_key(&mut self, key: KeyEvent) {
+        // Space / Left / Right cycle through the three priorities.
+        match key.code {
+            KeyCode::Char(' ') | KeyCode::Right => {
+                self.priority = match self.priority {
+                    Priority::Low => Priority::Medium,
+                    Priority::Medium => Priority::High,
+                    Priority::High => Priority::Low,
+                };
+            }
+            KeyCode::Left => {
+                self.priority = match self.priority {
+                    Priority::Low => Priority::High,
+                    Priority::Medium => Priority::Low,
+                    Priority::High => Priority::Medium,
+                };
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_long_term_key(&mut self, key: KeyEvent) {
+        if matches!(
+            key.code,
+            KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right
+        ) {
+            self.long_term = !self.long_term;
+        }
+    }
+
+    fn handle_recur_mode_key(&mut self, key: KeyEvent) {
+        if matches!(
+            key.code,
+            KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right
+        ) {
+            self.recur_mode = self.recur_mode.next();
+        }
+    }
+
+    fn handle_tags_key(&mut self, key: KeyEvent, ev: &ratatui::crossterm::event::Event) {
+        match key.code {
+            // Enter commits the free-entry tag (validation happens at save).
+            KeyCode::Enter => {
+                let t = self.tag_input.value().trim().to_owned();
+                if !t.is_empty() && !self.tags.contains(&t) {
+                    self.tags.push(t);
+                }
+                self.tag_input = Input::default();
+            }
+            // Ctrl-D removes the last committed tag (a simple, keyboard-only way
+            // to drop a tag without a separate selection cursor).
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.tags.pop();
+            }
+            _ => {
+                self.tag_input.handle_event(ev);
+            }
+        }
+    }
+
+    fn handle_data_value_key(&mut self, key: KeyEvent, ev: &ratatui::crossterm::event::Event) {
+        match key.code {
+            // Enter commits the key/value pair into the working data map.
+            KeyCode::Enter => {
+                let k = self.data_key.value().trim().to_owned();
+                if !k.is_empty() {
+                    let raw = self.data_value.value();
+                    let value = crate::core::parse_value(raw)
+                        .unwrap_or_else(|_| serde_json::Value::String(raw.to_owned()));
+                    self.data.insert(k, value);
+                    self.data_key = Input::default();
+                    self.data_value = Input::default();
+                }
+            }
+            // Ctrl-D deletes the entry named by the key field, if present.
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let k = self.data_key.value().trim().to_owned();
+                if !k.is_empty() {
+                    self.data.remove(&k);
+                }
+            }
+            _ => {
+                self.data_value.handle_event(ev);
+            }
+        }
+    }
+
+    // ── Date previews (rendered next to the date fields) ──────────────────────
+
+    /// Parsed preview of the `due` text against `today`, or an error string. An
+    /// empty input previews as `None`.
+    pub fn due_preview(&self, today: NaiveDate) -> Result<Option<NaiveDate>, String> {
+        preview_date(self.due.value(), today)
+    }
+
+    /// Parsed preview of the `start` text against `today`.
+    pub fn start_preview(&self, today: NaiveDate) -> Result<Option<NaiveDate>, String> {
+        preview_date(self.start.value(), today)
+    }
+
+    // ── Save: build EditTaskParams ────────────────────────────────────────────
+
+    /// Derives [`EditTaskParams`] from the current form state, resolving dates
+    /// (`today` is the base for natural-language parsing), diffing tags, and
+    /// building the recurrence rule with anchor preservation.
+    ///
+    /// Validation of url/tags and the recurrence rule itself is performed here so
+    /// the caller surfaces a single error; the data-map changes are returned
+    /// separately via [`EditForm::data_changes`] because [`EditTaskParams`] has
+    /// no `data` field.
+    pub fn to_edit_params(&self, today: NaiveDate) -> anyhow::Result<EditTaskParams> {
+        // Title is required.
+        let title = self.title.value().trim();
+        if title.is_empty() {
+            anyhow::bail!("title must not be empty");
+        }
+
+        let (due, clear_due) = resolve_optional_date(self.due.value(), self.orig_due, today)?;
+        let (start, clear_start) =
+            resolve_optional_date(self.start.value(), self.orig_start, today)?;
+
+        let (assignee, clear_assignee) =
+            resolve_optional_text(self.assignee.value(), &self.orig_assignee);
+
+        let (url, clear_url) = resolve_optional_text(self.url.value(), &self.orig_url);
+        if let Some(ref u) = url {
+            crate::core::service::validate_url(u)?;
+        }
+
+        // Description / notes from the textareas.
+        let desc_text = textarea_text(&self.description);
+        let (description, clear_description) =
+            resolve_optional_text(&desc_text, &self.orig_description);
+
+        // `notes` has no clear flag in EditTaskParams; the CLI always sets it
+        // when provided. Mirror that: pass the (possibly empty) text through so
+        // emptying it stores an empty string, matching `--notes ""`.
+        let notes_text = textarea_text(&self.notes);
+        let notes = if notes_text == self.orig_notes.clone().unwrap_or_default() {
+            None
+        } else {
+            Some(notes_text)
+        };
+
+        // Tag diff against the original list.
+        let add_tags: Vec<String> = self
+            .tags
+            .iter()
+            .filter(|t| !self.orig_tags.contains(t))
+            .cloned()
+            .collect();
+        let remove_tags: Vec<String> = self
+            .orig_tags
+            .iter()
+            .filter(|t| !self.tags.contains(t))
+            .cloned()
+            .collect();
+        for t in &add_tags {
+            crate::core::domain::tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
+        }
+
+        // Score adjustment (numeric text). Only set when it differs from the
+        // original; an empty field means "leave unchanged".
+        let score_adjustment = {
+            let raw = self.score_adjustment.value().trim();
+            if raw.is_empty() {
+                None
+            } else {
+                let v: f64 = raw
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("score adjustment must be a number"))?;
+                Some(v)
+            }
+        };
+
+        // The form always knows the current boolean, so send it unconditionally;
+        // `apply_edits` treats `Some(x)` as "set to x" (an idempotent no-op when
+        // unchanged).
+        let long_term = Some(self.long_term);
+
+        // Recurrence build with anchor preservation.
+        let (recurrence, clear_recurrence) = self.build_recurrence(today)?;
+
+        Ok(EditTaskParams {
+            title: Some(title.to_owned()),
+            due,
+            clear_due,
+            start,
+            clear_start,
+            priority: Some(self.priority.to_string()),
+            slug: None,
+            assignee,
+            clear_assignee,
+            add_tags,
+            remove_tags,
+            parent: None,
+            clear_parent: false,
+            blocked_by: Vec::new(),
+            clear_blocked_by: false,
+            description,
+            clear_description,
+            url,
+            clear_url,
+            notes,
+            recurrence,
+            clear_recurrence,
+            long_term,
+            score_adjustment,
+        })
+    }
+
+    /// Builds the recurrence update, preserving the existing schedule anchor when
+    /// the rule is still schedule-based. Returns `(recurrence, clear_recurrence)`.
+    fn build_recurrence(&self, today: NaiveDate) -> anyhow::Result<(Option<Recurrence>, bool)> {
+        let snap = {
+            let s = self.recur_snap.value().trim();
+            if s.is_empty() { None } else { Some(s) }
+        };
+        match self.recur_mode {
+            RecurMode::None => Ok((None, true)),
+            RecurMode::Schedule => {
+                let rule = self.recur_rule.value().trim();
+                if rule.is_empty() {
+                    anyhow::bail!("recurrence schedule requires an RRULE");
+                }
+                // Preserve the anchor if the task already had a schedule rule;
+                // otherwise anchor on start/due/today (mirrors the CLI).
+                let anchor = match &self.orig_recurrence {
+                    Some(Recurrence::Schedule { anchor, .. }) => *anchor,
+                    _ => self
+                        .resolved_anchor_date(today)
+                        .unwrap_or(today),
+                };
+                let rec = parse_recurrence(Some(rule.to_owned()), None, snap, anchor)?;
+                Ok((rec, false))
+            }
+            RecurMode::Completion => {
+                let raw = self.recur_completion.value().trim();
+                let interval: u32 = raw
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("completion interval must be a positive integer"))?;
+                let rec = parse_recurrence(None, Some(interval), snap, today)?;
+                Ok((rec, false))
+            }
+        }
+    }
+
+    /// The start/due date currently in the form (parsed), used as a fallback
+    /// anchor for a newly-added schedule rule.
+    fn resolved_anchor_date(&self, today: NaiveDate) -> Option<NaiveDate> {
+        if let Ok(Some(d)) = preview_date(self.start.value(), today) {
+            return Some(d);
+        }
+        if let Ok(Some(d)) = preview_date(self.due.value(), today) {
+            return Some(d);
+        }
+        None
+    }
+
+    /// The set of data-map mutations to apply after `apply_edits`, as
+    /// `(key, Some(value))` for set/insert and `(key, None)` for delete. Diffed
+    /// against the original map so unchanged entries are skipped.
+    pub fn data_changes(&self) -> Vec<(String, Option<serde_json::Value>)> {
+        let mut changes = Vec::new();
+        // Sets / updates.
+        for (k, v) in &self.data {
+            if self.orig_data.get(k) != Some(v) {
+                changes.push((k.clone(), Some(v.clone())));
+            }
+        }
+        // Deletions.
+        for k in self.orig_data.keys() {
+            if !self.data.contains_key(k) {
+                changes.push((k.clone(), None));
+            }
+        }
+        changes
+    }
+}
+
+/// Renders a [`Recurrence`] `Snap` back into the CLI snap string the
+/// [`parse_recurrence`] parser accepts (round-trips the form value).
+fn snap_to_str(snap: &Option<crate::core::domain::task::Snap>) -> String {
+    use crate::core::domain::task::Snap;
+    match snap {
+        None => String::new(),
+        Some(Snap::NextWorkday) => "next-workday".to_owned(),
+        Some(Snap::NextWeekday { weekday }) => {
+            ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+                .get(*weekday as usize)
+                .copied()
+                .unwrap_or("mon")
+                .to_owned()
+        }
+        Some(Snap::DayOfMonth { day }) => format!("dom:{day}"),
+    }
+}
+
+/// Joins a textarea's lines into a single `\n`-delimited string.
+fn textarea_text(ta: &TextArea) -> String {
+    ta.lines().join("\n")
+}
+
+/// Parses a date preview: empty → `Ok(None)`, otherwise the parsed date or the
+/// parser's error message.
+fn preview_date(raw: &str, today: NaiveDate) -> Result<Option<NaiveDate>, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    parse_date(raw, today).map(Some).map_err(|e| e.to_string())
+}
+
+/// Resolves an optional date field into `(value, clear_flag)`:
+/// - empty + originally set → `(None, true)` (clear)
+/// - empty + originally unset → `(None, false)` (no-op)
+/// - non-empty → `(Some(parsed), false)`
+fn resolve_optional_date(
+    raw: &str,
+    orig: Option<NaiveDate>,
+    today: NaiveDate,
+) -> anyhow::Result<(Option<NaiveDate>, bool)> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok((None, orig.is_some()));
+    }
+    let d = parse_date(raw, today)?;
+    Ok((Some(d), false))
+}
+
+/// Resolves an optional text field into `(value, clear_flag)` with the same
+/// clear-semantics as [`resolve_optional_date`]. A non-empty value that equals
+/// the original is still sent (harmless idempotent set), keeping the logic
+/// simple; only the emptied-a-set-field case toggles the clear flag.
+fn resolve_optional_text(raw: &str, orig: &Option<String>) -> (Option<String>, bool) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        (None, orig.is_some())
+    } else {
+        (Some(trimmed.to_owned()), false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::domain::task::{Recurrence, Snap, Task};
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn today() -> NaiveDate {
+        d(2026, 6, 6)
+    }
+
+    #[test]
+    fn from_task_seeds_fields() {
+        let mut task = Task::new("Original");
+        task.due = Some(d(2026, 7, 1));
+        task.priority = Priority::High;
+        task.tags = vec!["#rust".into()];
+        task.assignee = Some("alice".into());
+        task.url = Some("https://example.com".into());
+        task.description = Some("line1\nline2".into());
+        let form = EditForm::from_task(&task);
+        assert_eq!(form.title.value(), "Original");
+        assert_eq!(form.due.value(), "2026-07-01");
+        assert_eq!(form.priority, Priority::High);
+        assert_eq!(form.tags, vec!["#rust".to_owned()]);
+        assert_eq!(form.assignee.value(), "alice");
+        assert_eq!(form.url.value(), "https://example.com");
+        assert_eq!(textarea_text(&form.description), "line1\nline2");
+    }
+
+    #[test]
+    fn unchanged_form_produces_noop_params() {
+        let mut task = Task::new("Title");
+        task.due = Some(d(2026, 7, 1));
+        let form = EditForm::from_task(&task);
+        let p = form.to_edit_params(today()).unwrap();
+        // No clear flags for unchanged set fields.
+        assert!(!p.clear_due);
+        assert!(!p.clear_assignee);
+        assert!(!p.clear_url);
+        assert!(!p.clear_description);
+        // Due passes through as the same date (idempotent set).
+        assert_eq!(p.due, Some(d(2026, 7, 1)));
+        assert!(p.add_tags.is_empty());
+        assert!(p.remove_tags.is_empty());
+    }
+
+    #[test]
+    fn emptying_a_set_field_sets_clear_flag() {
+        let mut task = Task::new("Title");
+        task.due = Some(d(2026, 7, 1));
+        task.assignee = Some("alice".into());
+        task.url = Some("https://example.com".into());
+        task.description = Some("desc".into());
+        let mut form = EditForm::from_task(&task);
+        form.due = Input::default();
+        form.assignee = Input::default();
+        form.url = Input::default();
+        form.description = TextArea::default();
+        let p = form.to_edit_params(today()).unwrap();
+        assert!(p.clear_due);
+        assert!(p.clear_assignee);
+        assert!(p.clear_url);
+        assert!(p.clear_description);
+        assert_eq!(p.due, None);
+        assert_eq!(p.assignee, None);
+    }
+
+    #[test]
+    fn emptying_an_unset_field_is_noop() {
+        let task = Task::new("Title");
+        let form = EditForm::from_task(&task);
+        let p = form.to_edit_params(today()).unwrap();
+        assert!(!p.clear_due);
+        assert!(!p.clear_assignee);
+        assert!(!p.clear_url);
+    }
+
+    #[test]
+    fn empty_title_is_error() {
+        let task = Task::new("Title");
+        let mut form = EditForm::from_task(&task);
+        form.title = Input::new("   ".to_owned());
+        assert!(form.to_edit_params(today()).is_err());
+    }
+
+    #[test]
+    fn tag_diff_add_and_remove() {
+        let mut task = Task::new("Title");
+        task.tags = vec!["@work".into(), "#laptop".into()];
+        let mut form = EditForm::from_task(&task);
+        // Remove #laptop, add urgent.
+        form.tags = vec!["@work".into(), "urgent".into()];
+        let p = form.to_edit_params(today()).unwrap();
+        assert_eq!(p.add_tags, vec!["urgent".to_owned()]);
+        assert_eq!(p.remove_tags, vec!["#laptop".to_owned()]);
+    }
+
+    #[test]
+    fn invalid_added_tag_is_error() {
+        let task = Task::new("Title");
+        let mut form = EditForm::from_task(&task);
+        form.tags = vec!["bad..tag".into()];
+        assert!(form.to_edit_params(today()).is_err());
+    }
+
+    #[test]
+    fn invalid_url_is_error() {
+        let task = Task::new("Title");
+        let mut form = EditForm::from_task(&task);
+        form.url = Input::new("ftp://nope".to_owned());
+        assert!(form.to_edit_params(today()).is_err());
+    }
+
+    #[test]
+    fn natural_language_due_resolves() {
+        let task = Task::new("Title");
+        let mut form = EditForm::from_task(&task);
+        form.due = Input::new("2026-08-15".to_owned());
+        let p = form.to_edit_params(today()).unwrap();
+        assert_eq!(p.due, Some(d(2026, 8, 15)));
+    }
+
+    #[test]
+    fn priority_cycles() {
+        let task = Task::new("Title");
+        let mut form = EditForm::from_task(&task);
+        form.focus = Field::Priority;
+        let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        let start = form.priority.clone();
+        form.handle_field_key(space);
+        assert_ne!(form.priority, start);
+    }
+
+    // ── recurrence ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn recurrence_none_clears() {
+        let mut task = Task::new("Title");
+        task.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
+        let mut form = EditForm::from_task(&task);
+        form.recur_mode = RecurMode::None;
+        let p = form.to_edit_params(today()).unwrap();
+        assert!(p.clear_recurrence);
+        assert!(p.recurrence.is_none());
+    }
+
+    #[test]
+    fn recurrence_schedule_preserves_existing_anchor() {
+        let anchor = d(2026, 1, 1);
+        let mut task = Task::new("Title");
+        task.recurrence = Some(Recurrence::Schedule {
+            rrule: "FREQ=WEEKLY;BYDAY=MO".into(),
+            anchor,
+            snap: None,
+        });
+        let mut form = EditForm::from_task(&task);
+        // Change the rule but keep schedule mode → anchor must be preserved.
+        form.recur_rule = Input::new("FREQ=WEEKLY;BYDAY=TU".to_owned());
+        let p = form.to_edit_params(today()).unwrap();
+        match p.recurrence {
+            Some(Recurrence::Schedule { rrule, anchor: a, .. }) => {
+                assert_eq!(rrule, "FREQ=WEEKLY;BYDAY=TU");
+                assert_eq!(a, anchor, "existing anchor must be preserved");
+            }
+            other => panic!("expected schedule, got {other:?}"),
+        }
+        assert!(!p.clear_recurrence);
+    }
+
+    #[test]
+    fn recurrence_new_schedule_anchors_on_due() {
+        let task = Task::new("Title");
+        let mut form = EditForm::from_task(&task);
+        form.recur_mode = RecurMode::Schedule;
+        form.recur_rule = Input::new("FREQ=MONTHLY;BYMONTHDAY=1".to_owned());
+        form.due = Input::new("2026-09-10".to_owned());
+        let p = form.to_edit_params(today()).unwrap();
+        match p.recurrence {
+            Some(Recurrence::Schedule { anchor, .. }) => {
+                assert_eq!(anchor, d(2026, 9, 10), "new rule anchors on the form due date");
+            }
+            other => panic!("expected schedule, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recurrence_completion_builds_interval_and_snap() {
+        let task = Task::new("Title");
+        let mut form = EditForm::from_task(&task);
+        form.recur_mode = RecurMode::Completion;
+        form.recur_completion = Input::new("14".to_owned());
+        form.recur_snap = Input::new("friday".to_owned());
+        let p = form.to_edit_params(today()).unwrap();
+        match p.recurrence {
+            Some(Recurrence::Completion { interval_days, snap }) => {
+                assert_eq!(interval_days, 14);
+                assert_eq!(snap, Some(Snap::NextWeekday { weekday: 4 }));
+            }
+            other => panic!("expected completion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recurrence_invalid_rrule_is_error() {
+        let task = Task::new("Title");
+        let mut form = EditForm::from_task(&task);
+        form.recur_mode = RecurMode::Schedule;
+        form.recur_rule = Input::new("NONSENSE".to_owned());
+        assert!(form.to_edit_params(today()).is_err());
+    }
+
+    // ── data ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn data_changes_detects_add_update_delete() {
+        let mut task = Task::new("Title");
+        task.data.insert("keep".into(), serde_json::json!(1));
+        task.data.insert("drop".into(), serde_json::json!("x"));
+        let mut form = EditForm::from_task(&task);
+        // Add a new key, change "keep", delete "drop".
+        form.data.insert("new".into(), serde_json::json!(true));
+        form.data.insert("keep".into(), serde_json::json!(2));
+        form.data.remove("drop");
+        let mut changes = form.data_changes();
+        changes.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(changes.len(), 3);
+        assert_eq!(changes[0], ("drop".to_owned(), None));
+        assert_eq!(changes[1], ("keep".to_owned(), Some(serde_json::json!(2))));
+        assert_eq!(changes[2], ("new".to_owned(), Some(serde_json::json!(true))));
+    }
+
+    #[test]
+    fn data_changes_empty_when_unchanged() {
+        let mut task = Task::new("Title");
+        task.data.insert("a".into(), serde_json::json!(1));
+        let form = EditForm::from_task(&task);
+        assert!(form.data_changes().is_empty());
+    }
+}

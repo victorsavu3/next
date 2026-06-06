@@ -33,6 +33,33 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_filter_bar(frame, chunks[1], app);
     draw_body(frame, chunks[2], app);
     draw_footer(frame, chunks[3], app);
+
+    // The edit modal floats over the whole frame when active.
+    if app.mode() == Mode::Edit {
+        edit_modal::draw(frame, frame.area(), app);
+    }
+}
+
+/// Computes a rectangle `pct_x` × `pct_y` percent of `area`, centered within it.
+/// Shared popup helper for the edit modal (and reusable by later confirm/action
+/// popups in T7).
+pub fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - pct_y) / 2),
+            Constraint::Percentage(pct_y),
+            Constraint::Percentage((100 - pct_y) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - pct_x) / 2),
+            Constraint::Percentage(pct_x),
+            Constraint::Percentage((100 - pct_x) / 2),
+        ])
+        .split(vertical[1])[1]
 }
 
 /// Splits the body into the list (60%) and detail (40%) panes.
@@ -466,9 +493,12 @@ fn wrap_lines(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let hint = match app.mode() {
         Mode::Normal => {
-            "q quit  j/k nav  g/G first/last  PgUp/PgDn scroll  r reload  / filter  A all  F future  U all-users"
+            "q quit  j/k nav  g/G first/last  PgUp/PgDn scroll  r reload  e edit  / filter  A all  F future  U all-users"
         }
         Mode::Filter => "Enter apply  Esc cancel",
+        Mode::Edit => {
+            "Tab/↑↓ field  Space/←→ toggle  Enter commit (tag/data)  Ctrl-S save  Esc cancel"
+        }
     };
     let mut spans = vec![Span::styled(hint, Style::default().add_modifier(Modifier::DIM))];
     if let Some(status) = app.status() {
@@ -476,6 +506,179 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::raw(status.to_owned()));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Rendering for the edit modal — a centered popup with one labelled row per
+/// form field, the focused row highlighted, multi-line textareas for
+/// description/notes, and live date previews.
+mod edit_modal {
+    use ratatui::Frame;
+    use ratatui::layout::{Constraint, Direction, Layout, Rect};
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+    use crate::tui::app::App;
+    use crate::tui::edit::{EditForm, Field, RecurMode};
+
+    use super::centered_rect;
+
+    pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
+        let Some(form) = app.edit_form() else {
+            return;
+        };
+        let today = app.today();
+
+        let popup = centered_rect(80, 90, area);
+        frame.render_widget(Clear, popup);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" edit task  (Ctrl-S save · Esc cancel) ")
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        // One line per single-line/value field; the two textareas get a small
+        // fixed block each. Lay rows out top-to-bottom.
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // title
+                Constraint::Length(1), // due
+                Constraint::Length(1), // start
+                Constraint::Length(1), // priority
+                Constraint::Length(1), // tags
+                Constraint::Length(1), // assignee
+                Constraint::Length(1), // url
+                Constraint::Length(1), // score adjustment
+                Constraint::Length(1), // long term
+                Constraint::Length(1), // recur mode
+                Constraint::Length(1), // recur rule
+                Constraint::Length(1), // recur completion
+                Constraint::Length(1), // recur snap
+                Constraint::Length(1), // data key
+                Constraint::Length(1), // data value
+                Constraint::Length(1), // data list header
+                Constraint::Length(3), // description
+                Constraint::Length(3), // notes
+                Constraint::Min(0),    // tag/data summary
+            ])
+            .split(inner);
+
+        text_row(frame, rows[0], "Title", form.title.value(), form.focus == Field::Title);
+        date_row(frame, rows[1], "Due", form.due.value(), form.due_preview(today), form.focus == Field::Due);
+        date_row(frame, rows[2], "Start", form.start.value(), form.start_preview(today), form.focus == Field::Start);
+        value_row(frame, rows[3], "Priority", &form.priority.to_string(), form.focus == Field::Priority);
+        text_row(frame, rows[4], "Add tag", form.tag_input.value(), form.focus == Field::Tags);
+        text_row(frame, rows[5], "Assignee", form.assignee.value(), form.focus == Field::Assignee);
+        text_row(frame, rows[6], "URL", form.url.value(), form.focus == Field::Url);
+        text_row(frame, rows[7], "Score adj", form.score_adjustment.value(), form.focus == Field::ScoreAdjustment);
+        value_row(frame, rows[8], "Long-term", if form.long_term { "yes" } else { "no" }, form.focus == Field::LongTerm);
+        value_row(frame, rows[9], "Recur", form.recur_mode_label(), form.focus == Field::RecurMode);
+        text_row(frame, rows[10], "  RRULE", form.recur_rule.value(), form.focus == Field::RecurRule);
+        text_row(frame, rows[11], "  Interval", form.recur_completion.value(), form.focus == Field::RecurCompletion);
+        text_row(frame, rows[12], "  Snap", form.recur_snap.value(), form.focus == Field::RecurSnap);
+        text_row(frame, rows[13], "Data key", form.data_key.value(), form.focus == Field::DataKey);
+        text_row(frame, rows[14], "Data val", form.data_value.value(), form.focus == Field::DataValue);
+
+        // Description / notes textareas.
+        labelled_textarea(frame, rows[16], "Description", &form.description, form.focus == Field::Description);
+        labelled_textarea(frame, rows[17], "Notes", &form.notes, form.focus == Field::Notes);
+
+        // Summary of committed tags + data entries.
+        draw_summary(frame, rows[18], form);
+    }
+
+    /// `Label: value` row, focused row reversed. Single-line text fields.
+    fn text_row(frame: &mut Frame, area: Rect, label: &str, value: &str, focused: bool) {
+        let style = row_style(focused);
+        let line = Line::from(vec![
+            Span::styled(format!("{label:>10}: "), Style::default().add_modifier(Modifier::DIM)),
+            Span::styled(value.to_owned(), style),
+        ]);
+        frame.render_widget(Paragraph::new(line), area);
+    }
+
+    /// A non-text value row (cycled enums / toggles).
+    fn value_row(frame: &mut Frame, area: Rect, label: &str, value: &str, focused: bool) {
+        let style = row_style(focused).fg(Color::Yellow);
+        let line = Line::from(vec![
+            Span::styled(format!("{label:>10}: "), Style::default().add_modifier(Modifier::DIM)),
+            Span::styled(value.to_owned(), style),
+        ]);
+        frame.render_widget(Paragraph::new(line), area);
+    }
+
+    /// A date row with a parsed-date preview (or the parse error) appended.
+    fn date_row(
+        frame: &mut Frame,
+        area: Rect,
+        label: &str,
+        value: &str,
+        preview: Result<Option<chrono::NaiveDate>, String>,
+        focused: bool,
+    ) {
+        let style = row_style(focused);
+        let (preview_text, preview_style) = match preview {
+            Ok(Some(d)) => (format!("  → {d}"), Style::default().fg(Color::Green)),
+            Ok(None) => (String::new(), Style::default()),
+            Err(e) => (format!("  ✗ {e}"), Style::default().fg(Color::Red)),
+        };
+        let line = Line::from(vec![
+            Span::styled(format!("{label:>10}: "), Style::default().add_modifier(Modifier::DIM)),
+            Span::styled(value.to_owned(), style),
+            Span::styled(preview_text, preview_style),
+        ]);
+        frame.render_widget(Paragraph::new(line), area);
+    }
+
+    fn labelled_textarea(
+        frame: &mut Frame,
+        area: Rect,
+        label: &str,
+        textarea: &tui_textarea::TextArea,
+        focused: bool,
+    ) {
+        let border = if focused { Color::Cyan } else { Color::DarkGray };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {label} "))
+            .border_style(Style::default().fg(border));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        frame.render_widget(textarea, inner);
+    }
+
+    fn draw_summary(frame: &mut Frame, area: Rect, form: &EditForm) {
+        let mut lines = Vec::new();
+        if !form.tags.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("Tags: ", Style::default().add_modifier(Modifier::DIM)),
+                Span::styled(form.tags.join("  "), Style::default().add_modifier(Modifier::ITALIC)),
+            ]));
+        }
+        if !form.data.is_empty() {
+            for (k, v) in &form.data {
+                lines.push(Line::from(Span::raw(format!("  {k} = {v}"))));
+            }
+        }
+        if matches!(form.recur_mode, RecurMode::Schedule | RecurMode::Completion) {
+            lines.push(Line::from(Span::styled(
+                "Snap: blank, next-workday, monday…sunday, dom:N",
+                Style::default().add_modifier(Modifier::DIM),
+            )));
+        }
+        frame.render_widget(Paragraph::new(lines), area);
+    }
+
+    fn row_style(focused: bool) -> Style {
+        if focused {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -554,6 +757,26 @@ mod tests {
     fn renders_one_frame_without_panicking() {
         let mut app = app_over_tempdir();
         let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    }
+
+    #[test]
+    fn renders_edit_modal_without_panicking() {
+        let mut app = app_with_tasks(rich_tasks());
+        // Reveal the blocked child, select it, then open the edit modal.
+        app.update(Action::ToggleAll);
+        let idx = app
+            .tasks()
+            .iter()
+            .position(|s| s.task.title == "richly populated task")
+            .unwrap();
+        for _ in 0..idx {
+            app.update(Action::SelectNext);
+        }
+        app.update(Action::OpenEdit);
+        assert_eq!(app.mode(), Mode::Edit);
+        let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }

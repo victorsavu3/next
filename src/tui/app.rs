@@ -40,6 +40,8 @@ pub enum Mode {
     Normal,
     /// Editing the filter buffer in the filter bar.
     Filter,
+    /// Editing the selected task in the edit modal.
+    Edit,
 }
 
 /// A discrete state transition produced by [`App::handle_key`] and applied by
@@ -77,6 +79,18 @@ pub enum Action {
     DetailPageDown,
     /// Scroll the detail pane up by one page.
     DetailPageUp,
+    /// Open the edit modal for the selected task.
+    OpenEdit,
+    /// While in [`Mode::Edit`]: feed a key event to the focused form field.
+    EditInput(KeyEvent),
+    /// While in [`Mode::Edit`]: move focus to the next field.
+    EditFocusNext,
+    /// While in [`Mode::Edit`]: move focus to the previous field.
+    EditFocusPrev,
+    /// While in [`Mode::Edit`]: validate + save the form, then reload.
+    EditSave,
+    /// While in [`Mode::Edit`]: discard the form and return to Normal.
+    EditCancel,
 }
 
 /// Everything the detail pane needs for one task, resolved from the cached
@@ -130,6 +144,8 @@ pub struct App {
 
     /// The current interaction mode.
     mode: Mode,
+    /// The live edit-modal form, present only while in [`Mode::Edit`].
+    edit_form: Option<super::edit::EditForm>,
     /// A transient status message shown in the footer.
     status: Option<String>,
     /// Set when the user asks to quit; the event loop checks this.
@@ -156,6 +172,7 @@ impl App {
             filter_all_users: false,
             filter_input: Input::default(),
             mode: Mode::Normal,
+            edit_form: None,
             status: None,
             should_quit: false,
         }
@@ -181,6 +198,12 @@ impl App {
     /// The current interaction mode.
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// The live edit form, for the drawing layer to render the modal. Present
+    /// only while in [`Mode::Edit`].
+    pub fn edit_form(&self) -> Option<&super::edit::EditForm> {
+        self.edit_form.as_ref()
     }
 
     /// The scored, sorted, currently-visible tasks.
@@ -354,6 +377,7 @@ impl App {
         match self.mode {
             Mode::Normal => Self::normal_key(key),
             Mode::Filter => Self::filter_key(key),
+            Mode::Edit => self.edit_key(key),
         }
     }
 
@@ -366,6 +390,7 @@ impl App {
             KeyCode::Char('g') | KeyCode::Home => Some(Action::SelectFirst),
             KeyCode::Char('G') | KeyCode::End => Some(Action::SelectLast),
             KeyCode::Char('r') => Some(Action::Reload),
+            KeyCode::Char('e') => Some(Action::OpenEdit),
             KeyCode::Char('/') => Some(Action::OpenFilter),
             KeyCode::Char('A') => Some(Action::ToggleAll),
             KeyCode::Char('F') => Some(Action::ToggleFuture),
@@ -389,6 +414,42 @@ impl App {
             // Everything else is editing input (chars, backspace, arrows, …).
             _ => Some(Action::FilterInput(key)),
         }
+    }
+
+    /// Key mapping for the edit modal. Modal-level keys (save/cancel/field
+    /// navigation) win; everything else is routed to the focused field.
+    ///
+    /// `Tab` always moves to the next field, even inside multi-line textareas,
+    /// so field navigation is never swallowed by the editor. Within a textarea
+    /// the arrow keys edit text (they are passed through as field input).
+    fn edit_key(&self, key: KeyEvent) -> Option<Action> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => Some(Action::EditCancel),
+            KeyCode::Char('s') if ctrl => Some(Action::EditSave),
+            KeyCode::Tab | KeyCode::BackTab => {
+                if key.code == KeyCode::BackTab
+                    || key.modifiers.contains(KeyModifiers::SHIFT)
+                {
+                    Some(Action::EditFocusPrev)
+                } else {
+                    Some(Action::EditFocusNext)
+                }
+            }
+            // ↑/↓ move between fields, EXCEPT inside a multi-line textarea where
+            // they navigate text. Tab is always available for field movement.
+            KeyCode::Down if !self.edit_focus_is_multiline() => Some(Action::EditFocusNext),
+            KeyCode::Up if !self.edit_focus_is_multiline() => Some(Action::EditFocusPrev),
+            _ => Some(Action::EditInput(key)),
+        }
+    }
+
+    /// Whether the edit modal's focused field is a multi-line textarea.
+    fn edit_focus_is_multiline(&self) -> bool {
+        self.edit_form
+            .as_ref()
+            .map(|f| f.focus_is_multiline())
+            .unwrap_or(false)
     }
 
     /// Applies an [`Action`] to the state.
@@ -423,7 +484,130 @@ impl App {
             // fixed step and let the draw layer clamp the offset to the content.
             Action::DetailPageDown => self.detail_scroll_down(DETAIL_SCROLL_STEP),
             Action::DetailPageUp => self.detail_scroll_up(DETAIL_SCROLL_STEP),
+            Action::OpenEdit => self.open_edit(),
+            Action::EditInput(key) => {
+                if let Some(form) = self.edit_form.as_mut() {
+                    form.handle_field_key(key);
+                }
+            }
+            Action::EditFocusNext => {
+                if let Some(form) = self.edit_form.as_mut() {
+                    form.focus_next();
+                }
+            }
+            Action::EditFocusPrev => {
+                if let Some(form) = self.edit_form.as_mut() {
+                    form.focus_prev();
+                }
+            }
+            Action::EditSave => self.save_edit(),
+            Action::EditCancel => self.cancel_edit(),
         }
+    }
+
+    /// Opens the edit modal for the selected task. No-op when the list is empty.
+    fn open_edit(&mut self) {
+        let Some(task) = self.selected_task() else {
+            self.status = Some("nothing selected to edit".to_owned());
+            return;
+        };
+        self.edit_form = Some(super::edit::EditForm::from_task(task));
+        self.mode = Mode::Edit;
+        self.status = None;
+    }
+
+    /// Discards the edit form and returns to the list.
+    fn cancel_edit(&mut self) {
+        self.edit_form = None;
+        self.mode = Mode::Normal;
+        self.status = Some("edit cancelled".to_owned());
+    }
+
+    /// Validates and applies the edit form. On any error (validation, apply,
+    /// git conflict) the modal STAYS open with the error in the status line so
+    /// the user can fix and retry. On success the modal closes, the list
+    /// reloads, and the selection is kept on the edited task.
+    fn save_edit(&mut self) {
+        let Some(form) = self.edit_form.as_ref() else {
+            return;
+        };
+        let task_id = form.task_id;
+
+        // Build the params + data changes first; surface validation errors
+        // without touching the store.
+        let params = match form.to_edit_params(self.today) {
+            Ok(p) => p,
+            Err(e) => {
+                self.status = Some(format!("edit error: {e}"));
+                return;
+            }
+        };
+        let data_changes = form.data_changes();
+
+        if let Err(e) = self.apply_edit(task_id, params, data_changes) {
+            // Keep the modal open so the user can retry (e.g. after a git
+            // conflict resolves, or after fixing a field).
+            self.status = Some(format!("edit error: {e}"));
+            return;
+        }
+
+        // Success: close the modal, reload, and re-select the edited task.
+        self.edit_form = None;
+        self.mode = Mode::Normal;
+        match self.reload() {
+            Ok(()) => {
+                if let Some(idx) = self.tasks.iter().position(|s| s.task.id == task_id) {
+                    self.selected = idx;
+                }
+                self.status = Some("task saved".to_owned());
+            }
+            Err(e) => self.status = Some(format!("saved, but reload failed: {e}")),
+        }
+    }
+
+    /// Applies the field edits via the shared service, then the out-of-band data
+    /// changes (one commit each, mirroring the CLI `edit` and `data` commands).
+    fn apply_edit(
+        &mut self,
+        task_id: uuid::Uuid,
+        params: crate::core::service::EditTaskParams,
+        data_changes: Vec<(String, Option<serde_json::Value>)>,
+    ) -> anyhow::Result<()> {
+        use crate::core::service::apply_edits;
+
+        let repo_root = self.repo.repo_root.clone();
+        let task = apply_edits(
+            task_id,
+            params,
+            self.today,
+            &repo_root,
+            &mut *self.repo.store,
+            &*self.repo.vcs,
+        )?;
+        self.repo.record_task_event("edit", task.id);
+
+        // Apply data set/unset edits the way the CLI `data` command does: mutate
+        // `task.data` and commit, one transaction per change.
+        for (key, value) in data_changes {
+            self.repo.transaction(|store, vcs, root| {
+                let mut t = store.get_task(task_id)?;
+                match value {
+                    Some(v) => {
+                        t.data.insert(key.clone(), v);
+                    }
+                    None => {
+                        t.data.remove(&key);
+                    }
+                }
+                t.touch();
+                let path = crate::core::storage::task_path(root, &t);
+                store.save_task(&t)?;
+                vcs.commit(&[path], &format!("next: data edit {key} on {}", t.title))?;
+                Ok(())
+            })?;
+            self.repo.record_task_event("data", task_id);
+        }
+        Ok(())
     }
 
     /// Runs [`App::reload`], reporting either `ok_msg` or the error into the
@@ -797,5 +981,111 @@ mod tests {
         // Already at first; SelectPrev is a no-op and must not reset scroll.
         app.update(Action::SelectPrev);
         assert_eq!(app.detail_scroll(), before);
+    }
+
+    // ── edit modal ────────────────────────────────────────────────────────────
+
+    use tui_input::Input;
+
+    /// Builds an `App` over a real repo that supports git commits (user.name /
+    /// user.email set), then creates `title` via the shared service so it is
+    /// committed and editable. Returns the app (reloaded) and the task id.
+    fn app_with_committed_task(title: &str) -> (App, uuid::Uuid) {
+        let mut repo = test_repo();
+        let today = NaiveDate::from_ymd_opt(TODAY.0, TODAY.1, TODAY.2).unwrap();
+        let task = crate::core::service::create_task(
+            title.to_owned(),
+            crate::core::service::CreateTaskParams::default(),
+            today,
+            &repo.repo_root.clone(),
+            &mut *repo.store,
+            &*repo.vcs,
+        )
+        .unwrap();
+        let mut app = App::new(Config::default(), repo, ConfigSource::Default, today);
+        app.reload().unwrap();
+        (app, task.id)
+    }
+
+    #[test]
+    fn open_edit_enters_mode_and_seeds_form() {
+        let (mut app, _id) = app_with_committed_task("Edit me");
+        app.update(Action::OpenEdit);
+        assert_eq!(app.mode(), Mode::Edit);
+        assert_eq!(app.edit_form().unwrap().title.value(), "Edit me");
+    }
+
+    #[test]
+    fn cancel_edit_discards_and_returns_to_normal() {
+        let (mut app, _id) = app_with_committed_task("Keep title");
+        app.update(Action::OpenEdit);
+        app.edit_form.as_mut().unwrap().title = Input::new("Changed".to_owned());
+        app.update(Action::EditCancel);
+        assert_eq!(app.mode(), Mode::Normal);
+        assert!(app.edit_form().is_none());
+        // The store is untouched.
+        let stored = app.repo.store.get_task(_id).unwrap();
+        assert_eq!(stored.title, "Keep title");
+    }
+
+    #[test]
+    fn save_edit_round_trips_changes_to_store() {
+        let (mut app, id) = app_with_committed_task("Before");
+        app.update(Action::OpenEdit);
+        {
+            let form = app.edit_form.as_mut().unwrap();
+            form.title = Input::new("After".to_owned());
+            form.due = Input::new("2026-09-01".to_owned());
+            form.priority = crate::core::domain::task::Priority::High;
+            form.tags = vec!["#rust".to_owned()];
+        }
+        app.update(Action::EditSave);
+
+        assert_eq!(app.mode(), Mode::Normal, "modal closes on success");
+        let stored = app.repo.store.get_task(id).unwrap();
+        assert_eq!(stored.title, "After");
+        assert_eq!(stored.due, NaiveDate::from_ymd_opt(2026, 9, 1));
+        assert_eq!(stored.priority, crate::core::domain::task::Priority::High);
+        assert!(stored.tags.contains(&"#rust".to_owned()));
+        // Selection follows the edited task.
+        assert_eq!(app.selected_task().unwrap().id, id);
+    }
+
+    #[test]
+    fn save_edit_applies_data_changes() {
+        let (mut app, id) = app_with_committed_task("Data task");
+        app.update(Action::OpenEdit);
+        app.edit_form
+            .as_mut()
+            .unwrap()
+            .data
+            .insert("ticket".to_owned(), serde_json::json!("JIRA-7"));
+        app.update(Action::EditSave);
+        let stored = app.repo.store.get_task(id).unwrap();
+        assert_eq!(stored.data.get("ticket").and_then(|v| v.as_str()), Some("JIRA-7"));
+    }
+
+    #[test]
+    fn save_edit_invalid_field_keeps_modal_open() {
+        let (mut app, id) = app_with_committed_task("Stays");
+        app.update(Action::OpenEdit);
+        // Empty title is invalid → modal stays open with an error status.
+        app.edit_form.as_mut().unwrap().title = Input::new(String::new());
+        app.update(Action::EditSave);
+        assert_eq!(app.mode(), Mode::Edit, "modal stays open on validation error");
+        assert!(app.status().unwrap().contains("edit error"));
+        // Store unchanged.
+        assert_eq!(app.repo.store.get_task(id).unwrap().title, "Stays");
+    }
+
+    #[test]
+    fn tab_moves_field_focus() {
+        let (mut app, _id) = app_with_committed_task("Tabs");
+        app.update(Action::OpenEdit);
+        let first = app.edit_form().unwrap().focus;
+        let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let action = app.handle_key(tab).unwrap();
+        app.update(action);
+        assert_ne!(app.edit_form().unwrap().focus, first);
     }
 }

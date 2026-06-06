@@ -11,6 +11,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod app;
 pub mod config;
+pub mod edit;
 pub mod ui;
 
 use std::time::Duration;
