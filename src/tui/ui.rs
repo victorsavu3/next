@@ -214,7 +214,15 @@ fn list_item(scored: &ScoredTask, today: NaiveDate, width: usize) -> ListItem<'s
     let low = task.priority == Priority::Low;
 
     // Base style for the whole row, by urgency / priority.
+    // Done and Cancelled take precedence over due-date colouring: a finished
+    // task with a past due date should still render as done/grey, not red.
     let base = match due_state {
+        _ if task.status == Status::Done => {
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)
+        }
+        _ if task.status == Status::Cancelled => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM | Modifier::CROSSED_OUT),
         Some(DueState::Overdue) => Style::default().fg(Color::Red),
         Some(DueState::Today) => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         _ if started => Style::default().add_modifier(Modifier::BOLD),
@@ -319,10 +327,18 @@ fn detail_lines(detail: &DetailData, today: NaiveDate, width: usize) -> Vec<Line
 
     let short_id = task.id.to_string().replace('-', "")[..8].to_owned();
     lines.push(field("ID", short_id));
-    lines.push(Line::from(Span::styled(
-        task.title.clone(),
-        Style::default().add_modifier(Modifier::BOLD),
-    )));
+    // Done/Cancelled tasks render the title in dim grey (matching the list row
+    // style); active tasks keep the default bold heading.
+    let title_style = match task.status {
+        Status::Done => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD | Modifier::DIM),
+        Status::Cancelled => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD | Modifier::DIM | Modifier::CROSSED_OUT),
+        _ => Style::default().add_modifier(Modifier::BOLD),
+    };
+    lines.push(Line::from(Span::styled(task.title.clone(), title_style)));
 
     // Status / priority carry colour.
     lines.push(Line::from(vec![
@@ -1383,6 +1399,30 @@ mod tests {
         app.update(Action::OpenStatePanel);
         assert_eq!(app.mode(), Mode::StatePanel);
         let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    }
+
+    /// Done and cancelled tasks are shown when `filter_all` is toggled on.
+    /// The render must not panic and the list items must be present.
+    #[test]
+    fn renders_done_and_cancelled_tasks_with_filter_all() {
+        let open = Task::new("open task");
+
+        let mut done = Task::new("done task");
+        done.mark_done();
+
+        let mut cancelled = Task::new("cancelled task");
+        cancelled.mark_cancelled();
+
+        let mut app = app_with_tasks(vec![open, done, cancelled]);
+        // Toggle filter_all so finished tasks are included in the list.
+        app.update(Action::ToggleAll);
+        assert!(app.filter_all(), "filter_all should be active");
+        // All three tasks should now be visible.
+        assert_eq!(app.tasks().len(), 3, "expected 3 tasks with filter_all");
+
+        let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }

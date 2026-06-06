@@ -190,11 +190,21 @@ fn node_line(task: &Task, has_children: bool) -> Line<'static> {
     };
     let short = task.id.to_string().replace('-', "")[..8].to_owned();
 
+    // Title style mirrors the list-view row style: done tasks are dim grey,
+    // cancelled tasks are additionally crossed out.
+    let title_style = match task.status {
+        Status::Done => Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+        Status::Cancelled => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM | Modifier::CROSSED_OUT),
+        _ => Style::default(),
+    };
+
     let mut spans = vec![
         Span::styled(glyph, glyph_style),
         Span::raw(" "),
         Span::styled(format!("[{short}] "), Style::default().add_modifier(Modifier::DIM)),
-        Span::raw(task.title.clone()),
+        Span::styled(task.title.clone(), title_style),
     ];
 
     // A task tagged "project" with children is flagged so projects stand out.
