@@ -17,7 +17,6 @@ use uuid::Uuid;
 
 use crate::core::domain::filter::{self, FilterSet};
 use crate::core::domain::state::GlobalState;
-use crate::core::domain::tag;
 use crate::core::domain::task::{Status, Task};
 
 /// Live state for the tree view.
@@ -160,8 +159,7 @@ pub fn build_items(
 /// Recursively builds one [`TreeItem`] (and its visible subtree).
 fn build_node(task: &Task, children: &HashMap<Uuid, Vec<&Task>>) -> TreeItem<'static, Uuid> {
     let kids = children.get(&task.id);
-    let has_children = kids.is_some_and(|k| !k.is_empty());
-    let text = node_line(task, has_children);
+    let text = node_line(task);
 
     match kids {
         Some(kids) if !kids.is_empty() => {
@@ -177,8 +175,8 @@ fn build_node(task: &Task, children: &HashMap<Uuid, Vec<&Task>>) -> TreeItem<'st
     }
 }
 
-/// The display line for one node: `<glyph> [id] title [project]`.
-fn node_line(task: &Task, has_children: bool) -> Line<'static> {
+/// The display line for one node: `<glyph> [id] title`.
+fn node_line(task: &Task) -> Line<'static> {
     let (glyph, glyph_style) = match task.status {
         Status::Open => ("○", Style::default()),
         Status::Started => ("▶", Style::default().fg(Color::Green)),
@@ -200,27 +198,12 @@ fn node_line(task: &Task, has_children: bool) -> Line<'static> {
         _ => Style::default(),
     };
 
-    let mut spans = vec![
+    Line::from(vec![
         Span::styled(glyph, glyph_style),
         Span::raw(" "),
         Span::styled(format!("[{short}] "), Style::default().add_modifier(Modifier::DIM)),
         Span::styled(task.title.clone(), title_style),
-    ];
-
-    // A task tagged "project" with children is flagged so projects stand out.
-    if has_children && is_project_tagged(task) {
-        spans.push(Span::styled(
-            "  [project]",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        ));
-    }
-
-    Line::from(spans)
-}
-
-/// Whether the task carries a `project` tag (bare, `#project`, or `@project`).
-fn is_project_tagged(task: &Task) -> bool {
-    task.tags.iter().any(|t| tag::bare_name(t) == "project")
+    ])
 }
 
 #[cfg(test)]
@@ -320,43 +303,6 @@ mod tests {
         // Only the child is visible, promoted to root.
         assert_eq!(items.len(), 1);
         assert_eq!(*items[0].identifier(), child.id);
-    }
-
-    #[test]
-    fn project_marker_only_with_children_and_tag() {
-        // Tagged "project" WITH children → marked.
-        let mut proj = Task::new("proj".to_owned());
-        proj.tags = vec!["project".to_owned()];
-        let child = child_of("c", proj.id);
-        assert!(is_project_tagged(&proj));
-        // disable_implicit so the parent-with-open-children gate doesn't hide `proj`.
-        let items = build_items(
-            &[proj.clone(), child],
-            &all_filter(),
-            &no_state(),
-            today(),
-            false,
-        );
-        let line = node_line(&proj, true);
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(text.contains("[project]"), "{text}");
-        assert_eq!(items.len(), 1);
-
-        // Tagged "project" WITHOUT children → not marked.
-        let lonely = node_line(&proj, false);
-        let text: String = lonely.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(!text.contains("[project]"), "{text}");
-
-        // Untagged with children → not marked.
-        let plain = Task::new("plain".to_owned());
-        assert!(!is_project_tagged(&plain));
-    }
-
-    #[test]
-    fn hash_prefixed_project_tag_is_recognised() {
-        let mut t = Task::new("p".to_owned());
-        t.tags = vec!["#project".to_owned()];
-        assert!(is_project_tagged(&t));
     }
 
     /// A required-tag filter restricts the tree to only matching tasks.

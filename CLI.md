@@ -235,8 +235,7 @@ next show <id>
 ### `next tree`
 
 Show all tasks in a parent-child tree. Root tasks (no parent) are listed at the top;
-child tasks are indented under their parent. Tasks tagged `project` that have children
-are marked with `[project]`.
+child tasks are indented under their parent.
 
 **Usage**
 
