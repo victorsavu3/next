@@ -8,7 +8,6 @@
 //! [`crate::core::storage::machine_state`] helpers under the single state lock
 //! (`.state.toml.lock`).
 
-use std::fs;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -98,22 +97,6 @@ impl PluginRegistry {
     }
 }
 
-// ── Path-based read (no locking; for the legacy-file migration) ────────────────
-
-/// Reads a standalone legacy `plugins.toml` at `path` (empty if absent).
-///
-/// Retained only for the one-time migration that folds the old separate
-/// `plugins.toml` into the combined `state.toml`; live persistence goes through
-/// the `machine_state` helpers.
-pub(crate) fn load_from(path: &Path) -> Result<PluginRegistry> {
-    if !path.exists() {
-        return Ok(PluginRegistry::default());
-    }
-    let content = fs::read_to_string(path)?;
-    toml::from_str::<PluginRegistry>(&content)
-        .map_err(|e| TaskError::Other(format!("parse plugins.toml: {e}")))
-}
-
 // ── Persistence via the combined machine state (the public API) ────────────────
 //
 // Each operation runs inside `update_machine_state`, which holds the single
@@ -187,13 +170,6 @@ mod tests {
         assert_eq!(loaded, reg);
         assert_eq!(loaded.plugins[0].command, vec!["next-forgejo", "sync"]);
         assert_eq!(loaded.plugins[0].tasks, vec![id]);
-    }
-
-    #[test]
-    fn legacy_load_from_absent_file_is_empty() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let reg = load_from(&dir.path().join("nope.toml")).unwrap();
-        assert!(reg.plugins.is_empty());
     }
 
     #[test]

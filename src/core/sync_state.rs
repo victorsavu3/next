@@ -8,14 +8,13 @@
 //! state lock (`.state.toml.lock`).
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::core::{
-    error::{Result, TaskError},
+    error::Result,
     storage::{self, machine_state::update_machine_state},
 };
 
@@ -40,22 +39,6 @@ pub struct PluginSyncState {
     /// When this plugin last completed a sync.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_sync: Option<DateTime<Utc>>,
-}
-
-// ── Path-based read (no locking; for the legacy-file migration) ────────────────
-
-/// Reads a standalone legacy `sync_state.toml` at `path` (default if absent).
-///
-/// Retained only for the one-time migration that folds the old separate
-/// `sync_state.toml` into the combined `state.toml`; live persistence goes
-/// through the `machine_state` helpers.
-pub(crate) fn load_from(path: &Path) -> Result<SyncState> {
-    if !path.exists() {
-        return Ok(SyncState::default());
-    }
-    let content = fs::read_to_string(path)?;
-    toml::from_str::<SyncState>(&content)
-        .map_err(|e| TaskError::Other(format!("parse sync_state.toml: {e}")))
 }
 
 // ── Persistence via the combined machine state (the public API) ────────────────
@@ -97,15 +80,6 @@ mod tests {
         assert_eq!(loaded, state, "DateTime<Utc> must round-trip through TOML");
         assert_eq!(loaded.last_pull, Some(now));
         assert_eq!(loaded.plugins["forgejo"].last_sync, Some(now));
-    }
-
-    #[test]
-    fn legacy_load_from_absent_file_is_default() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let state = load_from(&dir.path().join("nope.toml")).unwrap();
-        assert_eq!(state, SyncState::default());
-        assert!(state.last_pull.is_none());
-        assert!(state.plugins.is_empty(), "plugins map defaults to empty");
     }
 
     #[test]

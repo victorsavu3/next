@@ -306,16 +306,13 @@ primitives all three subsystems (`TomlStore` global state, `plugin::registry`,
 `sync_state`) share, so none can clobber another's section. A single advisory lock file
 co-located with `state.toml` (`.state.toml.lock`) guards every machine-local write.
 
-Three one-time migrations run on `TomlStore::open()`:
+Two one-time migrations run on `TomlStore::open()`:
 1. **State file migration**: if `<repo>/state.toml` exists and the XDG path does not,
    the file is moved to the XDG location.
 2. **Tag description migration**: if `state.toml` contains a legacy `[tag_descriptions]`
    table, each entry is extracted to its own file under `tags/` and the table is removed.
-3. **Machine-file merge**: if the former separate `plugins.toml` / `sync_state.toml` exist
-   in the state dir, their contents are folded into `state.toml`'s `[[plugin]]` / `[sync]`
-   sections and the old files are deleted.
 
-All migrations are idempotent (subsequent opens are no-ops).
+Both migrations are idempotent (subsequent opens are no-ops).
 
 **`GitBackend`** wraps `Mutex<git2::Repository>` to satisfy `Send + Sync`. Commit
 messages follow the pattern `next: <verb> "<task title>"`.
@@ -720,7 +717,7 @@ non-zero exit code.
 | `GitBackend` | `src/core/storage/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
 | `CachedStore` | `src/core/storage/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |
 | Cache sync | `tests/cache_sync.rs` | Integration tests: write-through consistency (SQLite ↔ TOML), git pull propagation (HEAD change triggers rebuild), cache-reuse (same HEAD = no rebuild) |
-| Migration | `tests/migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next::storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens; plus the machine-file merge (legacy `plugins.toml` + `sync_state.toml` folded into `state.toml`, old files deleted, second open a no-op) |
+| Migration | `tests/migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next::storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens |
 | File locking | `tests/locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption, including transactional lost-update prevention (N processes each add a distinct tag to one task; all must survive). Re-entrant lock unit tests live in `src/core/storage/lock.rs` |
 | CLI commands | `tests/test_*.rs` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |
 | MCP unit tests | `src/mcp/tools/*.rs` | Unit tests per tool module using a real `TaskRepository` in a `tempdir` git repo (requires `--features mcp`) |

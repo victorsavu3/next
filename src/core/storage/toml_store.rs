@@ -45,46 +45,7 @@ impl TomlStore {
         let mut this = Self { root, state_path, state_lock_path };
         this.migrate_state_file()?;
         this.migrate_tag_descriptions()?;
-        this.migrate_merge_machine_files()?;
         Ok(this)
-    }
-
-    /// Folds the former separate `plugins.toml` and `sync_state.toml` (in the
-    /// state directory) into the combined `state.toml`, then deletes them.
-    ///
-    /// Idempotent: a no-op when neither legacy file is present (the steady
-    /// state after the first run). Existing `state.toml` global data is
-    /// preserved — only the `[[plugin]]` / `[sync]` sections are populated.
-    fn migrate_merge_machine_files(&mut self) -> Result<()> {
-        let Some(state_dir) = self.state_path.parent() else {
-            return Ok(());
-        };
-        let plugins_path = state_dir.join("plugins.toml");
-        let sync_path = state_dir.join("sync_state.toml");
-        if !plugins_path.exists() && !sync_path.exists() {
-            return Ok(());
-        }
-
-        let legacy_plugins = crate::core::plugin::registry::load_from(&plugins_path)?;
-        let legacy_sync = crate::core::sync_state::load_from(&sync_path)?;
-
-        crate::core::storage::update_machine_state_at(
-            self.state_path(),
-            self.state_lock_path(),
-            |machine| {
-                if !legacy_plugins.plugins.is_empty() {
-                    machine.plugins = legacy_plugins.plugins;
-                }
-                if legacy_sync != crate::core::sync_state::SyncState::default() {
-                    machine.sync = legacy_sync;
-                }
-                Ok(())
-            },
-        )?;
-
-        let _ = fs::remove_file(&plugins_path);
-        let _ = fs::remove_file(&sync_path);
-        Ok(())
     }
 
     /// If the old `<root>/state.toml` exists and the new `state_path` does not,
