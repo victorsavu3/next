@@ -1,8 +1,6 @@
 use chrono::{Local, NaiveDate};
-use serde::Serialize;
 
-use crate::core::{domain::filter, recurrence, scoring};
-
+use crate::core::forecast::{self, ForecastEntry};
 use crate::core::FilterArgs;
 use crate::AppContext;
 
@@ -33,24 +31,8 @@ pub struct Args {
     pub tokens: Vec<String>,
 }
 
-/// A single occurrence in the forecast: either a concrete existing task or a
-/// projected (not-yet-spawned) future instance of a schedule-type series.
-#[derive(Debug, Clone, Serialize)]
-pub struct ForecastEntry {
-    /// The forecast date (the task's `due`, or the projected occurrence date).
-    pub date: NaiveDate,
-    /// Short 8-char id of the originating task (the open instance for projected ones).
-    pub id: String,
-    pub title: String,
-    /// Urgency score of the originating task.
-    pub score: f64,
-    /// `true` for projected future occurrences that do not yet exist as tasks.
-    pub projected: bool,
-}
-
-/// Build the chronologically-ordered forecast entries for the given horizon:
-/// concrete existing tasks due within the window plus projected future
-/// occurrences of active schedule-type recurrence series. The horizon (in days)
+/// Build the chronologically-ordered forecast entries for the given horizon by
+/// delegating to [`crate::core::forecast::build_entries`]. The horizon (in days)
 /// is returned alongside so callers can render the section headings.
 pub fn build_entries(args: &Args, ctx: &AppContext) -> anyhow::Result<(Vec<ForecastEntry>, u32)> {
     let today = Local::now().date_naive();
@@ -67,43 +49,15 @@ pub fn build_entries(args: &Args, ctx: &AppContext) -> anyhow::Result<(Vec<Forec
     let all_tasks = ctx.repo.store().list_tasks()?;
     let tag_metas = ctx.repo.store().list_tag_metas()?;
 
-    let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
-    let scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.repo.scoring, &tag_metas);
-
-    let cutoff = today + chrono::Duration::days(horizon as i64);
-
-    let mut entries: Vec<ForecastEntry> = Vec::new();
-    for st in &scored {
-        let short = st.task.id.to_string().replace('-', "")[..8].to_string();
-
-        // Concrete existing task whose stored due falls within the horizon.
-        if st.task.due.is_some_and(|d| d <= cutoff) {
-            entries.push(ForecastEntry {
-                date: st.task.due.unwrap(),
-                id: short.clone(),
-                title: st.task.title.clone(),
-                score: st.score,
-                projected: false,
-            });
-        }
-
-        // Project the recurrence series forward. Only schedule-type series have
-        // deterministic future dates; completion-type series depend on unknown
-        // future completion dates and cannot be projected, so they are skipped.
-        for date in recurrence::project_series(&st.task, today, cutoff) {
-            entries.push(ForecastEntry {
-                date,
-                id: short.clone(),
-                title: st.task.title.clone(),
-                score: st.score,
-                projected: true,
-            });
-        }
-    }
-
-    // Order chronologically; concrete tasks sort before projected ones on the
-    // same date so the current instance is shown ahead of its projections.
-    entries.sort_by(|a, b| a.date.cmp(&b.date).then(a.projected.cmp(&b.projected)));
+    let entries = forecast::build_entries(
+        &all_tasks,
+        &state,
+        &ctx.repo.scoring,
+        &tag_metas,
+        &filter_set,
+        today,
+        horizon,
+    );
 
     Ok((entries, horizon))
 }

@@ -12,7 +12,7 @@ use crate::core::domain::task::{Priority, Recurrence, Status};
 use crate::core::scoring::ScoredTask;
 
 use super::VERSION;
-use super::app::{App, DetailData, Mode};
+use super::app::{App, DetailData, Mode, View};
 
 /// Draws a full frame: title bar, filter bar, list/detail split, and footer.
 ///
@@ -65,15 +65,24 @@ pub fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
         .split(vertical[1])[1]
 }
 
-/// Splits the body into the list (60%) and detail (40%) panes.
+/// Draws the body for the active view. List and tree share the detail-pane
+/// split; forecast takes the full width (it is a read-only sectioned list).
 fn draw_body(frame: &mut Frame, area: Rect, app: &mut App) {
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(area);
-
-    draw_list(frame, cols[0], app);
-    draw_detail(frame, cols[1], app);
+    match app.view() {
+        View::Forecast => forecast_view::draw(frame, area, app),
+        View::List | View::Tree => {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .split(area);
+            if app.view() == View::Tree {
+                tree_view::draw(frame, cols[0], app);
+            } else {
+                draw_list(frame, cols[0], app);
+            }
+            draw_detail(frame, cols[1], app);
+        }
+    }
 }
 
 fn draw_title(frame: &mut Frame, area: Rect, app: &App) {
@@ -88,6 +97,11 @@ fn draw_title(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(
             format!("[{}]", app.source().label()),
             Style::default().add_modifier(Modifier::DIM),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("view: {}", app.view().label()),
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
         ),
     ];
     for toggle in active_toggles(app) {
@@ -495,9 +509,15 @@ fn wrap_lines(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let hint = match app.mode() {
-        Mode::Normal => {
-            "q quit  j/k nav  r reload  e edit  d done  s start/stop  c cancel  m move  o open  x del  / filter  A/F/U flags"
-        }
+        Mode::Normal => match app.view() {
+            View::List => {
+                "q quit  1/2/3 view  j/k nav  e edit  d done  s start/stop  c cancel  m move  o open  x del  / filter  A/F/U flags"
+            }
+            View::Tree => {
+                "q quit  1/2/3 view  j/k nav  ←/→ fold  Space toggle  . all  e edit  d done  s start  m move  x del  / filter"
+            }
+            View::Forecast => "q quit  1/2/3 view  +/- horizon  r reload  / filter  A/F/U flags",
+        },
         Mode::Filter => "Enter apply  Esc cancel",
         Mode::Edit => {
             "Tab/↑↓ field  Space/←→ toggle  Enter commit (tag/data)  Ctrl-S save  Esc cancel"
@@ -790,6 +810,153 @@ mod move_popup {
     }
 }
 
+/// The tree view: a `tui-tree-widget` rendering of the parent/child hierarchy
+/// (left pane). Selection drives the shared detail pane (right pane).
+mod tree_view {
+    use ratatui::Frame;
+    use ratatui::layout::Rect;
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::widgets::{Block, Borders};
+    use tui_tree_widget::Tree;
+
+    use crate::tui::app::App;
+
+    pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
+        let items = app.tree_items();
+        let all = app.tree_include_all();
+        let title = if all {
+            " tree (all) ".to_owned()
+        } else {
+            " tree ".to_owned()
+        };
+        let block = Block::default().borders(Borders::ALL).title(title);
+
+        if items.is_empty() {
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new("No tasks to show in the tree.")
+                    .block(block)
+                    .style(Style::default().add_modifier(Modifier::DIM)),
+                area,
+            );
+            return;
+        }
+
+        // `Tree::new` only fails on duplicate root identifiers; ids are unique
+        // task UUIDs, so this cannot fail in practice.
+        let tree = match Tree::new(&items) {
+            Ok(t) => t.block(block).highlight_style(
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Err(_) => return,
+        };
+        frame.render_stateful_widget(tree, area, app.tree_view_mut().state_mut());
+    }
+}
+
+/// The forecast view: a chronological, sectioned list of concrete and projected
+/// occurrences (Overdue / Today / This week / This month / Next N days),
+/// honouring the app's active filter tokens/flags.
+mod forecast_view {
+    use chrono::NaiveDate;
+    use ratatui::Frame;
+    use ratatui::layout::Rect;
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, List, ListItem};
+
+    use crate::core::forecast::ForecastEntry;
+    use crate::tui::app::App;
+    use crate::tui::forecast::Section;
+
+    pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
+        let today = app.today();
+        let horizon = app.forecast_horizon();
+        let entries = app.forecast_entries();
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" forecast — next {horizon} days "));
+
+        if entries.is_empty() {
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(format!(
+                    "No tasks due in the next {horizon} days."
+                ))
+                .block(block)
+                .style(Style::default().add_modifier(Modifier::DIM)),
+                area,
+            );
+            return;
+        }
+
+        let items = build_items(&entries, today, horizon);
+        let list = List::new(items).block(block);
+        frame.render_widget(list, area);
+    }
+
+    /// Builds the section-headed list rows. A heading line precedes each
+    /// non-empty section; entries carry urgency colouring and a `(projected)`
+    /// marker.
+    fn build_items(
+        entries: &[ForecastEntry],
+        today: NaiveDate,
+        horizon: u32,
+    ) -> Vec<ListItem<'static>> {
+        let mut items: Vec<ListItem> = Vec::new();
+        let mut current: Option<Section> = None;
+
+        for e in entries {
+            let days = (e.date - today).num_days();
+            let section = Section::classify(days);
+            if current != Some(section) {
+                if current.is_some() {
+                    items.push(ListItem::new(Line::raw("")));
+                }
+                items.push(ListItem::new(Line::from(Span::styled(
+                    section.label(horizon),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ))));
+                current = Some(section);
+            }
+            items.push(ListItem::new(entry_line(e, days)));
+        }
+        items
+    }
+
+    /// One forecast row: `[id] title  date (in N days) (projected)`. Overdue is
+    /// red, today yellow/bold, projected dimmed/italic.
+    fn entry_line(e: &ForecastEntry, days: i64) -> Line<'static> {
+        let base = match days {
+            d if d < 0 => Style::default().fg(Color::Red),
+            0 => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            _ => Style::default(),
+        };
+        let due_label = match days {
+            d if d < 0 => format!("{} ({} days overdue)", e.date, -d),
+            0 => format!("{} (today)", e.date),
+            1 => format!("{} (tomorrow)", e.date),
+            d => format!("{} (in {d} days)", e.date),
+        };
+
+        let mut spans = vec![
+            Span::styled(format!("[{}] ", e.id), base.add_modifier(Modifier::DIM)),
+            Span::styled(e.title.clone(), base),
+            Span::raw("  "),
+            Span::styled(due_label, base.add_modifier(Modifier::DIM)),
+        ];
+        if e.projected {
+            spans.push(Span::styled(
+                "  (projected)",
+                base.add_modifier(Modifier::DIM | Modifier::ITALIC),
+            ));
+        }
+        Line::from(spans)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -799,7 +966,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use crate::tui::app::{Action, App};
+    use crate::tui::app::{Action, App, View};
     use crate::tui::config::ConfigSource;
 
     /// Builds an `App` over a real (empty) repo containing `tasks`, reloaded so
@@ -997,5 +1164,47 @@ mod tests {
         assert!(text.contains("A long description."));
         assert!(text.contains("Notes"));
         assert!(text.contains("Some notes here."));
+    }
+
+    /// A small parent/child tree where the parent is tagged "project".
+    fn tree_tasks() -> Vec<Task> {
+        let mut parent = Task::new("project root");
+        parent.tags = vec!["project".to_owned()];
+        let mut child = Task::new("a child");
+        child.parent_id = Some(parent.id);
+        vec![parent, child]
+    }
+
+    #[test]
+    fn renders_tree_view_without_panicking() {
+        let mut app = app_with_tasks(tree_tasks());
+        app.update(Action::SwitchView(View::Tree));
+        assert_eq!(app.view(), View::Tree);
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    }
+
+    #[test]
+    fn renders_forecast_view_without_panicking() {
+        let mut due = Task::new("due soon");
+        due.due = Some(chrono::NaiveDate::from_ymd_opt(2026, 6, 7).unwrap());
+        let mut app = app_with_tasks(vec![due]);
+        app.update(Action::SwitchView(View::Forecast));
+        assert_eq!(app.view(), View::Forecast);
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    }
+
+    #[test]
+    fn renders_empty_tree_and_forecast_without_panicking() {
+        let mut app = app_over_tempdir();
+        for view in [View::Tree, View::Forecast] {
+            app.update(Action::SwitchView(view));
+            let backend = TestBackend::new(80, 24);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        }
     }
 }

@@ -6,6 +6,7 @@ pub mod config;
 pub mod domain;
 pub mod error;
 pub mod filter_args;
+pub mod forecast;
 pub mod plugin;
 pub mod recurrence;
 pub mod resolve;

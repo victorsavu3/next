@@ -1821,6 +1821,7 @@ dependencies = [
  "tracing-subscriber",
  "tui-input",
  "tui-textarea-2",
+ "tui-tree-widget",
  "url",
  "uuid",
 ]
@@ -3453,6 +3454,17 @@ dependencies = [
  "ratatui-core",
  "ratatui-widgets",
  "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
+name = "tui-tree-widget"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "deca119555009eee2e0cfb9c020f39f632444dc4579918d5fc009d51d75dff92"
+dependencies = [
+ "ratatui-core",
+ "ratatui-widgets",
  "unicode-width",
 ]
 

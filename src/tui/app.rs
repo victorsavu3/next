@@ -28,6 +28,44 @@ use super::config::ConfigSource;
 /// against the actual content height.
 const DETAIL_SCROLL_STEP: u16 = 10;
 
+/// Which top-level view is active. [`View::List`] is the scored, flat list
+/// (the original UI); [`View::Tree`] is the parent/child hierarchy; and
+/// [`View::Forecast`] is the chronological, sectioned forecast.
+///
+/// Switch with `1`/`2`/`3` (or `Tab` to cycle) from [`Mode::Normal`]. The list
+/// and tree views share the detail pane and the per-task actions/edit keys; the
+/// forecast view is a full-width read-only list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum View {
+    /// The scored, sorted flat task list.
+    #[default]
+    List,
+    /// The parent/child task hierarchy.
+    Tree,
+    /// The chronological forecast (concrete + projected occurrences).
+    Forecast,
+}
+
+impl View {
+    /// The short label shown in the title bar.
+    pub fn label(self) -> &'static str {
+        match self {
+            View::List => "list",
+            View::Tree => "tree",
+            View::Forecast => "forecast",
+        }
+    }
+
+    /// The next view in the `List → Tree → Forecast → List` cycle (for `Tab`).
+    fn next(self) -> Self {
+        match self {
+            View::List => View::Tree,
+            View::Tree => View::Forecast,
+            View::Forecast => View::List,
+        }
+    }
+}
+
 /// Which interaction mode the UI is in.
 ///
 /// [`Mode::Normal`] browses the list; [`Mode::Filter`] edits the live filter
@@ -122,6 +160,29 @@ pub enum Action {
     MoveConfirm,
     /// While in [`Mode::MovePicker`]: dismiss the popup without moving.
     MoveCancel,
+
+    /// Switch to a specific top-level view (List / Tree / Forecast).
+    SwitchView(View),
+    /// Cycle to the next view (`Tab`).
+    CycleView,
+
+    /// In [`View::Tree`]: move the highlight to the next visible node.
+    TreeNext,
+    /// In [`View::Tree`]: move the highlight to the previous visible node.
+    TreePrev,
+    /// In [`View::Tree`]: expand the highlighted node.
+    TreeExpand,
+    /// In [`View::Tree`]: collapse the highlighted node.
+    TreeCollapse,
+    /// In [`View::Tree`]: toggle expand/collapse of the highlighted node.
+    TreeToggle,
+    /// In [`View::Tree`]: toggle the tree-local include-done/cancelled flag.
+    TreeToggleAll,
+
+    /// In [`View::Forecast`]: widen the forecast horizon.
+    ForecastWiden,
+    /// In [`View::Forecast`]: narrow the forecast horizon.
+    ForecastNarrow,
 }
 
 /// Everything the detail pane needs for one task, resolved from the cached
@@ -219,6 +280,13 @@ pub struct App {
     /// The editable filter buffer, live only while in [`Mode::Filter`].
     filter_input: Input,
 
+    /// The active top-level view (list / tree / forecast).
+    view: View,
+    /// Tree-view state (selection + expansion + include-all toggle).
+    tree_view: super::tree::TreeView,
+    /// Forecast-view state (the horizon).
+    forecast_view: super::forecast::ForecastView,
+
     /// The current interaction mode.
     mode: Mode,
     /// The live edit-modal form, present only while in [`Mode::Edit`].
@@ -235,11 +303,15 @@ impl App {
     /// Builds a fresh app over the given repository. Call [`App::reload`] before
     /// the first draw to populate the task list.
     pub fn new(config: Config, repo: TaskRepository, source: ConfigSource, today: NaiveDate) -> Self {
+        let forecast_view = super::forecast::ForecastView::new(config.forecast_horizon_days);
         Self {
             config,
             repo,
             source,
             today,
+            view: View::default(),
+            tree_view: super::tree::TreeView::default(),
+            forecast_view,
             tasks: Vec::new(),
             selected: 0,
             all_tasks: Vec::new(),
@@ -278,6 +350,58 @@ impl App {
     /// The current interaction mode.
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// The active top-level view, for the title bar and draw dispatch.
+    pub fn view(&self) -> View {
+        self.view
+    }
+
+    /// Mutable access to the tree-view state (for the stateful tree render).
+    pub fn tree_view_mut(&mut self) -> &mut super::tree::TreeView {
+        &mut self.tree_view
+    }
+
+    /// The tree-local include-done/cancelled toggle.
+    pub fn tree_include_all(&self) -> bool {
+        self.tree_view.include_all()
+    }
+
+    /// The forecast horizon in days.
+    pub fn forecast_horizon(&self) -> u32 {
+        self.forecast_view.horizon()
+    }
+
+    /// Builds the displayable tree items from the cached task list, honouring
+    /// the tree-local include-all toggle. Recomputed each frame (cheap).
+    pub fn tree_items(&self) -> Vec<tui_tree_widget::TreeItem<'static, uuid::Uuid>> {
+        super::tree::build_items(&self.all_tasks, self.tree_view.include_all())
+    }
+
+    /// Computes the forecast entries for the current horizon, honouring the
+    /// active filter tokens/flags. Returns an empty vec on a filter error (the
+    /// same tokens already drive the list, so an error is surfaced there).
+    pub fn forecast_entries(&self) -> Vec<crate::core::forecast::ForecastEntry> {
+        let mut fa = FilterArgs::parse(self.filter_tokens.clone());
+        fa.future = self.filter_future;
+        fa.all = self.filter_all;
+        fa.all_users = self.filter_all_users;
+        let Ok(filter_set) = fa.to_filter_set() else {
+            return Vec::new();
+        };
+        let store = self.repo.store();
+        let (Ok(state), Ok(tag_metas)) = (store.get_state(), store.list_tag_metas()) else {
+            return Vec::new();
+        };
+        crate::core::forecast::build_entries(
+            &self.all_tasks,
+            &state,
+            &self.repo.scoring,
+            &tag_metas,
+            &filter_set,
+            self.today,
+            self.forecast_view.horizon(),
+        )
     }
 
     /// The live edit form, for the drawing layer to render the modal. Present
@@ -337,9 +461,20 @@ impl App {
         &self.filter_input
     }
 
-    /// The task currently under the selection, or `None` when the list is empty.
+    /// The task the per-task actions / detail pane operate on.
+    ///
+    /// In [`View::List`] and [`View::Forecast`] this is the list row under the
+    /// selection; in [`View::Tree`] it is the highlighted tree node resolved
+    /// against the cached task list — so the existing edit/done/etc. keys act on
+    /// the tree's current node. Returns `None` when nothing is selected.
     pub fn selected_task(&self) -> Option<&Task> {
-        self.tasks.get(self.selected).map(|s| &s.task)
+        match self.view {
+            View::Tree => self
+                .tree_view
+                .selected_id()
+                .and_then(|id| self.all_tasks.iter().find(|t| t.id == id)),
+            View::List | View::Forecast => self.tasks.get(self.selected).map(|s| &s.task),
+        }
     }
 
     /// The current detail-pane scroll offset, in lines.
@@ -461,7 +596,7 @@ impl App {
     /// Returns `None` when the key is not bound.
     pub fn handle_key(&self, key: KeyEvent) -> Option<Action> {
         match self.mode {
-            Mode::Normal => Self::normal_key(key),
+            Mode::Normal => self.normal_key(key),
             Mode::Filter => Self::filter_key(key),
             Mode::Edit => self.edit_key(key),
             Mode::ConfirmDelete => Self::confirm_delete_key(key),
@@ -469,10 +604,52 @@ impl App {
         }
     }
 
-    fn normal_key(key: KeyEvent) -> Option<Action> {
+    /// Keys shared by every view in [`Mode::Normal`]: quit, reload, filter, view
+    /// switching, and the per-task actions (which resolve the selected task in a
+    /// view-aware way). Returns `None` if the key is not one of these.
+    fn normal_common_key(key: KeyEvent) -> Option<Action> {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Some(Action::Quit),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
+            KeyCode::Tab => Some(Action::CycleView),
+            KeyCode::Char('1') => Some(Action::SwitchView(View::List)),
+            KeyCode::Char('2') => Some(Action::SwitchView(View::Tree)),
+            KeyCode::Char('3') => Some(Action::SwitchView(View::Forecast)),
+            KeyCode::Char('r') => Some(Action::Reload),
+            KeyCode::Char('/') => Some(Action::OpenFilter),
+            _ => None,
+        }
+    }
+
+    /// The per-task action keys (edit/done/cancel/start/open/move/delete), shared
+    /// by the list and tree views; both resolve `selected_task()` view-aware.
+    fn task_action_key(key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Char('e') => Some(Action::OpenEdit),
+            KeyCode::Char('d') => Some(Action::Done),
+            KeyCode::Char('c') => Some(Action::Cancel),
+            KeyCode::Char('s') => Some(Action::ToggleStart),
+            KeyCode::Char('o') => Some(Action::OpenUrl),
+            KeyCode::Char('m') => Some(Action::OpenMove),
+            KeyCode::Char('x') | KeyCode::Delete => Some(Action::OpenDelete),
+            _ => None,
+        }
+    }
+
+    /// Dispatches a Normal-mode key to the active view's handler.
+    fn normal_key(&self, key: KeyEvent) -> Option<Action> {
+        match self.view {
+            View::List => Self::list_key(key),
+            View::Tree => Self::tree_key(key),
+            View::Forecast => Self::forecast_key(key),
+        }
+    }
+
+    fn list_key(key: KeyEvent) -> Option<Action> {
+        if let Some(a) = Self::normal_common_key(key) {
+            return Some(a);
+        }
+        match key.code {
             // Ctrl-d / Ctrl-u scroll the detail pane; the plain keys below are
             // bound to actions, so the modifier guards must come first.
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -485,20 +662,56 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectPrev),
             KeyCode::Char('g') | KeyCode::Home => Some(Action::SelectFirst),
             KeyCode::Char('G') | KeyCode::End => Some(Action::SelectLast),
-            KeyCode::Char('r') => Some(Action::Reload),
-            KeyCode::Char('e') => Some(Action::OpenEdit),
-            KeyCode::Char('d') => Some(Action::Done),
-            KeyCode::Char('c') => Some(Action::Cancel),
-            KeyCode::Char('s') => Some(Action::ToggleStart),
-            KeyCode::Char('o') => Some(Action::OpenUrl),
-            KeyCode::Char('m') => Some(Action::OpenMove),
-            KeyCode::Char('x') | KeyCode::Delete => Some(Action::OpenDelete),
-            KeyCode::Char('/') => Some(Action::OpenFilter),
             KeyCode::Char('A') => Some(Action::ToggleAll),
             KeyCode::Char('F') => Some(Action::ToggleFuture),
             KeyCode::Char('U') => Some(Action::ToggleAllUsers),
             KeyCode::PageDown => Some(Action::DetailPageDown),
             KeyCode::PageUp => Some(Action::DetailPageUp),
+            _ => Self::task_action_key(key),
+        }
+    }
+
+    /// Tree-view keys. Navigation drives the tree widget; `←/→` collapse/expand,
+    /// `Space` toggles, `.` toggles include-done/cancelled, and the shared
+    /// per-task action keys operate on the highlighted node. Ctrl-d/u still
+    /// scroll the detail pane.
+    fn tree_key(key: KeyEvent) -> Option<Action> {
+        if let Some(a) = Self::normal_common_key(key) {
+            return Some(a);
+        }
+        match key.code {
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::DetailPageDown)
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::DetailPageUp)
+            }
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::TreeNext),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::TreePrev),
+            KeyCode::Left => Some(Action::TreeCollapse),
+            KeyCode::Right => Some(Action::TreeExpand),
+            KeyCode::Char(' ') | KeyCode::Enter => Some(Action::TreeToggle),
+            // `.` toggles include-done/cancelled (the list view's `A` is taken by
+            // the global filter-all toggle, so the tree uses a distinct key).
+            KeyCode::Char('.') => Some(Action::TreeToggleAll),
+            KeyCode::PageDown => Some(Action::DetailPageDown),
+            KeyCode::PageUp => Some(Action::DetailPageUp),
+            _ => Self::task_action_key(key),
+        }
+    }
+
+    /// Forecast-view keys: a read-only list, so only view switching, reload,
+    /// filtering, and horizon adjustment (`+`/`-`) are bound.
+    fn forecast_key(key: KeyEvent) -> Option<Action> {
+        if let Some(a) = Self::normal_common_key(key) {
+            return Some(a);
+        }
+        match key.code {
+            KeyCode::Char('+') | KeyCode::Char('=') => Some(Action::ForecastWiden),
+            KeyCode::Char('-') | KeyCode::Char('_') => Some(Action::ForecastNarrow),
+            KeyCode::Char('A') => Some(Action::ToggleAll),
+            KeyCode::Char('F') => Some(Action::ToggleFuture),
+            KeyCode::Char('U') => Some(Action::ToggleAllUsers),
             _ => None,
         }
     }
@@ -637,6 +850,56 @@ impl App {
             Action::MovePrev => self.move_select_prev(),
             Action::MoveConfirm => self.do_move(),
             Action::MoveCancel => self.cancel_move(),
+
+            Action::SwitchView(view) => self.switch_view(view),
+            Action::CycleView => self.switch_view(self.view.next()),
+
+            Action::TreeNext => self.tree_view.key_down(),
+            Action::TreePrev => self.tree_view.key_up(),
+            Action::TreeExpand => self.tree_view.expand(),
+            Action::TreeCollapse => self.tree_view.collapse(),
+            Action::TreeToggle => self.tree_view.toggle(),
+            Action::TreeToggleAll => {
+                self.tree_view.toggle_all();
+                // Re-anchor the selection in case the toggle hid the current node.
+                let items = self.tree_items();
+                self.tree_view.ensure_selection(&items);
+                self.status = Some(if self.tree_view.include_all() {
+                    "tree: showing all".to_owned()
+                } else {
+                    "tree: active only".to_owned()
+                });
+            }
+
+            Action::ForecastWiden => {
+                self.forecast_view.widen(30);
+                self.status = Some(format!("horizon {} days", self.forecast_view.horizon()));
+            }
+            Action::ForecastNarrow => {
+                self.forecast_view.narrow(30);
+                self.status = Some(format!("horizon {} days", self.forecast_view.horizon()));
+            }
+        }
+    }
+
+    /// Switches the active view. On entering the tree view, ensures a node is
+    /// selected (seeded to the current list selection's task when possible) so
+    /// the detail pane and per-task actions have a target.
+    fn switch_view(&mut self, view: View) {
+        if self.view == view {
+            return;
+        }
+        self.view = view;
+        self.status = Some(format!("view: {}", view.label()));
+        if view == View::Tree {
+            let items = self.tree_items();
+            // Seed the tree highlight from the list selection where possible.
+            if self.tree_view.selected_id().is_none() {
+                if let Some(id) = self.tasks.get(self.selected).map(|s| s.task.id) {
+                    self.tree_view.state_mut().select(vec![id]);
+                }
+            }
+            self.tree_view.ensure_selection(&items);
         }
     }
 
@@ -1832,5 +2095,103 @@ mod tests {
         let filtered = app.move_picker().unwrap().filtered();
         assert_eq!(filtered.len(), 1);
         assert!(filtered[0].label.contains("alpha parent"));
+    }
+
+    // ── view switching + tree/forecast (T8) ─────────────────────────────────
+
+    #[test]
+    fn switch_view_changes_active_view() {
+        let mut app = app_with_repo_tasks(vec![Task::new("a")]);
+        assert_eq!(app.view(), View::List);
+        app.update(Action::SwitchView(View::Tree));
+        assert_eq!(app.view(), View::Tree);
+        app.update(Action::SwitchView(View::Forecast));
+        assert_eq!(app.view(), View::Forecast);
+    }
+
+    #[test]
+    fn cycle_view_rotates_list_tree_forecast() {
+        let mut app = app_with_repo_tasks(vec![Task::new("a")]);
+        app.update(Action::CycleView);
+        assert_eq!(app.view(), View::Tree);
+        app.update(Action::CycleView);
+        assert_eq!(app.view(), View::Forecast);
+        app.update(Action::CycleView);
+        assert_eq!(app.view(), View::List);
+    }
+
+    #[test]
+    fn tree_view_resolves_selected_task() {
+        let (mut app, id) = app_with_committed_task("tree task");
+        // Entering the tree view seeds the highlight from the list selection.
+        app.update(Action::SwitchView(View::Tree));
+        assert_eq!(app.view(), View::Tree);
+        // The selected task resolves via the highlighted tree node.
+        assert_eq!(app.selected_task().map(|t| t.id), Some(id));
+        // Tree-mode actions operate on it: start the highlighted node.
+        app.update(Action::ToggleStart);
+        assert_eq!(
+            app.repo.store.get_task(id).unwrap().status,
+            crate::core::domain::task::Status::Started
+        );
+    }
+
+    #[test]
+    fn tree_toggle_all_includes_done_tasks() {
+        // A done task is hidden from the tree until include-all is toggled.
+        let (mut app, id) = app_with_committed_task("done one");
+        app.repo
+            .transaction(|store, vcs, root| {
+                let mut t = store.get_task(id)?;
+                t.mark_done();
+                store.save_task(&t)?;
+                let path = crate::core::storage::task_path(root, &t);
+                vcs.commit(&[path], "done")?;
+                Ok(())
+            })
+            .unwrap();
+        app.reload().unwrap();
+        app.update(Action::SwitchView(View::Tree));
+
+        assert!(!app.tree_include_all());
+        assert!(
+            app.tree_items().is_empty(),
+            "done task hidden without include-all"
+        );
+        app.update(Action::TreeToggleAll);
+        assert!(app.tree_include_all());
+        assert_eq!(app.tree_items().len(), 1, "done task visible with include-all");
+    }
+
+    #[test]
+    fn forecast_entries_respect_filter_tokens() {
+        let mut tagged = Task::new("tagged");
+        tagged.due = Some(NaiveDate::from_ymd_opt(TODAY.0, TODAY.1, TODAY.2).unwrap());
+        tagged.tags = vec!["#rust".to_owned()];
+        let mut plain = Task::new("plain");
+        plain.due = Some(NaiveDate::from_ymd_opt(TODAY.0, TODAY.1, TODAY.2).unwrap());
+        let mut app = app_with_repo_tasks(vec![tagged, plain]);
+
+        // No filter: both due-today tasks forecast.
+        let titles: Vec<String> = app.forecast_entries().into_iter().map(|e| e.title).collect();
+        assert!(titles.contains(&"tagged".to_owned()));
+        assert!(titles.contains(&"plain".to_owned()));
+
+        // Require #rust: only the tagged task survives in the forecast.
+        app.filter_tokens = vec!["+#rust".to_owned()];
+        app.reload().unwrap();
+        let titles: Vec<String> = app.forecast_entries().into_iter().map(|e| e.title).collect();
+        assert_eq!(titles, vec!["tagged".to_owned()]);
+    }
+
+    #[test]
+    fn forecast_horizon_adjust_actions() {
+        let mut app = app_with_repo_tasks(Vec::new());
+        app.update(Action::SwitchView(View::Forecast));
+        let base = app.forecast_horizon();
+        app.update(Action::ForecastWiden);
+        assert_eq!(app.forecast_horizon(), base + 30);
+        app.update(Action::ForecastNarrow);
+        assert_eq!(app.forecast_horizon(), base);
     }
 }
