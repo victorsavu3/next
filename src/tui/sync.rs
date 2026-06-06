@@ -82,8 +82,18 @@ pub fn spawn(root: PathBuf, config: Config, tx: Sender<SyncMsg>) {
 /// The worker body: open a fresh handle and run the sync. Factored out so the
 /// spawn closure stays trivial.
 fn run(root: PathBuf, config: &Config) -> SyncMsg {
-    let mut repo = bootstrap::open_repository(root, config)?;
-    sync::sync(&mut repo, false, false)
+    let mut repo = bootstrap::open_repository(root.clone(), config)?;
+    let outcome = sync::sync(&mut repo, false, false)?;
+    // On a clean sync, trigger any due plugin (import) syncs. Best-effort; runs
+    // here on the worker thread (off the UI thread) after the repo lock released.
+    if outcome == SyncOutcome::Clean {
+        crate::core::plugin::run_due_syncs(
+            &root,
+            config.sync.plugin_sync_default_secs,
+            chrono::Local::now().to_utc(),
+        );
+    }
+    Ok(outcome)
 }
 
 #[cfg(test)]
