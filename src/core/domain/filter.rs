@@ -35,6 +35,13 @@ pub struct FilterSet {
     /// of status, blocking, resources, context, or user).
     pub disable_implicit: bool,
 
+    /// Keep parent tasks that have open children (projects) visible, instead of
+    /// hiding them under the "work on the children instead" rule.  All other
+    /// implicit filters still apply.  The scored CLI list leaves this `false`
+    /// (a blocked parent isn't actionable); the TUI sets it `true` so projects
+    /// show alongside their subtasks.
+    pub include_blocked_parents: bool,
+
     /// When set, only tasks that are descendants (or the root itself) of the
     /// task with this slug are returned.  Resolved against the full task list
     /// inside `apply`; silently returns nothing if the slug is not found.
@@ -50,7 +57,8 @@ pub struct FilterSet {
 /// 1. Task must have `status == Open`.
 /// 2. Task must not be hidden by `start_date` (unless `include_future`).
 /// 3. Task must not be blocked by an open `blocked_by` task.
-/// 4. Task must not be a parent with open children (work on the children instead).
+/// 4. Task must not be a parent with open children (work on the children
+///    instead) — unless `include_blocked_parents` is set, which keeps projects visible.
 /// 5. Task must not carry any unavailable `#resource` tag.
 /// 6. If contexts are active, task must have at least one matching `@context` tag.
 ///
@@ -110,7 +118,9 @@ pub fn apply(
                 if task.blocked_by.iter().any(|id| open_ids.contains(id)) {
                     return false;
                 }
-                if parents_with_open_children.contains(&task.id) {
+                if !filter.include_blocked_parents
+                    && parents_with_open_children.contains(&task.id)
+                {
                     return false;
                 }
                 if task
@@ -349,6 +359,24 @@ mod tests {
         // Only the child is shown; parent is hidden (work on the subtask)
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].title, "Subtask");
+    }
+
+    #[test]
+    fn include_blocked_parents_keeps_project_visible() {
+        let parent = Task::new("Project");
+        let mut child = Task::new("Subtask");
+        child.parent_id = Some(parent.id);
+
+        let filter = FilterSet {
+            include_blocked_parents: true,
+            ..Default::default()
+        };
+        let result = run(vec![parent, child], filter);
+        // Both the project and its open subtask are shown.
+        let titles: Vec<&str> = result.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(result.len(), 2, "{titles:?}");
+        assert!(titles.contains(&"Project"));
+        assert!(titles.contains(&"Subtask"));
     }
 
     #[test]

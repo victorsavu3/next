@@ -421,16 +421,32 @@ impl App {
         self.forecast_view.horizon()
     }
 
+    /// Builds the [`FilterSet`](filter::FilterSet) for the active filter tokens
+    /// and toggles, shared by the list, tree, and forecast views.
+    ///
+    /// Sets `include_blocked_parents` so the TUI shows parent tasks (projects)
+    /// alongside their open subtasks — unlike the scored CLI list, which hides
+    /// a parent while any child is open. (Forgejo issue #17.)
+    fn current_filter_set(&self) -> anyhow::Result<filter::FilterSet> {
+        let mut fa = FilterArgs::parse(self.filter_tokens.clone());
+        fa.future = self.filter_future;
+        fa.all = self.filter_all;
+        fa.all_users = self.filter_all_users;
+        let mut filter_set = fa.to_filter_set()?;
+        filter_set.include_blocked_parents = true;
+        Ok(filter_set)
+    }
+
     /// Builds the displayable tree items from the cached task list, honouring
     /// the active filter and the tree-local include-all toggle.
     /// Recomputed each frame (cheap). Falls back to a default (pass-all) filter
     /// on parse error so the tree still renders rather than crashing.
     pub fn tree_items(&self) -> Vec<tui_tree_widget::TreeItem<'static, uuid::Uuid>> {
-        let mut fa = FilterArgs::parse(self.filter_tokens.clone());
-        fa.future = self.filter_future;
-        fa.all = self.filter_all;
-        fa.all_users = self.filter_all_users;
-        let filter_set = fa.to_filter_set().unwrap_or_default();
+        let filter_set = self.current_filter_set().unwrap_or_else(|_| {
+            // On a token error, fall back to a pass-through filter that still
+            // shows projects, so the tree renders rather than crashing.
+            filter::FilterSet { include_blocked_parents: true, ..Default::default() }
+        });
         let store = self.repo.store();
         let state = store.get_state().unwrap_or_default();
         super::tree::build_items(
@@ -446,11 +462,7 @@ impl App {
     /// active filter tokens/flags. Returns an empty vec on a filter error (the
     /// same tokens already drive the list, so an error is surfaced there).
     pub fn forecast_entries(&self) -> Vec<crate::core::forecast::ForecastEntry> {
-        let mut fa = FilterArgs::parse(self.filter_tokens.clone());
-        fa.future = self.filter_future;
-        fa.all = self.filter_all;
-        fa.all_users = self.filter_all_users;
-        let Ok(filter_set) = fa.to_filter_set() else {
+        let Ok(filter_set) = self.current_filter_set() else {
             return Vec::new();
         };
         let store = self.repo.store();
@@ -641,11 +653,7 @@ impl App {
     pub fn reload(&mut self) -> anyhow::Result<()> {
         // Build the filter first: an invalid token must NOT clear the list, so
         // we fail before touching `self.tasks`.
-        let mut fa = FilterArgs::parse(self.filter_tokens.clone());
-        fa.future = self.filter_future;
-        fa.all = self.filter_all;
-        fa.all_users = self.filter_all_users;
-        let filter_set = fa.to_filter_set()?;
+        let filter_set = self.current_filter_set()?;
 
         let store = self.repo.store();
         let state = store.get_state()?;
@@ -1954,6 +1962,28 @@ mod tests {
     /// Titles currently visible, for order-independent assertions.
     fn visible_titles(app: &App) -> Vec<String> {
         app.tasks().iter().map(|s| s.task.title.clone()).collect()
+    }
+
+    #[test]
+    fn list_and_tree_show_parent_with_open_child() {
+        // Regression for issue #17: a project (parent with an open subtask) must
+        // be visible in the TUI, not hidden by the scored-list "blocked parent"
+        // rule.
+        let parent = Task::new("Project");
+        let mut child = Task::new("Subtask");
+        child.parent_id = Some(parent.id);
+        let parent_id = parent.id;
+        let app = app_with_repo_tasks(vec![parent, child]);
+
+        let titles = visible_titles(&app);
+        assert!(titles.contains(&"Project".to_string()), "list missing project: {titles:?}");
+        assert!(titles.contains(&"Subtask".to_string()), "list missing subtask: {titles:?}");
+
+        // The tree shows the project as a root node (with the subtask nested).
+        let items = app.tree_items();
+        let root = items.iter().find(|i| *i.identifier() == parent_id);
+        assert!(root.is_some(), "tree missing project root");
+        assert_eq!(root.unwrap().children().len(), 1, "subtask should nest under the project");
     }
 
     #[test]
