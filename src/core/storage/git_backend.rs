@@ -21,6 +21,10 @@ pub struct GitBackend {
     /// using libgit2.  Useful when the system git handles authentication
     /// (SSH agents, credential managers) better than the embedded bindings.
     use_subprocess: bool,
+    /// Explicit HTTPS credentials supplied at construction time (e.g. from the
+    /// MCP config file).  Takes precedence over the `NEXT_GIT_USER` /
+    /// `NEXT_GIT_TOKEN` env vars and the system credential helper.
+    git_credentials: Option<(String, String)>,
 }
 
 impl GitBackend {
@@ -32,6 +36,7 @@ impl GitBackend {
             lock_path: root.join(".next.lock"),
             work_dir: root.to_path_buf(),
             use_subprocess: false,
+            git_credentials: None,
         })
     }
 
@@ -40,6 +45,17 @@ impl GitBackend {
     /// All other operations (`commit`, `head_hash`) continue to use libgit2.
     pub fn with_subprocess(mut self, enabled: bool) -> Self {
         self.use_subprocess = enabled;
+        self
+    }
+
+    /// Attaches explicit HTTPS credentials.  These take precedence over the
+    /// `NEXT_GIT_USER` / `NEXT_GIT_TOKEN` environment variables and the system
+    /// credential helper when libgit2 performs fetch/push operations.
+    pub fn with_credentials(mut self, user: Option<String>, token: Option<String>) -> Self {
+        self.git_credentials = match (user, token) {
+            (Some(u), Some(t)) => Some((u, t)),
+            _ => None,
+        };
         self
     }
 
@@ -55,15 +71,14 @@ impl GitBackend {
 /// Builds a `RemoteCallbacks` that handles SSH (via agent) and HTTP/HTTPS.
 ///
 /// For HTTP/HTTPS, credentials are resolved in this order:
-/// 1. `NEXT_GIT_USER` + `NEXT_GIT_TOKEN` environment variables (used by
-///    `next-mcp` in containerised deployments where no credential helper is
-///    configured).
-/// 2. The system git credential helper as a fallback.
+/// 1. `explicit` — user/token pair passed directly (e.g. from the MCP config file).
+/// 2. `NEXT_GIT_USER` + `NEXT_GIT_TOKEN` environment variables.
+/// 3. The system git credential helper as a fallback.
 ///
 /// The `tried` flag prevents the callback from looping when credentials are
 /// rejected — git2 re-invokes the callback on failure, so we return an error
 /// on the second call instead of retrying forever.
-fn remote_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
+fn remote_callbacks<'a>(explicit: Option<(String, String)>) -> git2::RemoteCallbacks<'a> {
     let mut tried = false;
     let mut cb = git2::RemoteCallbacks::new();
     cb.credentials(move |url, username, allowed| {
@@ -76,13 +91,17 @@ fn remote_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
             return git2::Cred::ssh_key_from_agent(username.unwrap_or("git"));
         }
         if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
-            // Prefer explicit env-var credentials (no credential helper needed).
+            // 1. Explicit credentials supplied at construction time.
+            if let Some((ref u, ref t)) = explicit {
+                return git2::Cred::userpass_plaintext(u, t);
+            }
+            // 2. Env-var credentials.
             let env_user  = std::env::var("NEXT_GIT_USER").ok();
             let env_token = std::env::var("NEXT_GIT_TOKEN").ok();
             if let (Some(u), Some(t)) = (env_user.as_deref(), env_token.as_deref()) {
                 return git2::Cred::userpass_plaintext(u, t);
             }
-            // Fall back to the system git credential helper.
+            // 3. System git credential helper.
             let config = git2::Config::open_default()
                 .map_err(|e| git2::Error::from_str(&e.to_string()))?;
             return git2::Cred::credential_helper(&config, url, username);
@@ -214,7 +233,7 @@ impl VcsBackend for GitBackend {
             .map_err(|e| TaskError::Other(format!("git remote 'origin': {e}")))?;
 
         let mut fetch_opts = git2::FetchOptions::new();
-        fetch_opts.remote_callbacks(remote_callbacks());
+        fetch_opts.remote_callbacks(remote_callbacks(self.git_credentials.clone()));
         remote
             .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
             .map_err(|e| TaskError::Other(format!("git fetch: {e}")))?;
@@ -366,7 +385,7 @@ impl VcsBackend for GitBackend {
             .find_remote("origin")
             .map_err(|e| TaskError::Other(format!("git remote 'origin': {e}")))?;
         let mut push_opts = git2::PushOptions::new();
-        push_opts.remote_callbacks(remote_callbacks());
+        push_opts.remote_callbacks(remote_callbacks(self.git_credentials.clone()));
         remote
             .push(&[refspec.as_str()], Some(&mut push_opts))
             .map_err(|e| TaskError::Other(format!("git push: {e}")))?;

@@ -25,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
     // Open the task store.
     let (store, vcs) = next::core::storage::open(repo_path.clone())
         .map_err(|e| anyhow::anyhow!("failed to open task store: {e}"))?;
+    let vcs = vcs.with_credentials(config.git_user.clone(), config.git_token.clone());
 
     let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), repo_path);
     let ctx = Arc::new(Mutex::new(ctx));
