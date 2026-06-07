@@ -208,7 +208,8 @@ for a single invocation even when `autosync = true` in the config (the two flags
 
 `next` stores tasks locally as TOML files in a git repository.
 
-**Machine-local settings** live at `$XDG_CONFIG_HOME/task-manager/config.toml` (CLI only):
+**Machine-local settings** live at `$XDG_CONFIG_HOME/task-manager/config.toml` (CLI only).
+A fully annotated example is at [`quadlets/config.toml.example`](quadlets/config.toml.example).
 
 ```toml
 repository            = "/home/alice/tasks"  # use next from any directory
@@ -217,6 +218,11 @@ autosync              = true                 # sync automatically after each mut
 list_limit            = 20                   # cap `next list` output (same as -n 20)
 forecast_horizon_days = 90                   # days ahead shown by `next forecast`
 next_count            = 10                   # tasks shown by `next next`
+
+[sync]
+git_subprocess        = true                 # use `git` subprocess instead of libgit2
+pull_before_query     = true                 # pull before reads (default); use --offline to bypass
+staleness_secs        = 3600                 # re-pull after this many seconds (default: 1 hour)
 ```
 
 **Scoring weights** live *in the repository* at `config/scoring.toml`, committed to git
