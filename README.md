@@ -208,8 +208,7 @@ for a single invocation even when `autosync = true` in the config (the two flags
 
 `next` stores tasks locally as TOML files in a git repository.
 
-**Machine-local settings** live at `$XDG_CONFIG_HOME/task-manager/config.toml` (CLI only).
-A fully annotated example is at [`quadlets/config.toml.example`](quadlets/config.toml.example).
+**Machine-local settings** live at `$XDG_CONFIG_HOME/task-manager/config.toml` (CLI only):
 
 ```toml
 repository            = "/home/alice/tasks"  # use next from any directory
