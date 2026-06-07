@@ -1,0 +1,78 @@
+# next-mcp configuration file
+# Default location inside the container: /data/config/config.toml
+# Override with the NEXT_CONFIG environment variable.
+#
+# Environment variables always take precedence over values in this file.
+# Absent fields fall back to the built-in defaults shown below.
+#
+# Sensitive values (bearer_token, git.token) should have the file
+# owned by root and readable only by the service user (chmod 600).
+
+# ── Authentication ─────────────────────────────────────────────────────────────
+
+# Bearer token that MCP clients must supply.
+# Required — must be set here or via NEXT_BEARER_TOKEN.
+# Generate with: openssl rand -hex 32
+bearer_token = "change-me"
+
+# Separate bearer token for the POST /webhook/sync endpoint.
+# If absent (and NEXT_WEBHOOK_TOKEN is unset), the endpoint is disabled.
+#webhook_token = ""
+
+# ── Server ─────────────────────────────────────────────────────────────────────
+
+# Address and port to listen on inside the container.
+# Default: "0.0.0.0:3000"
+#bind_addr = "0.0.0.0:3000"
+
+# Local path for the cloned task repository.
+# Must match the container-side mount point of the tasks volume.
+# Default: "/data/tasks"
+#repo_path = "/data/tasks"
+
+# ── Git ────────────────────────────────────────────────────────────────────────
+
+[git]
+
+# HTTPS URL of the tasks repository to clone on first start.
+# Ignored on subsequent starts once the volume already contains a repo.
+url = "https://git.example.com/user/tasks.git"
+
+# Credentials for HTTPS authentication.
+# Alternatively embed them in the URL as https://user:token@host/repo.git
+# (embedded credentials are stripped from logs automatically).
+user  = "user"
+token = "glpat-xxxxxxxxxxxxxxxxxxxx"
+
+# Name and email used for git commits made by next-mcp.
+# Defaults: "next-mcp" / "next-mcp@unknown"
+#author_name  = "next-mcp"
+#author_email = "next-mcp@unknown"
+
+# ── Sync ───────────────────────────────────────────────────────────────────────
+
+[sync]
+
+# Periodic background pull+push interval in seconds.
+# Set to 0 to disable periodic sync entirely.
+# Default: 86400 (once a day)
+interval_secs = 3600
+
+# Seconds to wait after the last mutation before firing a deferred sync.
+# Keeps bulk edits snappy while ensuring data is not left un-pushed indefinitely.
+# Default: 30
+#deferred_delay_secs = 30
+
+# Pull from the remote before answering a query so clients always see
+# up-to-date data. The pull is best-effort and never blocks a command.
+# Default: true
+#pull_before_query = true
+
+# How long (seconds) a local copy stays "fresh" after a pull. A pull is
+# skipped if the last one completed within this window.
+# Default: 3600 (1 hour)
+#staleness_secs = 3600
+
+# Timeout (seconds) for the pre-query pull before it is abandoned.
+# Default: 10
+#pull_timeout_secs = 10

@@ -8,14 +8,22 @@ Image=forgejo.victorsavu.eu/victor/next-mcp:latest
 PublishPort=3000:3000
 
 # Persistent storage.
-# Option A — two named volumes (recommended, each independently backed up):
+# Option A — named volumes per directory (recommended; each independently backed up):
 Volume=next-tasks:/data/tasks:Z
 Volume=next-state:/data/state:Z
+Volume=next-config:/data/config:Z
 # Option B — single host directory covering the whole /data tree:
 #   Volume=/var/next-mcp/data/:/data/:Z
-#   (creates tasks/ and state/ subdirectories automatically on first start)
+#   (creates tasks/, state/, and config/ subdirectories automatically on first start)
 
-# Secrets and config — keep this file at ~/.config/next-mcp/env (chmod 600)
+# TOML config file — place config.toml in the next-config volume
+# (see quadlets/next-mcp.config.toml.example).  Sensitive secrets (bearer
+# token, git token) can live here instead of, or in addition to, the env file.
+# The env file always takes precedence over the config file for any key set
+# in both places.
+
+# Environment overrides — keep this file at ~/.config/next-mcp/env (chmod 600).
+# Only needed for values not already set in config.toml.
 EnvironmentFile=%h/.config/next-mcp/env
 
 [Service]

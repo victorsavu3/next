@@ -26,8 +26,8 @@ RUN apk add --no-cache \
 # Unprivileged service user. UID 1000 matches typical rootless-Podman host UID.
 RUN addgroup -S -g 1000 next \
  && adduser  -S -G next -u 1000 -h /home/next -s /sbin/nologin next \
- && mkdir -p /home/next /data/tasks /data/state \
- && chown -R next:next /home/next /data/tasks /data/state
+ && mkdir -p /home/next /data/tasks /data/state /data/config \
+ && chown -R next:next /home/next /data/tasks /data/state /data/config
 
 COPY --from=builder /app/target/release/next-mcp /usr/local/bin/
 
