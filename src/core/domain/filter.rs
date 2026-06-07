@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn excludes_done_tasks() {
         let mut done = Task::new("Done task");
-        done.mark_done();
+        done.mark_done(today());
         let open = Task::new("Open task");
         let result = run(vec![done, open], FilterSet::default());
         assert_eq!(result.len(), 1);
@@ -339,7 +339,7 @@ mod tests {
     #[test]
     fn task_unblocked_when_blocker_is_done() {
         let mut blocker = Task::new("Blocker");
-        blocker.mark_done();
+        blocker.mark_done(today());
         let mut blocked = Task::new("Blocked");
         blocked.blocked_by = vec![blocker.id];
 
@@ -384,7 +384,7 @@ mod tests {
         let parent = Task::new("Project");
         let mut child = Task::new("Subtask");
         child.parent_id = Some(parent.id);
-        child.mark_done();
+        child.mark_done(today());
 
         let result = run(vec![parent, child], FilterSet::default());
         assert_eq!(result.len(), 1);
@@ -656,7 +656,7 @@ mod tests {
     #[test]
     fn disable_implicit_shows_done_tasks() {
         let mut done = Task::new("Done");
-        done.mark_done();
+        done.mark_done(today());
         let filter = FilterSet {
             disable_implicit: true,
             ..Default::default()
@@ -781,10 +781,10 @@ mod tests {
     #[test]
     fn explicit_filters_apply_even_with_disable_implicit() {
         let mut done = Task::new("Done with tag");
-        done.mark_done();
+        done.mark_done(today());
         done.tags = vec!["#keep".into()];
         let mut done_no_tag = Task::new("Done without tag");
-        done_no_tag.mark_done();
+        done_no_tag.mark_done(today());
 
         let filter = FilterSet {
             disable_implicit: true,

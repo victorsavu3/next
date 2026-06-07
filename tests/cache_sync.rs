@@ -214,7 +214,7 @@ fn done_status_syncs_to_both_stores() {
 
     let mut task = Task::new("Finish this");
     store.save_task(&task).unwrap();
-    task.mark_done();
+    task.mark_done(chrono::Local::now().date_naive());
     store.save_task(&task).unwrap();
 
     let head = vcs.head_hash().unwrap();

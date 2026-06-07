@@ -36,6 +36,7 @@ A task MAY carry the following optional fields:
 | `url` | string | URL associated with the task (ticket, doc, reference link); must be http/https |
 | `notes` | string | Multi-line free text |
 | `data` | map of string → JSON value | Arbitrary key-value pairs for tool integrations or AI-provided metadata; values may be any JSON type except null |
+| `completed_at` | date string (YYYY-MM-DD) | Date the task was completed; set when marked done (defaults to today, may be backdated via `--completed-at`). Absent while unresolved |
 
 When a task recurs it MUST carry a `[recurrence]` table. The `type` field selects the mode:
 
@@ -424,8 +425,9 @@ alongside `open` tasks and count as active for blocking and parent-child visibil
 All `<id-or-slug>` arguments MUST accept a full UUID, an unambiguous UUID prefix
 (minimum 4 hex characters), or a task's slug.
 
-`next done --completed-at <date>` MUST use the provided date instead of today as the
-base date for recurrence scheduling (completion-based: `today + interval_days`; schedule-based:
+`next done` MUST record the completion date in the task's `completed_at` field. The date
+defaults to today; `--completed-at <date>` overrides it. The same date is the base date for
+recurrence scheduling (completion-based: `completed_at + interval_days`; schedule-based:
 `max(task.due, task.start, completed_at)`). Accepts ISO 8601 or natural-language dates.
 
 `next open` MUST fail with an error when the task has no `url` field set.

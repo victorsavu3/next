@@ -139,6 +139,13 @@ pub struct Task {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recurrence_id: Option<Uuid>,
 
+    /// The date on which the task was completed. Set when the task is marked
+    /// done (see [`Task::mark_done`]); `None` while the task is unresolved.
+    /// May be backdated relative to `updated_at` when a completion date is
+    /// supplied explicitly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<NaiveDate>,
+
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -232,6 +239,7 @@ impl Task {
             notes: None,
             recurrence: None,
             recurrence_id: None,
+            completed_at: None,
             created_at: now,
             updated_at: now,
         }
@@ -283,9 +291,15 @@ impl Task {
         }
     }
 
-    /// Marks the task as done and sets `updated_at` to now.
-    pub fn mark_done(&mut self) {
+    /// Marks the task as done, records `completion_date` in `completed_at`,
+    /// and sets `updated_at` to now.
+    ///
+    /// `completion_date` is the date the work is considered finished. It is
+    /// usually today but may be backdated (e.g. via `next done --completed-at`),
+    /// which also drives completion-based recurrence scheduling.
+    pub fn mark_done(&mut self, completion_date: NaiveDate) {
         self.status = Status::Done;
+        self.completed_at = Some(completion_date);
         self.updated_at = Utc::now();
     }
 
@@ -367,8 +381,17 @@ mod tests {
     #[test]
     fn mark_done_changes_status() {
         let mut t = Task::new("Do laundry");
-        t.mark_done();
+        t.mark_done(today());
         assert_eq!(t.status, Status::Done);
+    }
+
+    #[test]
+    fn mark_done_records_completion_date() {
+        let mut t = Task::new("Do laundry");
+        assert!(t.completed_at.is_none());
+        let when = today() - chrono::Duration::days(2);
+        t.mark_done(when);
+        assert_eq!(t.completed_at, Some(when));
     }
 
     #[test]

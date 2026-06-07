@@ -180,10 +180,10 @@ enabled.
 Key `Task` fields: `id`, `title`, `status`, `priority`, `due`, `start`, `long_term`,
 `slug`, `parent_id`, `assignee`, `tags`, `blocked_by`, `score_adjustment`, `description`,
 `url`, `notes`, `data` (arbitrary JSON map; `data["time_log"]` accumulates start/stop events),
-`recurrence`, `created_at`, `updated_at`.
+`recurrence`, `completed_at` (date set when marked done), `created_at`, `updated_at`.
 
 Key `Task` methods: `is_open()` (Open only), `is_active()` (Open or Started), `mark_started()`,
-`mark_stopped()`, `mark_done()`, `mark_cancelled()`.
+`mark_stopped()`, `mark_done(completion_date)`, `mark_cancelled()`.
 
 **Storage traits** (`next::store`):
 

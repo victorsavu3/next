@@ -122,6 +122,9 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
         "Updated:  {}",
         task.updated_at.format("%Y-%m-%d %H:%M UTC")
     );
+    if let Some(completed) = task.completed_at {
+        println!("Completed: {}", completed.format("%Y-%m-%d"));
+    }
     if !task.data.is_empty() {
         let mut keys: Vec<&String> = task.data.keys().collect();
         keys.sort();

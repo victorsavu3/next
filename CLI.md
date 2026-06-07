@@ -276,12 +276,12 @@ next done <id>
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--completed-at <date>` | date expression | today | Date to use as the completion date for recurrence scheduling. ISO 8601 or natural language. |
+| `--completed-at <date>` | date expression | today | Date the task was completed. Recorded on the task and used for recurrence scheduling. ISO 8601 or natural language. |
 | `--json` | flag | false | Emit the completed task (and the new recurrence instance, if any) as JSON. |
 
 **Notes**
 
-`--completed-at` affects only recurrence scheduling — it does not change the task's `updated_at` timestamp. Useful when you forgot to mark a recurring task done on the day it was actually completed.
+The completion date is stored on the task in its `completed_at` field (shown as `Completed:` by `next show`) and drives completion-based recurrence scheduling. It is independent of the `updated_at` timestamp, so `--completed-at` lets you backdate a task you forgot to mark done on the day it was actually completed.
 
 ---
 

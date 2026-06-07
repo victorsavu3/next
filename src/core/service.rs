@@ -274,7 +274,7 @@ pub fn complete_task(
         return Err(TaskError::Other(msg).into());
     }
 
-    task.mark_done();
+    task.mark_done(completion_date);
 
     let task_path = storage::task_path(repo_root, &task);
     let mut paths: Vec<PathBuf> = vec![task_path];
@@ -575,6 +575,35 @@ mod tests {
 
         use crate::core::domain::task::Status;
         assert_eq!(completed.status, Status::Done);
+        assert_eq!(completed.completed_at, Some(today()));
+        // The recorded date must survive a round-trip through the store.
+        assert_eq!(ctx.store.get_task(task.id).unwrap().completed_at, Some(today()));
+    }
+
+    #[test]
+    fn complete_task_records_backdated_completion_date() {
+        let (_dir, mut ctx) = make_ctx();
+        let task = create_task(
+            "Backdated".into(),
+            CreateTaskParams::default(),
+            today(),
+            &ctx.repo_root.clone(),
+            &mut *ctx.store,
+            &*ctx.vcs,
+        )
+        .unwrap();
+
+        let when = today() - chrono::Duration::days(3);
+        let completed = complete_task(
+            task.id,
+            when,
+            &ctx.repo_root.clone(),
+            &mut *ctx.store,
+            &*ctx.vcs,
+        )
+        .unwrap();
+
+        assert_eq!(completed.completed_at, Some(when));
     }
 
     #[test]

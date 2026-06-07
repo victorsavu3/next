@@ -449,11 +449,12 @@ mod tests {
         let mut task = Task::new("Finish me");
         store.save_task(&task).unwrap();
 
-        task.mark_done();
+        task.mark_done(chrono::Local::now().date_naive());
         store.save_task(&task).unwrap();
 
         let loaded = store.get_task(task.id).unwrap();
         assert_eq!(loaded.status, Status::Done);
+        assert_eq!(loaded.completed_at, task.completed_at);
     }
 
     #[test]

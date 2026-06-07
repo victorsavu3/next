@@ -275,7 +275,7 @@ mod tests {
     fn all_toggle_reveals_done_task() {
         let root = Task::new("root".to_owned());
         let mut done = child_of("done child", root.id);
-        done.mark_done();
+        done.mark_done(today());
         let tasks = vec![root.clone(), done];
 
         // Without --all the done child is hidden, so root has no children.
@@ -297,7 +297,7 @@ mod tests {
         // A done parent (hidden without --all) means its active child becomes a
         // root in the default view.
         let mut parent = Task::new("done parent".to_owned());
-        parent.mark_done();
+        parent.mark_done(today());
         let child = child_of("active child", parent.id);
         let items = build_items(&[parent, child.clone()], &no_filter(), &no_state(), today(), false);
         // Only the child is visible, promoted to root.
@@ -339,10 +339,10 @@ mod tests {
     fn filter_applies_on_top_of_include_all() {
         let mut done_matching = Task::new("done + tagged".to_owned());
         done_matching.tags = vec!["#work".to_owned()];
-        done_matching.mark_done();
+        done_matching.mark_done(today());
 
         let mut done_not_matching = Task::new("done + untagged".to_owned());
-        done_not_matching.mark_done();
+        done_not_matching.mark_done(today());
 
         let filter_set = FilterSet {
             required_tags: vec!["#work".to_owned()],

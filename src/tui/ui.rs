@@ -427,6 +427,9 @@ fn detail_lines(detail: &DetailData, today: NaiveDate, width: usize) -> Vec<Line
         "Updated",
         task.updated_at.format("%Y-%m-%d %H:%M UTC").to_string(),
     ));
+    if let Some(completed) = task.completed_at {
+        lines.push(field("Completed", completed.format("%Y-%m-%d").to_string()));
+    }
     if !task.data.is_empty() {
         let mut keys: Vec<&String> = task.data.keys().collect();
         keys.sort();
@@ -1426,7 +1429,7 @@ mod tests {
         let open = Task::new("open task");
 
         let mut done = Task::new("done task");
-        done.mark_done();
+        done.mark_done(chrono::Local::now().date_naive());
 
         let mut cancelled = Task::new("cancelled task");
         cancelled.mark_cancelled();

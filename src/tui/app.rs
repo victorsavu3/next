@@ -2016,7 +2016,7 @@ mod tests {
     fn toggle_all_changes_results() {
         let open = Task::new("open task");
         let mut done = Task::new("done task");
-        done.mark_done();
+        done.mark_done(chrono::Local::now().date_naive());
         let mut app = app_with_repo_tasks(vec![open, done]);
 
         // Implicit filter hides the done task.
@@ -2617,7 +2617,7 @@ mod tests {
         app.repo
             .transaction(|store, vcs, root| {
                 let mut t = store.get_task(id)?;
-                t.mark_done();
+                t.mark_done(chrono::Local::now().date_naive());
                 store.save_task(&t)?;
                 let path = crate::core::storage::task_path(root, &t);
                 vcs.commit(&[path], "done")?;
@@ -2962,7 +2962,7 @@ mod tests {
     fn jump_to_blocker_sets_status_when_blocker_filtered_out() {
         let mut blocker = Task::new("hidden blocker");
         let blocker_id = blocker.id;
-        blocker.mark_done(); // done tasks are hidden from the default view
+        blocker.mark_done(chrono::Local::now().date_naive()); // done tasks are hidden from the default view
 
         let mut blocked = Task::new("blocked task");
         blocked.blocked_by = vec![blocker_id];
