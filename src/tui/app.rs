@@ -717,6 +717,17 @@ impl App {
         }
     }
 
+    /// The filter-toggle flag keys (`A`/`F`/`U`), shared by list, tree, and
+    /// forecast views. Extracted so tree can call it alongside its own bindings.
+    fn flag_key(key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Char('A') => Some(Action::ToggleAll),
+            KeyCode::Char('F') => Some(Action::ToggleFuture),
+            KeyCode::Char('U') => Some(Action::ToggleAllUsers),
+            _ => None,
+        }
+    }
+
     /// The per-task action keys (edit/done/cancel/start/open/move/delete), shared
     /// by the list and tree views; both resolve `selected_task()` view-aware.
     fn task_action_key(key: KeyEvent) -> Option<Action> {
@@ -758,22 +769,23 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectPrev),
             KeyCode::Char('g') | KeyCode::Home => Some(Action::SelectFirst),
             KeyCode::Char('G') | KeyCode::End => Some(Action::SelectLast),
-            KeyCode::Char('A') => Some(Action::ToggleAll),
-            KeyCode::Char('F') => Some(Action::ToggleFuture),
-            KeyCode::Char('U') => Some(Action::ToggleAllUsers),
             KeyCode::Char('b') => Some(Action::JumpToBlocker),
             KeyCode::PageDown => Some(Action::DetailPageDown),
             KeyCode::PageUp => Some(Action::DetailPageUp),
-            _ => Self::task_action_key(key),
+            _ => Self::flag_key(key).or_else(|| Self::task_action_key(key)),
         }
     }
 
     /// Tree-view keys. Navigation drives the tree widget; `←/→` collapse/expand,
-    /// `Space` toggles, `.` toggles include-done/cancelled, and the shared
+    /// `Space` toggles, `.` toggles include-done/cancelled, `A`/`F`/`U` are the
+    /// global filter-flag keys (shared with list/forecast), and the shared
     /// per-task action keys operate on the highlighted node. Ctrl-d/u still
     /// scroll the detail pane.
     fn tree_key(key: KeyEvent) -> Option<Action> {
         if let Some(a) = Self::normal_common_key(key) {
+            return Some(a);
+        }
+        if let Some(a) = Self::flag_key(key) {
             return Some(a);
         }
         match key.code {
@@ -788,8 +800,8 @@ impl App {
             KeyCode::Left => Some(Action::TreeCollapse),
             KeyCode::Right => Some(Action::TreeExpand),
             KeyCode::Char(' ') | KeyCode::Enter => Some(Action::TreeToggle),
-            // `.` toggles include-done/cancelled (the list view's `A` is taken by
-            // the global filter-all toggle, so the tree uses a distinct key).
+            // `.` toggles include-done/cancelled in the tree; kept as muscle-memory
+            // alias now that `A` is the canonical global filter-all toggle.
             KeyCode::Char('.') => Some(Action::TreeToggleAll),
             KeyCode::Char('b') => Some(Action::JumpToBlocker),
             KeyCode::PageDown => Some(Action::DetailPageDown),
@@ -799,7 +811,8 @@ impl App {
     }
 
     /// Forecast-view keys: a read-only list, so only view switching, reload,
-    /// filtering, and horizon adjustment (`+`/`-`) are bound.
+    /// filtering, horizon adjustment (`+`/`-`), and the global flag toggles are
+    /// bound.
     fn forecast_key(key: KeyEvent) -> Option<Action> {
         if let Some(a) = Self::normal_common_key(key) {
             return Some(a);
@@ -807,10 +820,7 @@ impl App {
         match key.code {
             KeyCode::Char('+') | KeyCode::Char('=') => Some(Action::ForecastWiden),
             KeyCode::Char('-') | KeyCode::Char('_') => Some(Action::ForecastNarrow),
-            KeyCode::Char('A') => Some(Action::ToggleAll),
-            KeyCode::Char('F') => Some(Action::ToggleFuture),
-            KeyCode::Char('U') => Some(Action::ToggleAllUsers),
-            _ => None,
+            _ => Self::flag_key(key),
         }
     }
 

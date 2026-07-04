@@ -550,7 +550,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
                 "q quit  1/2/3 view  j/k nav  e edit  d done  s start/stop  c cancel  m move  o open  x del  b blocker  / filter  A/F/U flags  S state  y sync"
             }
             View::Tree => {
-                "q quit  1/2/3 view  j/k nav  ←/→ fold  Space toggle  . all  e edit  d done  s start  m move  x del  b blocker  / filter  S state  y sync"
+                "q quit  1/2/3 view  j/k nav  ←/→ fold  Space toggle  . tree-all  e edit  d done  s start  m move  x del  b blocker  / filter  A/F/U flags  S state  y sync"
             }
             View::Forecast => {
                 "q quit  1/2/3 view  +/- horizon  r reload  / filter  A/F/U flags  S state  y sync"
