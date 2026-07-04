@@ -140,7 +140,7 @@ pub fn apply(
                 if !filter.include_future && task.is_hidden(today) {
                     return false;
                 }
-                if task.blocked_by.iter().any(|id| open_ids.contains(id)) {
+                if !filter.closed_only && task.blocked_by.iter().any(|id| open_ids.contains(id)) {
                     return false;
                 }
                 if !filter.closed_only
@@ -882,6 +882,19 @@ mod tests {
         };
         let result = run(vec![future], filter);
         assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn closed_only_shows_done_task_with_open_blocker() {
+        let blocker = Task::new("blocker");
+        let mut done = Task::new("done but blocked");
+        done.blocked_by = vec![blocker.id];
+        done.mark_done(today());
+
+        let filter = FilterSet { closed_only: true, ..Default::default() };
+        let result = run(vec![blocker, done], filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "done but blocked");
     }
 
     // ── Combined ─────────────────────────────────────────────────────────────
