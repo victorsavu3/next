@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::core::domain::{
     state::GlobalState,
     tag,
-    task::Task,
+    task::{Status, Task},
 };
 
 /// Controls which tasks are returned by `apply`.
@@ -34,6 +34,10 @@ pub struct FilterSet {
     /// Skip the implicit visibility gate entirely (show everything regardless
     /// of status, blocking, resources, context, or user).
     pub disable_implicit: bool,
+
+    /// When set, only tasks with status `Done` or `Cancelled` are returned.
+    /// Enforced even when `disable_implicit` is true.
+    pub closed_only: bool,
 
     /// Keep parent tasks that have open children (projects) visible, instead of
     /// hiding them under the "work on the children instead" rule.  All other
@@ -107,11 +111,17 @@ pub fn apply(
     tasks
         .into_iter()
         .filter(|task| {
-            // ── Implicit gate ────────────────────────────────────────────────
-            if !filter.disable_implicit {
-                if !task.is_active() {
+            // ── Status gate — always enforced ────────────────────────────────
+            if filter.closed_only {
+                if !matches!(task.status, Status::Done | Status::Cancelled) {
                     return false;
                 }
+            } else if !filter.disable_implicit && !task.is_active() {
+                return false;
+            }
+
+            // ── Remaining implicit checks — skipped when disable_implicit ────
+            if !filter.disable_implicit {
                 if !filter.include_future && task.is_hidden(today) {
                     return false;
                 }
@@ -794,5 +804,20 @@ mod tests {
         let result = run(vec![done, done_no_tag], filter);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].title, "Done with tag");
+    }
+
+    #[test]
+    fn all_and_closed_together_returns_only_closed() {
+        let open = Task::new("open task");
+        let mut done = Task::new("done task");
+        done.mark_done(today());
+        let filter = FilterSet {
+            disable_implicit: true,
+            closed_only: true,
+            ..Default::default()
+        };
+        let result = run(vec![open, done], filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "done task");
     }
 }

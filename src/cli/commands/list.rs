@@ -14,6 +14,10 @@ pub struct Args {
     #[arg(long)]
     pub all: bool,
 
+    /// Show only closed tasks (done or cancelled). Can be combined with --all.
+    #[arg(long)]
+    pub closed: bool,
+
     /// Show tasks for all users, ignoring the active user filter.
     #[arg(long)]
     pub all_users: bool,
@@ -38,6 +42,7 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let mut filter_args = FilterArgs::parse(args.tokens);
     filter_args.future = args.future;
     filter_args.all = args.all;
+    filter_args.closed = args.closed;
     filter_args.all_users = args.all_users;
     filter_args.json = args.json;
 

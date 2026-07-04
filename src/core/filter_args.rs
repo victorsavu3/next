@@ -17,6 +17,7 @@ pub struct FilterArgs {
     pub all_users: bool,
     pub future: bool,
     pub all: bool,
+    pub closed: bool,
     pub json: bool,
 }
 
@@ -75,6 +76,7 @@ impl FilterArgs {
             user_override,
             include_future: self.future,
             disable_implicit: self.all,
+            closed_only: self.closed,
             include_blocked_parents: false,
             parent_slug: self.parent.clone(),
         })
