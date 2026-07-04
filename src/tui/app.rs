@@ -756,12 +756,26 @@ impl App {
         }
     }
 
-    /// Jump-to-boundary keys shared by the list and tree views.
-    /// `g`/`Home` → first item; `G`/`End` → last item.
-    /// The returned action differs by view (`SelectFirst`/`SelectLast` for the
-    /// flat list, `TreeFirst`/`TreeLast` for the tree widget), so each view
-    /// must call the appropriate variant — this helper is called from
-    /// [`Self::list_key`] and [`Self::tree_key`] with the right action pair.
+    /// Tries each layer in order and returns the first `Some` result. This makes
+    /// each view's key composition explicit and prevents a layer from being
+    /// accidentally dropped.
+    fn probe_layers(key: KeyEvent, layers: &[fn(KeyEvent) -> Option<Action>]) -> Option<Action> {
+        layers.iter().find_map(|f| f(key))
+    }
+
+    /// Filter-flag toggle keys shared by all three views:
+    /// `A` → ToggleAll, `F` → ToggleFuture, `U` → ToggleAllUsers.
+    fn flag_key(key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Char('A') => Some(Action::ToggleAll),
+            KeyCode::Char('F') => Some(Action::ToggleFuture),
+            KeyCode::Char('U') => Some(Action::ToggleAllUsers),
+            _ => None,
+        }
+    }
+
+    /// Jump-to-boundary keys for the list view: `g`/Home → SelectFirst,
+    /// `G`/End → SelectLast.
     fn jump_key_list(key: KeyEvent) -> Option<Action> {
         match key.code {
             KeyCode::Char('g') | KeyCode::Home => Some(Action::SelectFirst),
@@ -770,6 +784,8 @@ impl App {
         }
     }
 
+    /// Jump-to-boundary keys for the tree view: `g`/Home → TreeFirst,
+    /// `G`/End → TreeLast (operates on the tree widget state).
     fn jump_key_tree(key: KeyEvent) -> Option<Action> {
         match key.code {
             KeyCode::Char('g') | KeyCode::Home => Some(Action::TreeFirst),
@@ -778,49 +794,38 @@ impl App {
         }
     }
 
-    fn list_key(key: KeyEvent) -> Option<Action> {
-        if let Some(a) = Self::normal_common_key(key) {
-            return Some(a);
-        }
+    /// Detail-pane scroll keys shared by the list and tree views. Ctrl-d/u
+    /// scroll by a fixed step; PageDown/PageUp are synonyms.
+    fn detail_scroll_key(key: KeyEvent) -> Option<Action> {
         match key.code {
-            // Ctrl-d / Ctrl-u scroll the detail pane; the plain keys below are
-            // bound to actions, so the modifier guards must come first.
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(Action::DetailPageDown)
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(Action::DetailPageUp)
             }
-            KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectNext),
-            KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectPrev),
-            KeyCode::Char('b') => Some(Action::JumpToBlocker),
             KeyCode::PageDown => Some(Action::DetailPageDown),
             KeyCode::PageUp => Some(Action::DetailPageUp),
-            _ => Self::flag_key(key)
-                .or_else(|| Self::jump_key_list(key))
-                .or_else(|| Self::task_action_key(key)),
+            _ => None,
         }
     }
 
-    /// Tree-view keys. Navigation drives the tree widget; `←/→` collapse/expand,
-    /// `Space` toggles, `.` toggles include-done/cancelled, `A`/`F`/`U` are the
-    /// global filter-flag keys (shared with list/forecast), and the shared
-    /// per-task action keys operate on the highlighted node. Ctrl-d/u still
-    /// scroll the detail pane.
-    fn tree_key(key: KeyEvent) -> Option<Action> {
-        if let Some(a) = Self::normal_common_key(key) {
-            return Some(a);
-        }
-        if let Some(a) = Self::flag_key(key) {
-            return Some(a);
-        }
+    /// List-view navigation keys: `j`/↓ → SelectNext, `k`/↑ → SelectPrev,
+    /// `b` → JumpToBlocker.
+    fn list_nav_key(key: KeyEvent) -> Option<Action> {
         match key.code {
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(Action::DetailPageDown)
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(Action::DetailPageUp)
-            }
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectNext),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectPrev),
+            KeyCode::Char('b') => Some(Action::JumpToBlocker),
+            _ => None,
+        }
+    }
+
+    /// Tree-view navigation keys: `j`/↓ → TreeNext, `k`/↑ → TreePrev,
+    /// `←`/`→` collapse/expand, Space/Enter toggle, `.` toggles include-all,
+    /// `b` → JumpToBlocker.
+    fn tree_nav_key(key: KeyEvent) -> Option<Action> {
+        match key.code {
             KeyCode::Char('j') | KeyCode::Down => Some(Action::TreeNext),
             KeyCode::Char('k') | KeyCode::Up => Some(Action::TreePrev),
             KeyCode::Left => Some(Action::TreeCollapse),
@@ -830,24 +835,54 @@ impl App {
             // alias now that `A` is the canonical global filter-all toggle.
             KeyCode::Char('.') => Some(Action::TreeToggleAll),
             KeyCode::Char('b') => Some(Action::JumpToBlocker),
-            KeyCode::PageDown => Some(Action::DetailPageDown),
-            KeyCode::PageUp => Some(Action::DetailPageUp),
-            _ => Self::jump_key_tree(key).or_else(|| Self::task_action_key(key)),
+            _ => None,
         }
+    }
+
+    /// Forecast-view navigation keys: `+`/`=` widen the horizon, `-`/`_` narrow it.
+    fn forecast_nav_key(key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Char('+') | KeyCode::Char('=') => Some(Action::ForecastWiden),
+            KeyCode::Char('-') | KeyCode::Char('_') => Some(Action::ForecastNarrow),
+            _ => None,
+        }
+    }
+
+    fn list_key(key: KeyEvent) -> Option<Action> {
+        Self::probe_layers(key, &[
+            Self::normal_common_key,
+            Self::flag_key,
+            Self::jump_key_list,
+            Self::detail_scroll_key,
+            Self::list_nav_key,
+            Self::task_action_key,
+        ])
+    }
+
+    /// Tree-view keys. Navigation drives the tree widget; `←/→` collapse/expand,
+    /// `Space` toggles, `.` toggles include-done/cancelled, and the shared
+    /// per-task action keys operate on the highlighted node. Ctrl-d/u still
+    /// scroll the detail pane.
+    fn tree_key(key: KeyEvent) -> Option<Action> {
+        Self::probe_layers(key, &[
+            Self::normal_common_key,
+            Self::flag_key,
+            Self::jump_key_tree,
+            Self::detail_scroll_key,
+            Self::tree_nav_key,
+            Self::task_action_key,
+        ])
     }
 
     /// Forecast-view keys: a read-only list, so only view switching, reload,
     /// filtering, horizon adjustment (`+`/`-`), and the global flag toggles are
     /// bound.
     fn forecast_key(key: KeyEvent) -> Option<Action> {
-        if let Some(a) = Self::normal_common_key(key) {
-            return Some(a);
-        }
-        match key.code {
-            KeyCode::Char('+') | KeyCode::Char('=') => Some(Action::ForecastWiden),
-            KeyCode::Char('-') | KeyCode::Char('_') => Some(Action::ForecastNarrow),
-            _ => Self::flag_key(key),
-        }
+        Self::probe_layers(key, &[
+            Self::normal_common_key,
+            Self::flag_key,
+            Self::forecast_nav_key,
+        ])
     }
 
     fn filter_key(key: KeyEvent) -> Option<Action> {
