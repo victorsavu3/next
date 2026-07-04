@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::core::domain::{
     state::GlobalState,
     tag,
-    task::Task,
+    task::{Status, Task},
 };
 
 /// Controls which tasks are returned by `apply`.
@@ -34,6 +34,10 @@ pub struct FilterSet {
     /// Skip the implicit visibility gate entirely (show everything regardless
     /// of status, blocking, resources, context, or user).
     pub disable_implicit: bool,
+
+    /// Show only done and cancelled tasks instead of open/started ones.
+    /// All other implicit filters (context, resources, user, future date) still apply.
+    pub closed_only: bool,
 
     /// Keep parent tasks that have open children (projects) visible, instead of
     /// hiding them under the "work on the children instead" rule.  All other
@@ -109,16 +113,21 @@ pub fn apply(
         .filter(|task| {
             // ── Implicit gate ────────────────────────────────────────────────
             if !filter.disable_implicit {
-                if !task.is_active() {
+                if filter.closed_only {
+                    if !matches!(task.status, Status::Done | Status::Cancelled) {
+                        return false;
+                    }
+                } else if !task.is_active() {
                     return false;
                 }
                 if !filter.include_future && task.is_hidden(today) {
                     return false;
                 }
-                if task.blocked_by.iter().any(|id| open_ids.contains(id)) {
+                if !filter.closed_only && task.blocked_by.iter().any(|id| open_ids.contains(id)) {
                     return false;
                 }
-                if !filter.include_blocked_parents
+                if !filter.closed_only
+                    && !filter.include_blocked_parents
                     && parents_with_open_children.contains(&task.id)
                 {
                     return false;
@@ -774,6 +783,22 @@ mod tests {
         };
         let result = apply(vec![bob_task], &filter, &state, today());
         assert_eq!(result.len(), 1);
+    }
+
+    // ── closed_only ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn closed_only_shows_done_task_with_open_blocker() {
+        let blocker = Task::new("blocker");          // open
+        let mut done = Task::new("done but blocked");
+        done.blocked_by = vec![blocker.id];
+        done.mark_done(today());
+
+        let filter = FilterSet { closed_only: true, ..Default::default() };
+        let result = run(vec![blocker, done], filter);
+        // The done task must appear even though its blocker is still open
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "done but blocked");
     }
 
     // ── Combined ─────────────────────────────────────────────────────────────
