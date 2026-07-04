@@ -55,6 +55,7 @@ pub struct FilterSet {
     /// task with this slug are returned.  Resolved against the full task list
     /// inside `apply`; silently returns nothing if the slug is not found.
     pub parent_slug: Option<String>,
+
 }
 
 /// Applies `filter` to `tasks` and returns those that pass.

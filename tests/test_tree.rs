@@ -1,6 +1,6 @@
 mod common;
 
-use next::cli::commands::{add, done, tree};
+use next::cli::commands::{add, context, done, tree};
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -27,6 +27,17 @@ fn add_args(title: &str) -> add::Args {
 
 fn tree_args(all: bool) -> tree::Args {
     tree::Args { all, closed: false, json: false }
+}
+
+fn capture_tree_closed(env: &common::TestEnv) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    tree::run_with_writer(
+        tree::Args { all: false, closed: true, json: false },
+        &env.ctx,
+        &mut buf,
+    )
+    .unwrap();
+    String::from_utf8(buf).unwrap()
 }
 
 /// Run the tree command and capture its output as a String.
@@ -388,6 +399,49 @@ fn no_context_section_comes_last() {
         work_pos < no_ctx_pos,
         "@work must appear before No context:\n{out}"
     );
+}
+
+/// `tree --closed` must respect the active context: only closed tasks whose
+/// context matches the active context are shown.
+#[test]
+fn tree_closed_respects_context() {
+    let mut env = common::setup();
+
+    context::run(
+        context::Args {
+            subcommand: Some(context::ContextSubcommand::Set(context::ContextTagArgs {
+                tags: vec!["@work".into()],
+            })),
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    add::run(
+        add::Args { slug: Some("work-done".into()), tags: vec!["@work".into()], ..add_args("Work done task") },
+        &mut env.ctx,
+    )
+    .unwrap();
+    done::run(
+        done::Args { id: "work-done".into(), completed_at: None, json: false },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    add::run(
+        add::Args { slug: Some("home-done".into()), tags: vec!["@home".into()], ..add_args("Home done task") },
+        &mut env.ctx,
+    )
+    .unwrap();
+    done::run(
+        done::Args { id: "home-done".into(), completed_at: None, json: false },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let out = capture_tree_closed(&env);
+    assert!(out.contains("Work done task"), "expected @work task in output:\n{out}");
+    assert!(!out.contains("Home done task"), "unexpected @home task while @work context is active:\n{out}");
 }
 
 /// Named context sections appear in alphabetical order.
