@@ -77,6 +77,7 @@ impl FilterArgs {
             disable_implicit: self.all,
             include_blocked_parents: false,
             parent_slug: self.parent.clone(),
+            closed_only: false,
         })
     }
 }

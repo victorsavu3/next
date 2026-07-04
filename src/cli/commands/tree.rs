@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{self, Write};
 
+use chrono::Local;
+
+use crate::core::domain::filter::{self, FilterSet};
 use crate::core::domain::tag;
 use crate::core::domain::task::{Status, Task};
 use uuid::Uuid;
@@ -10,9 +13,13 @@ use crate::AppContext;
 /// Top-level `next tree` subcommand.
 #[derive(clap::Args, Debug)]
 pub struct Args {
-    /// Include done and cancelled tasks.
+    /// Include all tasks regardless of status or filters.
     #[arg(long)]
     pub all: bool,
+
+    /// Show only done and cancelled tasks, respecting active context and filters.
+    #[arg(long)]
+    pub closed: bool,
 
     /// Output as JSON (flat list with parent_id fields).
     #[arg(long)]
@@ -30,9 +37,24 @@ pub fn run_with_writer(
 ) -> anyhow::Result<()> {
     let all_tasks = ctx.repo.store().list_tasks()?;
 
+    let closed_tasks: Option<Vec<Task>> = if args.closed {
+        let state = ctx.repo.store().get_state()?;
+        let today = Local::now().date_naive();
+        let filter_set = FilterSet {
+            closed_only: true,
+            include_blocked_parents: true,
+            ..Default::default()
+        };
+        Some(filter::apply(all_tasks.clone(), &filter_set, &state, today))
+    } else {
+        None
+    };
+
     if args.json {
         let tasks: Vec<&Task> = if args.all {
             all_tasks.iter().collect()
+        } else if let Some(ref closed) = closed_tasks {
+            closed.iter().collect()
         } else {
             all_tasks
                 .iter()
@@ -45,6 +67,8 @@ pub fn run_with_writer(
 
     let visible_ids: HashSet<Uuid> = if args.all {
         all_tasks.iter().map(|t| t.id).collect()
+    } else if let Some(closed) = closed_tasks {
+        closed.into_iter().map(|t| t.id).collect()
     } else {
         all_tasks
             .iter()

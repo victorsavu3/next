@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::core::domain::{
     state::GlobalState,
     tag,
-    task::Task,
+    task::{Status, Task},
 };
 
 /// Controls which tasks are returned by `apply`.
@@ -46,6 +46,11 @@ pub struct FilterSet {
     /// task with this slug are returned.  Resolved against the full task list
     /// inside `apply`; silently returns nothing if the slug is not found.
     pub parent_slug: Option<String>,
+
+    /// Show only done and cancelled tasks instead of active ones.
+    /// Context, user, and explicit tag filters still apply; start-date,
+    /// blocking, parent, and resource gates are skipped.
+    pub closed_only: bool,
 }
 
 /// Applies `filter` to `tasks` and returns those that pass.
@@ -109,26 +114,32 @@ pub fn apply(
         .filter(|task| {
             // ── Implicit gate ────────────────────────────────────────────────
             if !filter.disable_implicit {
-                if !task.is_active() {
-                    return false;
-                }
-                if !filter.include_future && task.is_hidden(today) {
-                    return false;
-                }
-                if task.blocked_by.iter().any(|id| open_ids.contains(id)) {
-                    return false;
-                }
-                if !filter.include_blocked_parents
-                    && parents_with_open_children.contains(&task.id)
-                {
-                    return false;
-                }
-                if task
-                    .tags
-                    .iter()
-                    .any(|t| tag::is_resource(t) && !state.is_resource_available(t))
-                {
-                    return false;
+                if filter.closed_only {
+                    if !matches!(task.status, Status::Done | Status::Cancelled) {
+                        return false;
+                    }
+                } else {
+                    if !task.is_active() {
+                        return false;
+                    }
+                    if !filter.include_future && task.is_hidden(today) {
+                        return false;
+                    }
+                    if task.blocked_by.iter().any(|id| open_ids.contains(id)) {
+                        return false;
+                    }
+                    if !filter.include_blocked_parents
+                        && parents_with_open_children.contains(&task.id)
+                    {
+                        return false;
+                    }
+                    if task
+                        .tags
+                        .iter()
+                        .any(|t| tag::is_resource(t) && !state.is_resource_available(t))
+                    {
+                        return false;
+                    }
                 }
                 if !active_contexts.is_empty() && !task_matches_contexts(task, active_contexts) {
                     return false;
