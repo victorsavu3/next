@@ -1,5 +1,6 @@
 pub mod add;
 pub mod cancel;
+pub mod config;
 pub mod context;
 pub mod data;
 pub mod delete;
