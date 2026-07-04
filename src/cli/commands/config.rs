@@ -91,20 +91,19 @@ fn print_key(cfg: &Config, key: &str) -> anyhow::Result<()> {
 }
 
 fn print_all(cfg: &Config) -> anyhow::Result<()> {
-    println!("autosync = {}", cfg.autosync);
-    println!("sync.pull_before_query = {}", cfg.sync.pull_before_query);
-    println!("sync.git_subprocess = {}", cfg.sync.git_subprocess);
-    println!("sync.staleness_secs = {}", cfg.sync.staleness_secs);
-    println!("sync.pull_timeout_secs = {}", cfg.sync.pull_timeout_secs);
-    match cfg.list_limit {
-        Some(v) => println!("list_limit = {v}"),
-        None => println!("list_limit = none"),
-    }
-    println!("next_count = {}", cfg.next_count);
-    println!("forecast_horizon_days = {}", cfg.forecast_horizon_days);
-    match &cfg.repository {
-        Some(p) => println!("repository = {}", p.display()),
-        None => println!("repository = none"),
+    let keys = [
+        "autosync",
+        "sync.pull_before_query",
+        "sync.git_subprocess",
+        "sync.staleness_secs",
+        "sync.pull_timeout_secs",
+        "list_limit",
+        "next_count",
+        "forecast_horizon_days",
+        "repository",
+    ];
+    for key in &keys {
+        print_key(cfg, key)?;
     }
     Ok(())
 }
