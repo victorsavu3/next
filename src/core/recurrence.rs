@@ -3,6 +3,12 @@ use chrono::{Datelike, Duration, NaiveDate, Weekday};
 
 use crate::core::domain::task::{Recurrence, Snap, Task};
 
+// ─── rrule helpers ─────────────────────────────────────────────────────────
+
+fn build_rrule_str(rrule: &str, anchor: NaiveDate) -> String {
+    format!("DTSTART:{}\nRRULE:{}", anchor.format("%Y%m%dT000000Z"), rrule)
+}
+
 // ─── snap ──────────────────────────────────────────────────────────────────
 
 /// Parse a CLI snap string into a [`Snap`] value.
@@ -66,118 +72,16 @@ pub fn apply_snap(mut date: NaiveDate, snap: &Snap) -> NaiveDate {
     }
 }
 
-/// Last calendar day of `(year, month)` (e.g. 28/29 for February, 30/31 else).
-///
-/// Computed as the first of the following month minus one day, which handles
-/// leap years and the December → January wrap without a lookup table.
 fn last_day_of_month(year: i32, month: u32) -> NaiveDate {
-    let (ny, nm) = if month == 12 {
-        (year + 1, 1)
-    } else {
-        (year, month + 1)
-    };
+    let (ny, nm) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
     NaiveDate::from_ymd_opt(ny, nm, 1).unwrap() - Duration::days(1)
 }
 
-/// Build the candidate date for `day` in `(year, month)`, clamping a
-/// nonexistent target day (e.g. the 31st of a 30-day month, or Feb 29 in a
-/// non-leap year) to the last day of that month rather than skipping it.
 fn clamped_date(year: i32, month: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, day).unwrap_or_else(|| last_day_of_month(year, month))
 }
 
-// ─── RRULE parser ──────────────────────────────────────────────────────────
-
-#[derive(Debug, PartialEq, Eq)]
-enum Freq {
-    Daily,
-    Weekly,
-    Monthly,
-    Yearly,
-}
-
-#[derive(Debug)]
-struct RRule {
-    freq: Freq,
-    interval: i64,
-    by_day: Vec<u8>,        // 0=Mon … 6=Sun
-    by_month_day: Vec<u32>, // positive day-of-month values
-}
-
-fn parse_rrule(rrule: &str) -> anyhow::Result<RRule> {
-    let mut freq: Option<Freq> = None;
-    let mut interval: i64 = 1;
-    let mut by_day: Vec<u8> = Vec::new();
-    let mut by_month_day: Vec<u32> = Vec::new();
-
-    for part in rrule.split(';') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        let (key, value) = part
-            .split_once('=')
-            .ok_or_else(|| anyhow::anyhow!("invalid RRULE part: {part:?}"))?;
-        match key.to_uppercase().as_str() {
-            "FREQ" => {
-                freq = Some(match value.to_uppercase().as_str() {
-                    "DAILY" => Freq::Daily,
-                    "WEEKLY" => Freq::Weekly,
-                    "MONTHLY" => Freq::Monthly,
-                    "YEARLY" => Freq::Yearly,
-                    other => anyhow::bail!("unsupported FREQ={other}"),
-                });
-            }
-            "INTERVAL" => {
-                interval = value
-                    .parse::<i64>()
-                    .context("INTERVAL must be a positive integer")?;
-                anyhow::ensure!(interval >= 1, "INTERVAL must be >= 1");
-            }
-            "BYDAY" => {
-                for token in value.split(',') {
-                    let token = token.trim();
-                    // Reject positional prefixes (e.g. "1MO", "-1FR") — not supported.
-                    let has_prefix = token.starts_with(|c: char| c.is_ascii_digit() || c == '+' || c == '-');
-                    anyhow::ensure!(
-                        !has_prefix,
-                        "positional BYDAY values (e.g. \"1MO\", \"-1FR\") are not supported"
-                    );
-                    let wd = match token.to_uppercase().as_str() {
-                        "MO" => 0u8,
-                        "TU" => 1,
-                        "WE" => 2,
-                        "TH" => 3,
-                        "FR" => 4,
-                        "SA" => 5,
-                        "SU" => 6,
-                        other => anyhow::bail!("unknown weekday abbreviation: {other}"),
-                    };
-                    by_day.push(wd);
-                }
-            }
-            "BYMONTHDAY" => {
-                for token in value.split(',') {
-                    let n: i64 = token
-                        .trim()
-                        .parse()
-                        .context("BYMONTHDAY value must be an integer")?;
-                    anyhow::ensure!(n >= 1, "only positive BYMONTHDAY values are supported");
-                    by_month_day.push(n as u32);
-                }
-            }
-            // Silently ignore unsupported fields (UNTIL, COUNT, etc.)
-            _ => {}
-        }
-    }
-
-    Ok(RRule {
-        freq: freq.ok_or_else(|| anyhow::anyhow!("RRULE missing FREQ"))?,
-        interval,
-        by_day,
-        by_month_day,
-    })
-}
+// ─── RRULE validation and iteration (via the `rrule` crate, RFC 5545) ───────
 
 /// Parse recurrence arguments into a [`Recurrence`] value.
 ///
@@ -221,162 +125,56 @@ pub fn parse_recurrence(
 
 /// Validate a schedule recurrence rule (RRULE) string.
 ///
-/// Runs the rule through the authoritative parser ([`parse_rrule`]) and returns
-/// an error if it is malformed or uses an unsupported feature (missing `FREQ`,
-/// `INTERVAL` < 1, non-positive `BYMONTHDAY`, unknown `FREQ`, positional
-/// `BYDAY`, etc.). Used to reject invalid rules up front at `add`/`edit` time
-/// instead of failing later when the task is completed.
+/// Parses the rule via the RFC 5545 `rrule` crate, returning an error if the
+/// string is malformed (unknown `FREQ`, bad `UNTIL` format, etc.).
+///
+/// Also rejects `INTERVAL=0` explicitly: the crate accepts it without error
+/// but RFC 5545 requires INTERVAL >= 1 and a zero-interval rule never advances.
 pub fn validate_rrule(rrule: &str) -> anyhow::Result<()> {
-    parse_rrule(rrule).map(|_| ())
+    for part in rrule.split(';') {
+        let part = part.trim();
+        if let Some(val) = part.strip_prefix("INTERVAL=") {
+            let n: i64 = val
+                .parse()
+                .map_err(|_| anyhow::anyhow!("INTERVAL must be a positive integer"))?;
+            anyhow::ensure!(n >= 1, "INTERVAL must be >= 1, got {n}");
+        }
+        if let Some(vals) = part.strip_prefix("BYMONTHDAY=") {
+            for token in vals.split(',') {
+                let n: i64 = token
+                    .trim()
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("BYMONTHDAY must be a non-zero integer"))?;
+                anyhow::ensure!(n != 0, "BYMONTHDAY=0 is invalid (RFC 5545 requires non-zero)");
+            }
+        }
+    }
+    let dummy = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+    build_rrule_str(rrule, dummy)
+        .parse::<rrule::RRuleSet>()
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Returns the first occurrence of the rule strictly after `after`.
+///
+/// Per RFC 5545 months/years that have no matching day (e.g. `BYMONTHDAY=31`
+/// in February) are **skipped**, not clamped. `UNTIL` and `COUNT` clauses are
+/// fully honoured; if the rule is exhausted before a date `> after` is found
+/// an error is returned.
 pub fn next_occurrence(
     rrule: &str,
     anchor: NaiveDate,
     after: NaiveDate,
 ) -> anyhow::Result<NaiveDate> {
-    let rule = parse_rrule(rrule)?;
+    let set: rrule::RRuleSet = build_rrule_str(rrule, anchor)
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid RRULE: {e}"))?;
 
-    match rule.freq {
-        Freq::Weekly => {
-            // When BYDAY is absent, default to the anchor's weekday (per RFC 5545).
-            let anchor_wd = anchor.weekday().num_days_from_monday() as u8;
-            let effective_by_day: &[u8] = if rule.by_day.is_empty() {
-                std::slice::from_ref(&anchor_wd)
-            } else {
-                &rule.by_day
-            };
-            // Walk day by day; limit extended to cover large INTERVAL values.
-            let limit = (rule.interval as usize) * 7 + 14;
-            let anchor_monday =
-                anchor - Duration::days(anchor.weekday().num_days_from_monday() as i64);
-            let mut d = after + Duration::days(1);
-            for _ in 0..limit {
-                let wd = d.weekday().num_days_from_monday() as u8;
-                if effective_by_day.contains(&wd) {
-                    let d_monday =
-                        d - Duration::days(d.weekday().num_days_from_monday() as i64);
-                    let weeks = (d_monday - anchor_monday).num_days() / 7;
-                    if weeks >= 0 && weeks % rule.interval == 0 {
-                        return Ok(d);
-                    }
-                }
-                d += Duration::days(1);
-            }
-            anyhow::bail!("no weekly occurrence found within {} days", limit)
-        }
-
-        Freq::Daily => {
-            // When BYDAY is present, an interval-aligned day may only coincide
-            // with an allowed weekday every lcm(interval, 7) days (up to 7×interval
-            // when interval and 7 are coprime). Mirror the WEEKLY bound so such
-            // rules resolve instead of erroring; for plain DAILY this is still
-            // ample (the first aligned day is interval days out).
-            let limit = (rule.interval as usize) * 7 + 14;
-            let mut d = after + Duration::days(1);
-            for _ in 0..limit {
-                let wd = d.weekday().num_days_from_monday() as u8;
-                let in_by_day = rule.by_day.is_empty() || rule.by_day.contains(&wd);
-                if in_by_day {
-                    let days_from_anchor = (d - anchor).num_days();
-                    if days_from_anchor >= 0 && days_from_anchor % rule.interval == 0 {
-                        return Ok(d);
-                    }
-                }
-                d += Duration::days(1);
-            }
-            anyhow::bail!("no daily occurrence found within {} days", limit)
-        }
-
-        Freq::Monthly => {
-            // Use 0-based month index
-            let month_idx = |y: i32, m: u32| -> i64 { y as i64 * 12 + (m as i64 - 1) };
-            let anchor_idx = month_idx(anchor.year(), anchor.month());
-            let mut candidate_idx = month_idx(after.year(), after.month());
-            let limit = anchor_idx + 50 * 12;
-
-            // When BYMONTHDAY lists several days, the earliest valid date `> after`
-            // may be any of them, so sort ascending and pick the minimum match.
-            let mut days: Vec<u32> = if rule.by_month_day.is_empty() {
-                vec![anchor.day()]
-            } else {
-                rule.by_month_day.clone()
-            };
-            days.sort_unstable();
-
-            loop {
-                let rel = candidate_idx - anchor_idx;
-                if rel >= 0 && rel % rule.interval == 0 {
-                    let year = (candidate_idx / 12) as i32;
-                    let month = (candidate_idx % 12 + 1) as u32;
-
-                    // Pick the earliest valid date `> after` among all BYMONTHDAY
-                    // values in this month. A target day that doesn't exist in
-                    // this month (e.g. the 31st of a 30-day month, or Feb 29 in
-                    // a non-leap year) is CLAMPED to the month's last day rather
-                    // than skipped (issue #12). Several days can clamp to the
-                    // same date (e.g. 30 and 31 both → Feb 28), so `min` over the
-                    // clamped candidates naturally dedupes and still yields the
-                    // earliest valid date `> after` (issue #11).
-                    if let Some(d) = days
-                        .iter()
-                        .map(|&day| clamped_date(year, month, day))
-                        .filter(|&d| d > after)
-                        .min()
-                    {
-                        return Ok(d);
-                    }
-                }
-                candidate_idx += 1;
-                if candidate_idx > limit {
-                    anyhow::bail!("no monthly occurrence found within 50 years");
-                }
-            }
-        }
-
-        Freq::Yearly => {
-            // Yearly is treated as FREQ=MONTHLY;INTERVAL=12*interval
-            let effective_interval = rule.interval * 12;
-            let month_idx = |y: i32, m: u32| -> i64 { y as i64 * 12 + (m as i64 - 1) };
-            let anchor_idx = month_idx(anchor.year(), anchor.month());
-            let mut candidate_idx = month_idx(after.year(), after.month());
-            let limit = anchor_idx + 50 * 12;
-
-            // Honour every BYMONTHDAY value (not just the first) and pick the
-            // earliest valid date `> after` within the qualifying month (issue #11).
-            let mut days: Vec<u32> = if rule.by_month_day.is_empty() {
-                vec![anchor.day()]
-            } else {
-                rule.by_month_day.clone()
-            };
-            days.sort_unstable();
-
-            loop {
-                let rel = candidate_idx - anchor_idx;
-                if rel >= 0 && rel % effective_interval == 0 {
-                    let year = (candidate_idx / 12) as i32;
-                    let month = (candidate_idx % 12 + 1) as u32;
-
-                    // Clamp a nonexistent target day to the month's last day
-                    // rather than skipping the year (issue #12); `min` over the
-                    // clamped candidates dedupes and picks the earliest > after.
-                    if let Some(d) = days
-                        .iter()
-                        .map(|&day| clamped_date(year, month, day))
-                        .filter(|&d| d > after)
-                        .min()
-                    {
-                        return Ok(d);
-                    }
-                }
-                candidate_idx += 1;
-                if candidate_idx > limit {
-                    anyhow::bail!("no yearly occurrence found within 50 years");
-                }
-            }
-        }
-    }
+    set.into_iter()
+        .find(|dt| dt.naive_utc().date() > after)
+        .map(|dt| dt.naive_utc().date())
+        .ok_or_else(|| anyhow::anyhow!("RRULE has no occurrence after {after}"))
 }
 
 // ─── project_series ──────────────────────────────────────────────────────────
@@ -440,8 +238,9 @@ pub fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<N
 
 /// Creates the next recurring task instance from a completed task.
 ///
-/// Returns `Ok(None)` if the task has no recurrence rule, `Err` if a
-/// schedule rule fails to produce a valid next date.
+/// Returns `Ok(None)` if the task has no recurrence rule or if the rule is
+/// exhausted (UNTIL date passed, COUNT reached). Returns `Err` only for
+/// unexpected failures (storage, etc.).
 pub fn spawn_next(task: &Task, today: NaiveDate) -> anyhow::Result<Option<Task>> {
     let recurrence = match task.recurrence.as_ref() {
         Some(r) => r,
@@ -460,7 +259,12 @@ pub fn spawn_next(task: &Task, today: NaiveDate) -> anyhow::Result<Option<Task>>
 
     let occurrence = match recurrence {
         Recurrence::Schedule { rrule, anchor, snap } => {
-            let raw = next_occurrence(rrule, *anchor, after)?;
+            // A "no occurrence" error means the rule is exhausted (UNTIL/COUNT),
+            // not a programming error — treat as "nothing to spawn".
+            let raw = match next_occurrence(rrule, *anchor, after) {
+                Ok(d) => d,
+                Err(_) => return Ok(None),
+            };
             snap.as_ref().map_or(raw, |s| apply_snap(raw, s))
         }
         Recurrence::Completion { interval_days, snap } => {
@@ -807,74 +611,88 @@ mod tests {
     }
 
     #[test]
-    fn yearly_single_bymonthday_unchanged_regression() {
-        // Single-value BYMONTHDAY=15 YEARLY must behave as before.
+    fn yearly_bymonthday_without_bymonth_applies_to_all_months() {
+        // RFC 5545: FREQ=YEARLY;BYMONTHDAY=15 (no BYMONTH) fires on the 15th of
+        // EVERY month each year. Use BYMONTH=3;BYMONTHDAY=15 to mean "March 15".
         let anchor = d(2026, 3, 1);
-        // After Mar 5 → Mar 15 same year.
+        // After Mar 5 → Mar 15 (within the same month)
         assert_eq!(
             next_occurrence("FREQ=YEARLY;BYMONTHDAY=15", anchor, d(2026, 3, 5)).unwrap(),
             d(2026, 3, 15)
         );
-        // After Mar 20 → Mar 15 next year.
+        // After Mar 20 → Apr 15 (next month's 15th, not March 15 next year)
         assert_eq!(
             next_occurrence("FREQ=YEARLY;BYMONTHDAY=15", anchor, d(2026, 3, 20)).unwrap(),
-            d(2027, 3, 15)
+            d(2026, 4, 15)
         );
     }
 
-    // ── month-end clamping (issue #12) ──────────────────────────────────────
+    #[test]
+    fn yearly_bymonth_bymonthday_for_specific_annual_date() {
+        // Correct rule for "March 15 every year": FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=15
+        let anchor = d(2026, 3, 15);
+        assert_eq!(
+            next_occurrence("FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=15", anchor, d(2026, 3, 20)).unwrap(),
+            d(2027, 3, 15)
+        );
+        assert_eq!(
+            next_occurrence("FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=15", anchor, d(2026, 3, 5)).unwrap(),
+            d(2026, 3, 15)
+        );
+    }
+
+    // ── month-end skipping (RFC 5545) ───────────────────────────────────────
+    //
+    // RFC 5545: a BYMONTHDAY value that doesn't exist in a given month causes
+    // that month to be skipped entirely (not clamped to the last day).
 
     #[test]
-    fn monthly_clamps_jan31_to_feb_end_then_keeps_mar31() {
-        // Anchor Jan 31, FREQ=MONTHLY. 2026 is not a leap year, so February has
-        // 28 days: after Jan 31 → Feb 28 (clamped, not skipped to March).
+    fn monthly_jan31_skips_short_months() {
+        // FREQ=MONTHLY, anchor Jan 31: February (no day 31) and April (no day 31)
+        // are skipped; March 31 and May 31 are returned.
         let anchor = d(2026, 1, 31);
         let result = next_occurrence("FREQ=MONTHLY", anchor, d(2026, 1, 31)).unwrap();
-        assert_eq!(result, d(2026, 2, 28));
-        // After Feb 28 → Mar 31: March is a full month, so the day-31 target is
-        // kept exactly (clamp only applies to short months).
-        let result = next_occurrence("FREQ=MONTHLY", anchor, d(2026, 2, 28)).unwrap();
-        assert_eq!(result, d(2026, 3, 31));
+        assert_eq!(result, d(2026, 3, 31)); // Feb skipped
+        let result = next_occurrence("FREQ=MONTHLY", anchor, d(2026, 3, 31)).unwrap();
+        assert_eq!(result, d(2026, 5, 31)); // Apr skipped
     }
 
     #[test]
-    fn monthly_clamps_jan31_to_feb29_in_leap_year() {
-        // Anchor Jan 31 in a leap year (2028): after Jan 31 → Feb 29.
+    fn monthly_jan31_skips_february_even_in_leap_year() {
+        // February has at most 29 days; day 31 never exists, so Feb is always skipped.
         let anchor = d(2028, 1, 31);
         let result = next_occurrence("FREQ=MONTHLY", anchor, d(2028, 1, 31)).unwrap();
-        assert_eq!(result, d(2028, 2, 29));
+        assert_eq!(result, d(2028, 3, 31)); // Feb 2028 (leap, 29 days) still has no day 31
     }
 
     #[test]
-    fn monthly_bymonthday31_clamps_in_30day_month() {
-        // BYMONTHDAY=31 MONTHLY across April (30 days) → Apr 30.
+    fn monthly_bymonthday31_skips_30day_month() {
+        // BYMONTHDAY=31 skips April (30 days) → next is May 31.
         let anchor = d(2026, 1, 31);
         let result = next_occurrence("FREQ=MONTHLY;BYMONTHDAY=31", anchor, d(2026, 4, 1)).unwrap();
-        assert_eq!(result, d(2026, 4, 30));
+        assert_eq!(result, d(2026, 5, 31));
     }
 
     #[test]
-    fn monthly_bymonthday_30_31_dedup_in_february() {
-        // BYMONTHDAY=30,31 in February (2026, 28 days): both clamp to Feb 28, so
-        // the result is a single Feb 28 (no double counting), and after Feb 28
-        // the next qualifying day is Mar 30 (the earliest of 30/31 in March).
+    fn monthly_bymonthday_30_31_skips_february() {
+        // BYMONTHDAY=30,31: February has neither day, so Feb is skipped entirely.
+        // After Jan 31 the next qualifying month is March, yielding Mar 30 (earliest).
         let anchor = d(2026, 1, 30);
         let result =
             next_occurrence("FREQ=MONTHLY;BYMONTHDAY=30,31", anchor, d(2026, 1, 31)).unwrap();
-        assert_eq!(result, d(2026, 2, 28));
+        assert_eq!(result, d(2026, 3, 30));
         let result =
             next_occurrence("FREQ=MONTHLY;BYMONTHDAY=30,31", anchor, d(2026, 2, 28)).unwrap();
         assert_eq!(result, d(2026, 3, 30));
     }
 
     #[test]
-    fn yearly_clamps_feb29_to_feb28_in_non_leap_years() {
-        // Anchor Feb 29 2024, FREQ=YEARLY: after Feb 29 2024 → Feb 28 2025
-        // (clamped, year not skipped).
+    fn yearly_feb29_skips_non_leap_years() {
+        // FREQ=YEARLY, anchor Feb 29 2024: non-leap years have no Feb 29 → skipped.
+        // Next after Feb 29 2024 is Feb 29 2028 (next leap year).
         let anchor = d(2024, 2, 29);
         let result = next_occurrence("FREQ=YEARLY", anchor, d(2024, 2, 29)).unwrap();
-        assert_eq!(result, d(2025, 2, 28));
-        // 2028 is a leap year, so Feb 29 2028 is kept exactly (not clamped).
+        assert_eq!(result, d(2028, 2, 29));
         let result = next_occurrence("FREQ=YEARLY", anchor, d(2027, 3, 1)).unwrap();
         assert_eq!(result, d(2028, 2, 29));
     }
@@ -1115,12 +933,25 @@ mod tests {
     }
 
     #[test]
-    fn byday_positional_prefix_is_rejected() {
-        // "1MO" (first Monday of month) is not supported — should return an error.
+    fn byday_positional_prefix_is_supported() {
+        // "1MO" (first Monday of month) is now fully supported via the rrule crate.
+        // First Monday of May 2026 is May 4 (anchor); first Monday of June 2026 is June 1.
         let anchor = d(2026, 5, 4);
         let after = d(2026, 5, 4);
-        let result = next_occurrence("FREQ=MONTHLY;BYDAY=1MO", anchor, after);
-        assert!(result.is_err(), "positional BYDAY should be rejected");
+        let result = next_occurrence("FREQ=MONTHLY;BYDAY=1MO", anchor, after).unwrap();
+        assert_eq!(result, d(2026, 6, 1), "first Monday of June 2026");
+    }
+
+    #[test]
+    fn byday_last_weekday_of_month_supported() {
+        // "-1FR" = last Friday of month.
+        // Last Friday of June 2026 is June 26; anchor=May 30 (last Friday of May).
+        let anchor = d(2026, 5, 29);
+        let after = d(2026, 5, 29);
+        let result = next_occurrence("FREQ=MONTHLY;BYDAY=-1FR", anchor, after).unwrap();
+        // Last Friday of June 2026
+        assert_eq!(result.weekday(), Weekday::Fri);
+        assert!(result > after);
     }
 
     #[test]
@@ -1134,6 +965,80 @@ mod tests {
         let next = spawn_next(&task, d(2026, 5, 5)).unwrap().unwrap();
         assert_eq!(next.data.get("ticket").and_then(|v| v.as_str()), Some("JIRA-99"));
         assert!(!next.data.contains_key("time_log"), "time_log must not be copied");
+    }
+
+    // ── UNTIL / COUNT / new RFC 5545 features ───────────────────────────────
+
+    #[test]
+    fn rrule_until_limits_occurrences() {
+        // UNTIL=20260525T000000Z: last valid occurrence is May 25; no occurrence after.
+        let anchor = d(2026, 5, 4); // Monday
+        let result = next_occurrence(
+            "FREQ=WEEKLY;BYDAY=MO;UNTIL=20260525T000000Z",
+            anchor,
+            d(2026, 5, 18),
+        )
+        .unwrap();
+        assert_eq!(result, d(2026, 5, 25));
+
+        let result = next_occurrence(
+            "FREQ=WEEKLY;BYDAY=MO;UNTIL=20260525T000000Z",
+            anchor,
+            d(2026, 5, 25),
+        );
+        assert!(result.is_err(), "no occurrence after UNTIL date");
+    }
+
+    #[test]
+    fn rrule_count_limits_occurrences() {
+        // COUNT=3: occurrences are May 4, May 11, May 18; exhausted after May 18.
+        let anchor = d(2026, 5, 4);
+        let result =
+            next_occurrence("FREQ=WEEKLY;BYDAY=MO;COUNT=3", anchor, d(2026, 5, 11)).unwrap();
+        assert_eq!(result, d(2026, 5, 18));
+
+        let result = next_occurrence("FREQ=WEEKLY;BYDAY=MO;COUNT=3", anchor, d(2026, 5, 18));
+        assert!(result.is_err(), "no occurrence after COUNT is exhausted");
+    }
+
+    #[test]
+    fn validate_rrule_accepts_until_clause() {
+        assert!(validate_rrule("FREQ=WEEKLY;BYDAY=MO;UNTIL=20261231T000000Z").is_ok());
+    }
+
+    #[test]
+    fn validate_rrule_accepts_count_clause() {
+        assert!(validate_rrule("FREQ=DAILY;COUNT=10").is_ok());
+    }
+
+    #[test]
+    fn project_series_stops_at_until() {
+        // UNTIL=20260525T000000Z: series ends after May 25; cutoff is later.
+        let anchor = d(2026, 5, 4);
+        let mut task = Task::new("Until test");
+        task.due = Some(anchor);
+        task.recurrence = Some(Recurrence::Schedule {
+            rrule: "FREQ=WEEKLY;BYDAY=MO;UNTIL=20260525T000000Z".into(),
+            anchor,
+            snap: None,
+        });
+        let dates = project_series(&task, d(2026, 5, 4), d(2026, 7, 1));
+        assert_eq!(dates, vec![d(2026, 5, 11), d(2026, 5, 18), d(2026, 5, 25)]);
+    }
+
+    #[test]
+    fn project_series_stops_at_count() {
+        // COUNT=3: total occurrences May 4/11/18; projected (after today=May 4) are May 11/18.
+        let anchor = d(2026, 5, 4);
+        let mut task = Task::new("Count test");
+        task.due = Some(anchor);
+        task.recurrence = Some(Recurrence::Schedule {
+            rrule: "FREQ=WEEKLY;BYDAY=MO;COUNT=3".into(),
+            anchor,
+            snap: None,
+        });
+        let dates = project_series(&task, d(2026, 5, 4), d(2026, 7, 1));
+        assert_eq!(dates, vec![d(2026, 5, 11), d(2026, 5, 18)]);
     }
 
     // ── project_series ──────────────────────────────────────────────────────

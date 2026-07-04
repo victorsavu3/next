@@ -740,15 +740,15 @@ fn recur_first_instance_has_recurrence_id() {
 /// Malformed schedule rules are rejected at `add` time, not silently stored.
 #[test]
 fn recur_add_rejects_malformed_rrule() {
-    // Each of these is rejected by parse_rrule and so must fail at add time.
+    // Each of these must fail at add time.
+    // Note: FREQ=HOURLY and positional BYDAY (e.g. BYDAY=1MO) are now valid
+    // per RFC 5545 and accepted by the rrule crate.
     let bad_rules = [
-        "",                  // empty string
-        "hello",             // garbage (no '=')
-        "INTERVAL=2",        // missing FREQ
-        "FREQ=DAILY;INTERVAL=0",   // INTERVAL must be >= 1
-        "FREQ=HOURLY",       // unsupported FREQ
-        "FREQ=MONTHLY;BYMONTHDAY=0", // BYMONTHDAY must be positive
-        "FREQ=MONTHLY;BYDAY=1MO",    // positional BYDAY not supported
+        "",                           // empty string
+        "hello",                      // garbage (no '=')
+        "INTERVAL=2",                 // missing FREQ
+        "FREQ=DAILY;INTERVAL=0",      // INTERVAL must be >= 1 (custom guard)
+        "FREQ=MONTHLY;BYMONTHDAY=0",  // BYMONTHDAY=0 is invalid per RFC 5545
     ];
 
     for rule in bad_rules {
@@ -813,7 +813,7 @@ fn recur_edit_rejects_malformed_rrule() {
 
     let result = edit::run(
         edit::Args {
-            recur_schedule: Some("FREQ=HOURLY".into()),
+            recur_schedule: Some("FREQ=INVALID".into()),
             ..edit_args("editme")
         },
         &mut env.ctx,
