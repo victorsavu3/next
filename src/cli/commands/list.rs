@@ -14,7 +14,7 @@ pub struct Args {
     #[arg(long)]
     pub all: bool,
 
-    /// Show only cancelled and done tasks (context and other filters still apply).
+    /// Show only closed tasks (done or cancelled). Can be combined with --all.
     #[arg(long)]
     pub closed: bool,
 
