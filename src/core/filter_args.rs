@@ -72,6 +72,7 @@ impl FilterArgs {
                 .context_override
                 .as_ref()
                 .map(|c| vec![c.clone()]),
+            excluded_context_override: None,
             user_override,
             include_future: self.future,
             disable_implicit: self.all,

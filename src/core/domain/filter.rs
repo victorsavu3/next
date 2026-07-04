@@ -23,6 +23,11 @@ pub struct FilterSet {
     /// `Some(v)` → use `v` (pass an empty vec to disable context filtering entirely).
     pub context_override: Option<Vec<String>>,
 
+    /// Override excluded contexts for this query.
+    /// `None` → use `state.excluded_contexts`.
+    /// `Some(v)` → use `v` (pass an empty vec to disable excluded-context filtering entirely).
+    pub excluded_context_override: Option<Vec<String>>,
+
     /// Override active users for this query.
     /// `None` → use `state.active_users`.
     /// `Some(v)` → use `v` (pass an empty vec to disable user filtering entirely).
@@ -86,13 +91,25 @@ pub fn apply(
             .unwrap_or_default()
     });
 
+    // Context overrides are respected even when `disable_implicit` is true, so
+    // callers can pin contexts while bypassing the status/blocking/resource gate.
+    // When no override is set, the implicit gate drives context filtering as usual.
     let active_contexts: &[String] = if filter.disable_implicit {
-        &[]
+        filter.context_override.as_deref().unwrap_or(&[])
     } else {
         filter
             .context_override
             .as_deref()
             .unwrap_or(&state.active_contexts)
+    };
+
+    let effective_excluded_contexts: &[String] = if filter.disable_implicit {
+        filter.excluded_context_override.as_deref().unwrap_or(&[])
+    } else {
+        filter
+            .excluded_context_override
+            .as_deref()
+            .unwrap_or(&state.excluded_contexts)
     };
 
     let active_users: &[String] = if filter.disable_implicit {
@@ -130,14 +147,6 @@ pub fn apply(
                 {
                     return false;
                 }
-                if !active_contexts.is_empty() && !task_matches_contexts(task, active_contexts) {
-                    return false;
-                }
-                if !state.excluded_contexts.is_empty()
-                    && task_excluded_by_contexts(task, &state.excluded_contexts)
-                {
-                    return false;
-                }
                 // User filter: unassigned tasks are always visible; assigned tasks
                 // must match one of the active users.
                 if !active_users.is_empty() {
@@ -147,6 +156,19 @@ pub fn apply(
                         }
                     }
                 }
+            }
+
+            // ── Context filtering ────────────────────────────────────────────
+            // Applied outside the implicit gate so that callers can pin contexts
+            // via context_override / excluded_context_override while still
+            // bypassing status/blocking/resource checks (e.g. tree include_all).
+            if !active_contexts.is_empty() && !task_matches_contexts(task, active_contexts) {
+                return false;
+            }
+            if !effective_excluded_contexts.is_empty()
+                && task_excluded_by_contexts(task, effective_excluded_contexts)
+            {
+                return false;
             }
 
             // ── Explicit filters ─────────────────────────────────────────────

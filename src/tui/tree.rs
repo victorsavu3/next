@@ -109,11 +109,24 @@ pub fn build_items(
     //
     // When the tree-local `include_all` toggle is on we want done/cancelled
     // tasks to pass through the implicit gate (status/blocking/resource
-    // checks), so we force `disable_implicit = true` in that case.  The
-    // explicit tag / context / user filters are always applied regardless.
+    // checks), so we force `disable_implicit = true` in that case.  We
+    // preserve the active/excluded contexts from state via the override fields
+    // so that context filtering still applies even with the implicit gate off.
     let effective_filter = if include_all && !filter_set.disable_implicit {
         FilterSet {
             disable_implicit: true,
+            context_override: Some(
+                filter_set
+                    .context_override
+                    .clone()
+                    .unwrap_or_else(|| state.active_contexts.clone()),
+            ),
+            excluded_context_override: Some(
+                filter_set
+                    .excluded_context_override
+                    .clone()
+                    .unwrap_or_else(|| state.excluded_contexts.clone()),
+            ),
             ..filter_set.clone()
         }
     } else {
@@ -360,5 +373,81 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         assert_eq!(*items[0].identifier(), done_matching.id);
+    }
+
+    /// Active context is respected even when the tree-local include_all toggle
+    /// is on. Tasks tagged with a wrong @context must not appear.
+    #[test]
+    fn active_context_respected_with_include_all() {
+        let mut work_task = Task::new("work task".to_owned());
+        work_task.tags = vec!["@work".to_owned()];
+
+        let mut home_task = Task::new("home task".to_owned());
+        home_task.tags = vec!["@home".to_owned()];
+
+        let state = GlobalState {
+            active_contexts: vec!["@work".to_owned()],
+            ..Default::default()
+        };
+
+        let items = build_items(&[work_task.clone(), home_task.clone()], &no_filter(), &state, today(), true);
+
+        assert_eq!(items.len(), 1, "only @work task should be visible");
+        assert_eq!(*items[0].identifier(), work_task.id);
+    }
+
+    /// Excluded context is respected even when the tree-local include_all toggle
+    /// is on. Tasks tagged with an excluded @context must not appear.
+    #[test]
+    fn excluded_context_respected_with_include_all() {
+        let mut home_task = Task::new("home task".to_owned());
+        home_task.tags = vec!["@home".to_owned()];
+
+        let neutral_task = Task::new("neutral task".to_owned());
+
+        let state = GlobalState {
+            excluded_contexts: vec!["@home".to_owned()],
+            ..Default::default()
+        };
+
+        let items = build_items(
+            &[home_task.clone(), neutral_task.clone()],
+            &no_filter(),
+            &state,
+            today(),
+            true,
+        );
+
+        assert_eq!(items.len(), 1, "excluded @home task must not appear");
+        assert_eq!(*items[0].identifier(), neutral_task.id);
+    }
+
+    /// Done tasks from the active context appear with include_all; done tasks
+    /// from an inactive context do not.
+    #[test]
+    fn include_all_shows_done_tasks_in_active_context_only() {
+        let mut done_work = Task::new("done work".to_owned());
+        done_work.tags = vec!["@work".to_owned()];
+        done_work.mark_done(today());
+
+        let mut done_home = Task::new("done home".to_owned());
+        done_home.tags = vec!["@home".to_owned()];
+        done_home.mark_done(today());
+
+        let state = GlobalState {
+            active_contexts: vec!["@work".to_owned()],
+            ..Default::default()
+        };
+
+        let items = build_items(
+            &[done_work.clone(), done_home.clone()],
+            &no_filter(),
+            &state,
+            today(),
+            true,
+        );
+
+        assert_eq!(items.len(), 1, "only done @work task should be visible");
+        assert_eq!(*items[0].identifier(), done_work.id);
     }
 }
