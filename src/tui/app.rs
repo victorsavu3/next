@@ -175,6 +175,10 @@ pub enum Action {
     TreeNext,
     /// In [`View::Tree`]: move the highlight to the previous visible node.
     TreePrev,
+    /// In [`View::Tree`]: jump the highlight to the first visible node.
+    TreeFirst,
+    /// In [`View::Tree`]: jump the highlight to the last visible node.
+    TreeLast,
     /// In [`View::Tree`]: expand the highlighted node.
     TreeExpand,
     /// In [`View::Tree`]: collapse the highlighted node.
@@ -752,6 +756,28 @@ impl App {
         }
     }
 
+    /// Jump-to-boundary keys shared by the list and tree views.
+    /// `g`/`Home` → first item; `G`/`End` → last item.
+    /// The returned action differs by view (`SelectFirst`/`SelectLast` for the
+    /// flat list, `TreeFirst`/`TreeLast` for the tree widget), so each view
+    /// must call the appropriate variant — this helper is called from
+    /// [`Self::list_key`] and [`Self::tree_key`] with the right action pair.
+    fn jump_key_list(key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Char('g') | KeyCode::Home => Some(Action::SelectFirst),
+            KeyCode::Char('G') | KeyCode::End => Some(Action::SelectLast),
+            _ => None,
+        }
+    }
+
+    fn jump_key_tree(key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Char('g') | KeyCode::Home => Some(Action::TreeFirst),
+            KeyCode::Char('G') | KeyCode::End => Some(Action::TreeLast),
+            _ => None,
+        }
+    }
+
     fn list_key(key: KeyEvent) -> Option<Action> {
         if let Some(a) = Self::normal_common_key(key) {
             return Some(a);
@@ -767,12 +793,12 @@ impl App {
             }
             KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectNext),
             KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectPrev),
-            KeyCode::Char('g') | KeyCode::Home => Some(Action::SelectFirst),
-            KeyCode::Char('G') | KeyCode::End => Some(Action::SelectLast),
             KeyCode::Char('b') => Some(Action::JumpToBlocker),
             KeyCode::PageDown => Some(Action::DetailPageDown),
             KeyCode::PageUp => Some(Action::DetailPageUp),
-            _ => Self::flag_key(key).or_else(|| Self::task_action_key(key)),
+            _ => Self::flag_key(key)
+                .or_else(|| Self::jump_key_list(key))
+                .or_else(|| Self::task_action_key(key)),
         }
     }
 
@@ -806,7 +832,7 @@ impl App {
             KeyCode::Char('b') => Some(Action::JumpToBlocker),
             KeyCode::PageDown => Some(Action::DetailPageDown),
             KeyCode::PageUp => Some(Action::DetailPageUp),
-            _ => Self::task_action_key(key),
+            _ => Self::jump_key_tree(key).or_else(|| Self::task_action_key(key)),
         }
     }
 
@@ -982,6 +1008,8 @@ impl App {
 
             Action::TreeNext => self.tree_view.key_down(),
             Action::TreePrev => self.tree_view.key_up(),
+            Action::TreeFirst => self.tree_view.key_first(),
+            Action::TreeLast => self.tree_view.key_last(),
             Action::TreeExpand => self.tree_view.expand(),
             Action::TreeCollapse => self.tree_view.collapse(),
             Action::TreeToggle => self.tree_view.toggle(),

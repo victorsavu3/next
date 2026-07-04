@@ -60,6 +60,16 @@ impl TreeView {
         self.state.key_up();
     }
 
+    /// Jump the highlight to the first visible node.
+    pub fn key_first(&mut self) {
+        self.state.select_first();
+    }
+
+    /// Jump the highlight to the last visible node.
+    pub fn key_last(&mut self) {
+        self.state.select_last();
+    }
+
     /// Collapse the highlighted node (or step to its parent).
     pub fn collapse(&mut self) {
         self.state.key_left();
