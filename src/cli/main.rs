@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
-    // Init and Tutorial run before the repository exists — handle them before AppContext.
+    // Init, Tutorial, and Config run before the repository exists — handle them before AppContext.
     if let Some(Command::Init(args)) = cli.command {
         let dir = if let Some(ref p) = cli.repo {
             p.clone()
@@ -27,6 +27,9 @@ fn main() -> anyhow::Result<()> {
     }
     if let Some(Command::Tutorial(args)) = cli.command {
         return commands::tutorial::run(args);
+    }
+    if let Some(Command::Config(args)) = cli.command {
+        return commands::config::run(args, cli.config.as_deref());
     }
 
     let cli_autosync = cli.autosync;
@@ -69,6 +72,7 @@ fn main() -> anyhow::Result<()> {
         Command::Tree(_) => "tree",
         Command::Plugin(_) => "plugin",
         Command::Tutorial(_) => unreachable!("handled above"),
+        Command::Config(_) => unreachable!("handled above"),
     };
 
     let is_mutation = matches!(
@@ -120,6 +124,7 @@ fn main() -> anyhow::Result<()> {
         Command::Tree(args) => commands::tree::run(args, &ctx),
         Command::Plugin(args) => commands::plugin::run(args, &mut ctx),
         Command::Tutorial(_) => unreachable!("handled above"),
+        Command::Config(_) => unreachable!("handled above"),
     };
 
     if let Err(ref e) = result {

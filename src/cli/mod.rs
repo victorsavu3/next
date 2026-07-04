@@ -135,4 +135,7 @@ pub enum Command {
 
     /// Show the interactive tutorial.
     Tutorial(commands::tutorial::Args),
+
+    /// Read or write a config value.
+    Config(commands::config::Args),
 }
