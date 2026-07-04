@@ -14,6 +14,10 @@ pub struct Args {
     #[arg(long)]
     pub all: bool,
 
+    /// Show only cancelled and done tasks.
+    #[arg(long)]
+    pub closed: bool,
+
     /// Output as JSON (flat list with parent_id fields).
     #[arg(long)]
     pub json: bool,
@@ -33,6 +37,11 @@ pub fn run_with_writer(
     if args.json {
         let tasks: Vec<&Task> = if args.all {
             all_tasks.iter().collect()
+        } else if args.closed {
+            all_tasks
+                .iter()
+                .filter(|t| matches!(t.status, Status::Done | Status::Cancelled))
+                .collect()
         } else {
             all_tasks
                 .iter()
@@ -45,6 +54,12 @@ pub fn run_with_writer(
 
     let visible_ids: HashSet<Uuid> = if args.all {
         all_tasks.iter().map(|t| t.id).collect()
+    } else if args.closed {
+        all_tasks
+            .iter()
+            .filter(|t| matches!(t.status, Status::Done | Status::Cancelled))
+            .map(|t| t.id)
+            .collect()
     } else {
         all_tasks
             .iter()

@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::core::domain::{
     state::GlobalState,
     tag,
-    task::Task,
+    task::{Status, Task},
 };
 
 /// Controls which tasks are returned by `apply`.
@@ -34,6 +34,10 @@ pub struct FilterSet {
     /// Skip the implicit visibility gate entirely (show everything regardless
     /// of status, blocking, resources, context, or user).
     pub disable_implicit: bool,
+
+    /// Show only done and cancelled tasks instead of open/started ones.
+    /// All other implicit filters (context, resources, user, future date) still apply.
+    pub closed_only: bool,
 
     /// Keep parent tasks that have open children (projects) visible, instead of
     /// hiding them under the "work on the children instead" rule.  All other
@@ -109,7 +113,11 @@ pub fn apply(
         .filter(|task| {
             // ── Implicit gate ────────────────────────────────────────────────
             if !filter.disable_implicit {
-                if !task.is_active() {
+                if filter.closed_only {
+                    if !matches!(task.status, Status::Done | Status::Cancelled) {
+                        return false;
+                    }
+                } else if !task.is_active() {
                     return false;
                 }
                 if !filter.include_future && task.is_hidden(today) {
@@ -118,7 +126,8 @@ pub fn apply(
                 if task.blocked_by.iter().any(|id| open_ids.contains(id)) {
                     return false;
                 }
-                if !filter.include_blocked_parents
+                if !filter.closed_only
+                    && !filter.include_blocked_parents
                     && parents_with_open_children.contains(&task.id)
                 {
                     return false;
@@ -773,6 +782,83 @@ mod tests {
             ..Default::default()
         };
         let result = apply(vec![bob_task], &filter, &state, today());
+        assert_eq!(result.len(), 1);
+    }
+
+    // ── closed_only ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn closed_only_shows_done_tasks() {
+        let mut done = Task::new("Done task");
+        done.mark_done(today());
+        let open = Task::new("Open task");
+        let filter = FilterSet {
+            closed_only: true,
+            ..Default::default()
+        };
+        let result = run(vec![done, open], filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Done task");
+    }
+
+    #[test]
+    fn closed_only_shows_cancelled_tasks() {
+        let mut cancelled = Task::new("Cancelled task");
+        cancelled.mark_cancelled();
+        let open = Task::new("Open task");
+        let filter = FilterSet {
+            closed_only: true,
+            ..Default::default()
+        };
+        let result = run(vec![cancelled, open], filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Cancelled task");
+    }
+
+    #[test]
+    fn closed_only_respects_context() {
+        let state = GlobalState { active_contexts: vec!["@work".into()], ..Default::default() };
+
+        let mut done_work = Task::new("Done work task");
+        done_work.mark_done(today());
+        done_work.tags = vec!["@work".into()];
+
+        let mut done_home = Task::new("Done home task");
+        done_home.mark_done(today());
+        done_home.tags = vec!["@home".into()];
+
+        let filter = FilterSet {
+            closed_only: true,
+            ..Default::default()
+        };
+        let result = apply(vec![done_work, done_home], &filter, &state, today());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Done work task");
+    }
+
+    #[test]
+    fn closed_only_hides_future_tasks_by_default() {
+        let mut done_future = Task::new("Done future task");
+        done_future.mark_done(today());
+        done_future.start = Some(today() + chrono::Duration::days(7));
+
+        let filter = FilterSet {
+            closed_only: true,
+            ..Default::default()
+        };
+        let result = run(vec![done_future], filter);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn disable_implicit_shows_future_tasks() {
+        let mut future = Task::new("Future task");
+        future.start = Some(today() + chrono::Duration::days(7));
+        let filter = FilterSet {
+            disable_implicit: true,
+            ..Default::default()
+        };
+        let result = run(vec![future], filter);
         assert_eq!(result.len(), 1);
     }
 

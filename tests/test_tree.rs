@@ -26,7 +26,7 @@ fn add_args(title: &str) -> add::Args {
 }
 
 fn tree_args(all: bool) -> tree::Args {
-    tree::Args { all, json: false }
+    tree::Args { all, closed: false, json: false }
 }
 
 /// Run the tree command and capture its output as a String.
@@ -143,7 +143,7 @@ fn tree_all_includes_done_tasks() {
 fn tree_json_output() {
     let mut env = common::setup();
     add::run(add_args("Task JSON"), &mut env.ctx).unwrap();
-    tree::run(tree::Args { all: false, json: true }, &env.ctx).unwrap();
+    tree::run(tree::Args { all: false, closed: false, json: true }, &env.ctx).unwrap();
 }
 
 // ---------------------------------------------------------------------------

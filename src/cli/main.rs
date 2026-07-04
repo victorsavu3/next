@@ -38,6 +38,7 @@ fn main() -> anyhow::Result<()> {
         Command::List(commands::list::Args {
             future: false,
             all: false,
+            closed: false,
             all_users: false,
             json: false,
             limit: None,
