@@ -721,17 +721,6 @@ impl App {
         }
     }
 
-    /// The filter-toggle flag keys (`A`/`F`/`U`), shared by list, tree, and
-    /// forecast views. Extracted so tree can call it alongside its own bindings.
-    fn flag_key(key: KeyEvent) -> Option<Action> {
-        match key.code {
-            KeyCode::Char('A') => Some(Action::ToggleAll),
-            KeyCode::Char('F') => Some(Action::ToggleFuture),
-            KeyCode::Char('U') => Some(Action::ToggleAllUsers),
-            _ => None,
-        }
-    }
-
     /// The per-task action keys (edit/done/cancel/start/open/move/delete), shared
     /// by the list and tree views; both resolve `selected_task()` view-aware.
     fn task_action_key(key: KeyEvent) -> Option<Action> {
