@@ -120,7 +120,7 @@ pub fn run_with_writer(
     let mut primary_section: HashMap<Uuid, String> = HashMap::new();
 
     for root in &roots {
-        let ctx_tags = deepest_context_tags(&root.tags);
+        let ctx_tags = tag::deepest_context_tags(&root.tags);
 
         if ctx_tags.is_empty() {
             // No context — deferred to trailing "No context" section.
@@ -176,33 +176,6 @@ pub fn run_with_writer(
     }
 
     Ok(())
-}
-
-/// Returns the deepest context tag(s) on a task.
-///
-/// "Deepest" means having the most `/`-separated segments.  If there is a tie,
-/// all tied tags are returned.
-fn deepest_context_tags(tags: &[String]) -> Vec<String> {
-    let ctx_tags: Vec<&str> = tags
-        .iter()
-        .filter(|t| tag::is_context(t))
-        .map(|s| s.as_str())
-        .collect();
-    if ctx_tags.is_empty() {
-        return Vec::new();
-    }
-
-    let max_depth = ctx_tags
-        .iter()
-        .map(|t| t.matches('/').count())
-        .max()
-        .unwrap_or(0);
-
-    ctx_tags
-        .iter()
-        .filter(|t| t.matches('/').count() == max_depth)
-        .map(|s| s.to_string())
-        .collect()
 }
 
 fn print_node(

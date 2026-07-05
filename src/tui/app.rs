@@ -325,6 +325,8 @@ pub struct App {
     view: View,
     /// Tree-view state (selection + expansion + include-all toggle).
     tree_view: super::tree::TreeView,
+    /// Maps each root task UUID to its section UUID, rebuilt alongside the tree.
+    tree_task_section: HashMap<uuid::Uuid, uuid::Uuid>,
     /// Forecast-view state (the horizon).
     forecast_view: super::forecast::ForecastView,
 
@@ -361,6 +363,7 @@ impl App {
             today,
             view: View::default(),
             tree_view: super::tree::TreeView::default(),
+            tree_task_section: HashMap::new(),
             forecast_view,
             tasks: Vec::new(),
             selected: 0,
@@ -442,24 +445,25 @@ impl App {
     }
 
     /// Builds the displayable tree items from the cached task list, honouring
-    /// the active filter and the tree-local include-all toggle.
-    /// Recomputed each frame (cheap). Falls back to a default (pass-all) filter
-    /// on parse error so the tree still renders rather than crashing.
-    pub fn tree_items(&self) -> Vec<tui_tree_widget::TreeItem<'static, uuid::Uuid>> {
+    /// Builds the tree items for the current filter and include-all state,
+    /// auto-opens any new context sections, and caches the task→section map
+    /// for cross-view selection seeding.
+    pub fn tree_items(&mut self) -> Vec<tui_tree_widget::TreeItem<'static, uuid::Uuid>> {
         let filter_set = self.current_filter_set().unwrap_or_else(|_| {
-            // On a token error, fall back to a pass-through filter that still
-            // shows projects, so the tree renders rather than crashing.
             filter::FilterSet { include_blocked_parents: true, ..Default::default() }
         });
         let store = self.repo.store();
         let state = store.get_state().unwrap_or_default();
-        super::tree::build_items(
+        let build = super::tree::build_items(
             &self.all_tasks,
             &filter_set,
             &state,
             self.today,
             self.tree_view.include_all(),
-        )
+        );
+        self.tree_view.sync_sections(&build.section_ids);
+        self.tree_task_section = build.task_section;
+        build.items
     }
 
     /// Computes the forecast entries for the current horizon, honouring the
@@ -1106,9 +1110,16 @@ impl App {
         if view == View::Tree {
             let items = self.tree_items();
             // Seed the tree highlight from the list selection where possible.
+            // Tasks are now nested under section headers, so the selection path
+            // is [section_uuid, task_uuid].
             if self.tree_view.selected_id().is_none() {
                 if let Some(id) = self.tasks.get(self.selected).map(|s| s.task.id) {
-                    self.tree_view.state_mut().select(vec![id]);
+                    let path = if let Some(&sec_id) = self.tree_task_section.get(&id) {
+                        vec![sec_id, id]
+                    } else {
+                        vec![id]
+                    };
+                    self.tree_view.state_mut().select(path);
                 }
             }
             self.tree_view.ensure_selection(&items);
@@ -2041,9 +2052,14 @@ mod tests {
         assert!(titles.contains(&"Project".to_string()), "list missing project: {titles:?}");
         assert!(titles.contains(&"Subtask".to_string()), "list missing subtask: {titles:?}");
 
-        // The tree shows the project as a root node (with the subtask nested).
+        // The tree shows the project nested inside a context section.
+        let mut app = app;
         let items = app.tree_items();
-        let root = items.iter().find(|i| *i.identifier() == parent_id);
+        // Tasks are inside section children; search recursively.
+        let root = items
+            .iter()
+            .flat_map(|sec| sec.children())
+            .find(|i| *i.identifier() == parent_id);
         assert!(root.is_some(), "tree missing project root");
         assert_eq!(root.unwrap().children().len(), 1, "subtask should nest under the project");
     }

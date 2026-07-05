@@ -67,6 +67,34 @@ pub fn is_resource(tag: &str) -> bool {
     matches!(classify(tag), TagKind::Resource)
 }
 
+/// Returns the deepest context tag(s) from `tags`.
+///
+/// "Deepest" means having the most `/`-separated segments. When multiple tags
+/// tie for depth, all of them are returned, sorted alphabetically. Returns an
+/// empty vec when no context tags are present.
+pub fn deepest_context_tags(tags: &[String]) -> Vec<String> {
+    let ctx_tags: Vec<&str> = tags
+        .iter()
+        .filter(|t| is_context(t))
+        .map(|s| s.as_str())
+        .collect();
+    if ctx_tags.is_empty() {
+        return Vec::new();
+    }
+    let max_depth = ctx_tags
+        .iter()
+        .map(|t| t.matches('/').count())
+        .max()
+        .unwrap_or(0);
+    let mut result: Vec<String> = ctx_tags
+        .iter()
+        .filter(|t| t.matches('/').count() == max_depth)
+        .map(|s| s.to_string())
+        .collect();
+    result.sort();
+    result
+}
+
 /// Strips the leading `@` or `#` prefix and returns the bare name.
 ///
 /// For hierarchical tags the full path is returned: `bare_name("#office/printer") == "office/printer"`.
