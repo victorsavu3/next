@@ -169,6 +169,56 @@ mod tests {
     }
 
     #[test]
+    fn future_start_task_appears_when_include_future_is_set() {
+        let today = date(2026, 6, 6);
+        let tomorrow = date(2026, 6, 7);
+        let mut task = Task::new("starts tomorrow");
+        task.start = Some(tomorrow);
+        task.due = Some(tomorrow);
+
+        let mut filter = empty_filter();
+        filter.include_future = true;
+
+        let entries = build_entries(
+            &[task],
+            &GlobalState::default(),
+            &ScoringConfig::default(),
+            &HashMap::new(),
+            &filter,
+            today,
+            30,
+        );
+        let titles: Vec<&str> = entries.iter().map(|e| e.title.as_str()).collect();
+        assert!(
+            titles.contains(&"starts tomorrow"),
+            "future-start task must appear in forecast when include_future is true"
+        );
+    }
+
+    #[test]
+    fn future_start_task_hidden_without_include_future() {
+        let today = date(2026, 6, 6);
+        let tomorrow = date(2026, 6, 7);
+        let mut task = Task::new("starts tomorrow");
+        task.start = Some(tomorrow);
+        task.due = Some(tomorrow);
+
+        let entries = build_entries(
+            &[task],
+            &GlobalState::default(),
+            &ScoringConfig::default(),
+            &HashMap::new(),
+            &empty_filter(),
+            today,
+            30,
+        );
+        assert!(
+            entries.is_empty(),
+            "future-start task must be hidden without include_future"
+        );
+    }
+
+    #[test]
     fn filter_token_restricts_entries() {
         let today = date(2026, 6, 6);
         let mut tagged = Task::new("tagged");

@@ -39,7 +39,7 @@ pub fn build_entries(args: &Args, ctx: &AppContext) -> anyhow::Result<(Vec<Forec
     let horizon = args.days.unwrap_or(ctx.config.forecast_horizon_days);
 
     let mut filter_args = FilterArgs::parse(args.tokens.clone());
-    filter_args.future = args.future;
+    filter_args.future = true; // forecast always shows future-start tasks
     filter_args.all = args.all;
     filter_args.all_users = args.all_users;
     filter_args.json = args.json;
