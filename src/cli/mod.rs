@@ -23,6 +23,28 @@ mod tests {
     fn no_autosync_alone_is_accepted() {
         Cli::try_parse_from(["next", "--no-autosync", "list"]).unwrap();
     }
+
+    #[test]
+    fn no_sync_alone_is_accepted() {
+        Cli::try_parse_from(["next", "--no-sync", "list"]).unwrap();
+    }
+
+    #[test]
+    fn offline_alone_is_accepted() {
+        Cli::try_parse_from(["next", "--offline", "list"]).unwrap();
+    }
+
+    #[test]
+    fn no_sync_and_autosync_conflict() {
+        let result = Cli::try_parse_from(["next", "--no-sync", "--autosync", "list"]);
+        assert!(result.is_err(), "--no-sync and --autosync must conflict");
+    }
+
+    #[test]
+    fn offline_and_autosync_conflict() {
+        let result = Cli::try_parse_from(["next", "--offline", "--autosync", "list"]);
+        assert!(result.is_err(), "--offline and --autosync must conflict");
+    }
 }
 
 use std::path::PathBuf;
@@ -52,11 +74,16 @@ pub struct Cli {
     #[arg(long, global = true, conflicts_with = "autosync")]
     pub no_autosync: bool,
 
-    /// Skip the pull-before-query staleness check for this invocation, even if
-    /// `sync.pull_before_query = true` in config.  Operate on the local copy
-    /// only (no network pull).
-    #[arg(long, global = true)]
+    /// Skip both pull-before-query and autosync push for this invocation.
+    /// Operate entirely on the local copy (no network I/O).
+    /// Alias for `--no-sync`. Conflicts with `--autosync`.
+    #[arg(long, global = true, conflicts_with = "autosync")]
     pub offline: bool,
+
+    /// Skip both pull-before-query and autosync push for this invocation.
+    /// Alias for `--offline`. Conflicts with `--autosync`.
+    #[arg(long, global = true, conflicts_with = "autosync")]
+    pub no_sync: bool,
 
     /// Subcommand to run. Defaults to `list` when omitted.
     #[command(subcommand)]

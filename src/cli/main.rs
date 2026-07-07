@@ -34,6 +34,8 @@ fn main() -> anyhow::Result<()> {
 
     let cli_autosync = cli.autosync;
     let cli_no_autosync = cli.no_autosync;
+    let cli_offline = cli.offline;
+    let cli_no_sync = cli.no_sync;
     let mut ctx = AppContext::new(cli.config.as_deref(), cli.repo.as_deref())?;
 
     // Default to `list` when no subcommand is given.
@@ -86,7 +88,8 @@ fn main() -> anyhow::Result<()> {
     // the local copy is stale. Best-effort — it never fails the command.
     if cmd_name != "sync" {
         let opts = core::sync::StaleOpts {
-            enabled: ctx.config.sync.pull_before_query && !cli.offline,
+            enabled: ctx.config.sync.pull_before_query
+                && !(cli_offline || cli_no_sync || ctx.config.sync.offline),
             staleness: Duration::from_secs(ctx.config.sync.staleness_secs),
             now: chrono::Utc::now(),
         };
@@ -132,7 +135,12 @@ fn main() -> anyhow::Result<()> {
         tracing::error!(cmd = cmd_name, "{e:#}");
     }
 
-    if result.is_ok() && is_mutation && (cli_autosync || ctx.config.autosync) && !cli_no_autosync {
+    if result.is_ok()
+        && is_mutation
+        && (cli_autosync || ctx.config.autosync)
+        && !cli_no_autosync
+        && !(cli_offline || cli_no_sync || ctx.config.sync.offline)
+    {
         let sync_args = sync_cmd::Args { push_only: false, pull_only: false };
         if let Err(e) = sync_cmd::run(sync_args, &mut ctx) {
             eprintln!("autosync failed: {e:#}");

@@ -49,6 +49,12 @@ pub struct SyncConfig {
     /// Default 86400 (one day).
     #[serde(default = "default_plugin_sync_default_secs")]
     pub plugin_sync_default_secs: u64,
+
+    /// When `true`, behaves as if `--offline`/`--no-sync` was passed on every
+    /// invocation: skips both the pull-before-query and the autosync push.
+    /// Default `false`.
+    #[serde(default)]
+    pub offline: bool,
 }
 
 impl Default for SyncConfig {
@@ -59,6 +65,7 @@ impl Default for SyncConfig {
             staleness_secs: default_staleness_secs(),
             pull_timeout_secs: default_pull_timeout_secs(),
             plugin_sync_default_secs: default_plugin_sync_default_secs(),
+            offline: false,
         }
     }
 }
@@ -189,5 +196,21 @@ mod tests {
         assert_eq!(cfg.sync.staleness_secs, 100);
         assert!(cfg.sync.pull_before_query, "unspecified field keeps its default");
         assert_eq!(cfg.sync.pull_timeout_secs, 10);
+    }
+
+    #[test]
+    fn sync_offline_defaults_to_false() {
+        assert!(!SyncConfig::default().offline);
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(!cfg.sync.offline);
+    }
+
+    #[test]
+    fn sync_offline_round_trips() {
+        let cfg: Config = toml::from_str("[sync]\noffline = true").unwrap();
+        assert!(cfg.sync.offline);
+        let text = toml::to_string(&cfg).unwrap();
+        let reparsed: Config = toml::from_str(&text).unwrap();
+        assert!(reparsed.sync.offline);
     }
 }
