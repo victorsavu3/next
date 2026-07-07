@@ -470,11 +470,9 @@ impl App {
     /// active filter tokens/flags. Returns an empty vec on a filter error (the
     /// same tokens already drive the list, so an error is surfaced there).
     pub fn forecast_entries(&self) -> Vec<crate::core::forecast::ForecastEntry> {
-        let Ok(mut filter_set) = self.current_filter_set() else {
+        let Ok(filter_set) = self.current_filter_set() else {
             return Vec::new();
         };
-        // Forecast always shows future-start tasks regardless of the F toggle.
-        filter_set.include_future = true;
         let store = self.repo.store();
         let (Ok(state), Ok(tag_metas)) = (store.get_state(), store.list_tag_metas()) else {
             return Vec::new();
@@ -1109,6 +1107,10 @@ impl App {
         }
         self.view = view;
         self.status = Some(format!("view: {}", view.label()));
+        if view == View::Forecast && !self.filter_future {
+            self.filter_future = true;
+            self.reload().ok();
+        }
         if view == View::Tree {
             let items = self.tree_items();
             // Seed the tree highlight from the list selection where possible.
