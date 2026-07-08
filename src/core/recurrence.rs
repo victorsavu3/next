@@ -190,9 +190,12 @@ const MAX_PROJECTED_PER_SERIES: usize = 366;
 ///
 /// Pure and timezone-free: `today` and `cutoff` are passed in so the function is
 /// directly testable. Returns an empty list when the task is not an active
-/// schedule-type recurring task. Completion-type recurrence is intentionally not
-/// projected: the next date is `completion_date + interval_days`, and future
-/// completion dates are unknown, so no deterministic series exists to forecast.
+/// recurring task.
+///
+/// - **Schedule** (`RRULE`): dates are deterministic; projected exactly.
+/// - **Completion** (`interval_days`): assumes each instance is completed on its
+///   due date ("as soon as possible"), so the next due is always
+///   `prev_due + interval_days`. This gives a best-case projection.
 ///
 /// Shared by both the CLI `forecast` command and the MCP `get_forecast` tool so
 /// their projections cannot drift.
@@ -200,38 +203,60 @@ pub fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<N
     if !task.is_active() {
         return Vec::new();
     }
-    let Some(Recurrence::Schedule { rrule, anchor, snap }) = task.recurrence.as_ref() else {
-        return Vec::new();
-    };
 
-    // Walk the raw (un-snapped) series so each `next_occurrence` call strictly
-    // advances; the snap is applied only to the emitted date. The concrete task
-    // already covers its own `due`, so start projecting strictly after it.
-    let mut after = [task.due, task.start, Some(today)]
+    // The concrete task covers its own due date; start projecting strictly after.
+    let base = [task.due, task.start, Some(today)]
         .into_iter()
         .flatten()
         .max()
         .unwrap_or(today);
 
-    let mut dates = Vec::new();
-    for _ in 0..MAX_PROJECTED_PER_SERIES {
-        let raw = match next_occurrence(rrule, *anchor, after) {
-            Ok(d) => d,
-            Err(_) => break,
-        };
-        // `next_occurrence` guarantees raw > after, so the walk terminates.
-        after = raw;
-        let occurrence = snap.as_ref().map_or(raw, |s| apply_snap(raw, s));
-        if occurrence > cutoff {
-            break;
+    match task.recurrence.as_ref() {
+        Some(Recurrence::Schedule { rrule, anchor, snap }) => {
+            // Walk the raw (un-snapped) series so each call strictly advances;
+            // snap is applied only to the emitted date.
+            let mut after = base;
+            let mut dates = Vec::new();
+            for _ in 0..MAX_PROJECTED_PER_SERIES {
+                let raw = match next_occurrence(rrule, *anchor, after) {
+                    Ok(d) => d,
+                    Err(_) => break,
+                };
+                // `next_occurrence` guarantees raw > after, so the walk terminates.
+                after = raw;
+                let occurrence = snap.as_ref().map_or(raw, |s| apply_snap(raw, s));
+                if occurrence > cutoff {
+                    break;
+                }
+                // Snapping can move a date backwards; only keep strictly-future dates.
+                if occurrence > today {
+                    dates.push(occurrence);
+                }
+            }
+            dates
         }
-        // Snapping can move a date backwards to a prior emitted one or onto the
-        // current instance; only keep strictly-future, in-horizon dates.
-        if occurrence > today {
-            dates.push(occurrence);
+        Some(Recurrence::Completion { interval_days, snap }) => {
+            // Assume each occurrence is completed on its due date. Walk using the
+            // raw (un-snapped) value as the base for the next step so the series
+            // always advances by exactly interval_days per iteration.
+            let mut base_raw = base;
+            let mut dates = Vec::new();
+            for _ in 0..MAX_PROJECTED_PER_SERIES {
+                let raw = base_raw + Duration::days(*interval_days as i64);
+                // raw > base_raw always (interval_days >= 1), so walk terminates.
+                base_raw = raw;
+                let occurrence = snap.as_ref().map_or(raw, |s| apply_snap(raw, s));
+                if occurrence > cutoff {
+                    break;
+                }
+                if occurrence > today {
+                    dates.push(occurrence);
+                }
+            }
+            dates
         }
+        None => Vec::new(),
     }
-    dates
 }
 
 // ─── spawn_next ────────────────────────────────────────────────────────────
@@ -1092,11 +1117,43 @@ mod tests {
     }
 
     #[test]
-    fn project_series_completion_type_yields_none() {
+    fn project_series_completion_type_projects_assuming_done_asap() {
+        // Task due May 1, every 7 days. Assuming completed on May 4 (today),
+        // projected occurrences: May 11, May 18, ... up to horizon.
         let mut task = Task::new("Water plants");
         task.due = Some(d(2026, 5, 1));
         task.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
-        assert!(project_series(&task, d(2026, 5, 4), d(2026, 7, 1)).is_empty());
+        let today = d(2026, 5, 4);
+        let cutoff = d(2026, 5, 26);
+        let dates = project_series(&task, today, cutoff);
+        // base = max(due=May1, today=May4) = May4
+        // May4+7=May11, May11+7=May18, May18+7=May25 (≤ May26), May25+7=Jun1 (> cutoff)
+        assert_eq!(dates, vec![d(2026, 5, 11), d(2026, 5, 18), d(2026, 5, 25)]);
+    }
+
+    #[test]
+    fn project_series_completion_type_respects_horizon() {
+        let mut task = Task::new("Exercise");
+        task.due = Some(d(2026, 6, 1));
+        task.recurrence = Some(Recurrence::Completion { interval_days: 30, snap: None });
+        let today = d(2026, 6, 1);
+        let cutoff = d(2026, 6, 30);
+        let dates = project_series(&task, today, cutoff);
+        // base = June 1; next = July 1 which is > cutoff June 30 → empty.
+        assert!(dates.is_empty(), "single 30-day interval should exceed 29-day horizon");
+    }
+
+    #[test]
+    fn project_series_completion_type_overdue_uses_today_as_base() {
+        // Task due Apr 1 (past), today is May 4.  Base = max(Apr1, May4) = May4.
+        let mut task = Task::new("Overdue chore");
+        task.due = Some(d(2026, 4, 1));
+        task.recurrence = Some(Recurrence::Completion { interval_days: 14, snap: None });
+        let today = d(2026, 5, 4);
+        let cutoff = d(2026, 5, 20);
+        let dates = project_series(&task, today, cutoff);
+        // base = May4; May4+14=May18 (≤ May20); May18+14=Jun1 (> cutoff).
+        assert_eq!(dates, vec![d(2026, 5, 18)]);
     }
 
     #[test]

@@ -19,7 +19,7 @@ use crate::core::recurrence;
 use crate::core::scoring::{self, ScoringConfig};
 
 /// A single occurrence in the forecast: either a concrete existing task or a
-/// projected (not-yet-spawned) future instance of a schedule-type series.
+/// projected (not-yet-spawned) future instance of a recurrence series.
 #[derive(Debug, Clone, Serialize)]
 pub struct ForecastEntry {
     /// The forecast date (the task's `due`, or the projected occurrence date).
@@ -70,9 +70,9 @@ pub fn build_entries(
             });
         }
 
-        // Project the recurrence series forward. Only schedule-type series have
-        // deterministic future dates; completion-type series depend on unknown
-        // future completion dates and cannot be projected, so they are skipped.
+        // Project the recurrence series forward. Schedule-type series are exact;
+        // completion-type series assume each instance is done as soon as possible
+        // (on its due date), giving a best-case projection.
         for date in recurrence::project_series(&st.task, today, cutoff) {
             entries.push(ForecastEntry {
                 date,
@@ -166,6 +166,32 @@ mod tests {
                 entries
             );
         }
+    }
+
+    #[test]
+    fn completion_recurrence_emits_projected_entries() {
+        let today = date(2026, 6, 6);
+        let mut task = Task::new("water plants");
+        task.due = Some(date(2026, 6, 6));
+        task.recurrence = Some(crate::core::domain::task::Recurrence::Completion {
+            interval_days: 7,
+            snap: None,
+        });
+
+        let all = vec![task];
+        let entries = build_entries(
+            &all,
+            &GlobalState::default(),
+            &ScoringConfig::default(),
+            &HashMap::new(),
+            &empty_filter(),
+            today,
+            30,
+        );
+        let projected: Vec<_> = entries.iter().filter(|e| e.projected).collect();
+        assert!(!projected.is_empty(), "completion recurrence should emit projected entries");
+        // First projection: today + 7 = June 13.
+        assert_eq!(projected[0].date, date(2026, 6, 13));
     }
 
     #[test]

@@ -249,7 +249,7 @@ fn projection_stops_at_horizon() {
 }
 
 #[test]
-fn completion_recurring_task_is_not_projected() {
+fn completion_recurring_task_is_projected_assuming_done_asap() {
     let mut env = common::setup();
     let due = today() + Duration::days(5);
     let mut task = Task::new("Water plants");
@@ -257,10 +257,16 @@ fn completion_recurring_task_is_not_projected() {
     task.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
     save(&mut env, &task);
 
-    // No projected entries — completion series cannot be forecast.
-    assert!(projected_dates(&env, Some(90), "Water plants").is_empty());
-    // The current instance still shows as a concrete entry.
+    // The current instance shows as a concrete entry.
     assert_eq!(concrete_dates(&env, Some(90), "Water plants"), vec![due]);
+    // Projected entries assume completion on the due date; first projection = due + 7.
+    let projected = projected_dates(&env, Some(90), "Water plants");
+    assert!(!projected.is_empty(), "completion series should now project");
+    assert_eq!(projected[0], due + Duration::days(7));
+    // Subsequent projections advance by interval_days each step.
+    for w in projected.windows(2) {
+        assert_eq!(w[1] - w[0], Duration::days(7));
+    }
 }
 
 #[test]
