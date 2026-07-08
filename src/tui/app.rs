@@ -313,6 +313,9 @@ pub struct App {
     filter_tokens: Vec<String>,
     /// `--future`: include tasks scheduled in the future.
     filter_future: bool,
+    /// `true` when the forecast view auto-enabled `filter_future` on entry.
+    /// Used to restore the flag when leaving the forecast view.
+    forecast_auto_future: bool,
     /// `--all`: bypass implicit filtering (show done/blocked/etc.).
     filter_all: bool,
     /// `--all-users`: ignore the active user filter.
@@ -372,6 +375,7 @@ impl App {
             detail_scroll: 0,
             filter_tokens: Vec::new(),
             filter_future: false,
+            forecast_auto_future: false,
             filter_all: false,
             filter_all_users: false,
             filter_input: Input::default(),
@@ -987,6 +991,8 @@ impl App {
             }
             Action::ToggleFuture => {
                 self.filter_future = !self.filter_future;
+                // Manual toggle overrides any auto-enable we set on forecast entry.
+                self.forecast_auto_future = false;
                 self.reload_with_status("reloaded");
             }
             Action::ToggleAllUsers => {
@@ -1105,10 +1111,17 @@ impl App {
         if self.view == view {
             return;
         }
+        // Leaving forecast: undo the auto-enable if the user didn't set it manually.
+        if self.view == View::Forecast && self.forecast_auto_future {
+            self.filter_future = false;
+            self.forecast_auto_future = false;
+            self.reload().ok();
+        }
         self.view = view;
         self.status = Some(format!("view: {}", view.label()));
         if view == View::Forecast && !self.filter_future {
             self.filter_future = true;
+            self.forecast_auto_future = true;
             self.reload().ok();
         }
         if view == View::Tree {
