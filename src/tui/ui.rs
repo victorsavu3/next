@@ -558,7 +558,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         },
         Mode::Filter => "Enter apply  Esc cancel",
         Mode::Edit => {
-            "Tab/↑↓ field  Space/←→ toggle  Enter commit (tag/data)  Ctrl-S save  Esc cancel"
+            "Tab/↑↓ field  Space/←→ toggle  Enter commit  ←→ select tag  Del remove tag  Ctrl-S save  Esc cancel"
         }
         Mode::ConfirmDelete => "y/Enter delete  n/Esc cancel",
         Mode::MovePicker => "type to search  ↑↓ select  Enter move  Esc cancel",
@@ -585,7 +585,7 @@ mod edit_modal {
     use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
     use crate::tui::app::App;
-    use crate::tui::edit::{EditForm, Field, RecurMode};
+    use crate::tui::edit::{EditForm, Field, RecurMode, TagMode};
 
     use super::centered_rect;
 
@@ -636,7 +636,7 @@ mod edit_modal {
         date_row(frame, rows[1], "Due", form.due.value(), form.due_preview(today), form.focus == Field::Due);
         date_row(frame, rows[2], "Start", form.start.value(), form.start_preview(today), form.focus == Field::Start);
         value_row(frame, rows[3], "Priority", &form.priority.to_string(), form.focus == Field::Priority);
-        text_row(frame, rows[4], "Add tag", form.tag_input.value(), form.focus == Field::Tags);
+        tag_row(frame, rows[4], form);
         text_row(frame, rows[5], "Assignee", form.assignee.value(), form.focus == Field::Assignee);
         text_row(frame, rows[6], "URL", form.url.value(), form.focus == Field::Url);
         text_row(frame, rows[7], "Score adj", form.score_adjustment.value(), form.focus == Field::ScoreAdjustment);
@@ -716,24 +716,103 @@ mod edit_modal {
         frame.render_widget(textarea, inner);
     }
 
+    /// Renders the Tags row.
+    ///
+    /// - List mode: chips with the selected one highlighted (reversed).
+    /// - Add mode: text input prompt.
+    fn tag_row(frame: &mut Frame, area: Rect, form: &EditForm) {
+        let focused = form.focus == Field::Tags;
+        let label = Span::styled(
+            format!("{:>10}: ", "Tags"),
+            Style::default().add_modifier(Modifier::DIM),
+        );
+        let spans: Vec<Span> = match &form.tag_mode {
+            TagMode::List => {
+                let mut s = vec![label];
+                if form.tags.is_empty() {
+                    if focused {
+                        s.push(Span::styled(
+                            "─ press Enter or type to add ─",
+                            Style::default().add_modifier(Modifier::DIM),
+                        ));
+                    }
+                } else {
+                    for (i, tag) in form.tags.iter().enumerate() {
+                        if i > 0 {
+                            s.push(Span::raw("  "));
+                        }
+                        let style = if focused && i == form.tag_cursor {
+                            Style::default().add_modifier(Modifier::REVERSED)
+                        } else {
+                            Style::default()
+                        };
+                        s.push(Span::styled(tag.clone(), style));
+                    }
+                    if focused {
+                        s.push(Span::styled(
+                            "  + (Enter/type)",
+                            Style::default().add_modifier(Modifier::DIM),
+                        ));
+                    }
+                }
+                s
+            }
+            TagMode::Add => {
+                let input_style = if focused {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                vec![
+                    label,
+                    Span::styled(
+                        "Add: ",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ),
+                    Span::styled(form.tag_input.value().to_owned(), input_style),
+                    Span::styled("█", Style::default().add_modifier(Modifier::DIM)),
+                ]
+            }
+        };
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    }
+
     fn draw_summary(frame: &mut Frame, area: Rect, form: &EditForm) {
         let mut lines = Vec::new();
-        if !form.tags.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled("Tags: ", Style::default().add_modifier(Modifier::DIM)),
-                Span::styled(form.tags.join("  "), Style::default().add_modifier(Modifier::ITALIC)),
-            ]));
-        }
-        if !form.data.is_empty() {
-            for (k, v) in &form.data {
-                lines.push(Line::from(Span::raw(format!("  {k} = {v}"))));
+
+        // When in Add mode, show autocomplete suggestions instead of the tag list.
+        if form.focus == Field::Tags && form.tag_mode == TagMode::Add {
+            if form.tag_suggestions.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  (no matching tags — press Enter to add as new)",
+                    Style::default().add_modifier(Modifier::DIM),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  ↑↓ select  Enter pick  Tab to cancel",
+                    Style::default().add_modifier(Modifier::DIM),
+                )));
+                for (i, tag) in form.tag_suggestions.iter().enumerate() {
+                    let style = if i == form.suggestion_cursor {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    };
+                    lines.push(Line::from(Span::styled(format!("  {tag}"), style)));
+                }
             }
-        }
-        if matches!(form.recur_mode, RecurMode::Schedule | RecurMode::Completion) {
-            lines.push(Line::from(Span::styled(
-                "Snap: blank, next-workday, monday…sunday, dom:N",
-                Style::default().add_modifier(Modifier::DIM),
-            )));
+        } else {
+            if !form.data.is_empty() {
+                for (k, v) in &form.data {
+                    lines.push(Line::from(Span::raw(format!("  {k} = {v}"))));
+                }
+            }
+            if matches!(form.recur_mode, RecurMode::Schedule | RecurMode::Completion) {
+                lines.push(Line::from(Span::styled(
+                    "Snap: blank, next-workday, monday…sunday, dom:N",
+                    Style::default().add_modifier(Modifier::DIM),
+                )));
+            }
         }
         frame.render_widget(Paragraph::new(lines), area);
     }

@@ -954,10 +954,22 @@ impl App {
                     Some(Action::EditFocusNext)
                 }
             }
-            // ↑/↓ move between fields, EXCEPT inside a multi-line textarea where
-            // they navigate text. Tab is always available for field movement.
-            KeyCode::Down if !self.edit_focus_is_multiline() => Some(Action::EditFocusNext),
-            KeyCode::Up if !self.edit_focus_is_multiline() => Some(Action::EditFocusPrev),
+            // ↑/↓ move between fields, EXCEPT inside a multi-line textarea or
+            // when the tag editor is showing autocomplete suggestions.
+            KeyCode::Down if !self.edit_focus_is_multiline() => {
+                if self.edit_form.as_ref().map(|f| f.tags_wants_vertical_nav()).unwrap_or(false) {
+                    Some(Action::EditInput(key))
+                } else {
+                    Some(Action::EditFocusNext)
+                }
+            }
+            KeyCode::Up if !self.edit_focus_is_multiline() => {
+                if self.edit_form.as_ref().map(|f| f.tags_wants_vertical_nav()).unwrap_or(false) {
+                    Some(Action::EditInput(key))
+                } else {
+                    Some(Action::EditFocusPrev)
+                }
+            }
             _ => Some(Action::EditInput(key)),
         }
     }
@@ -1149,7 +1161,14 @@ impl App {
             self.status = Some("nothing selected to edit".to_owned());
             return;
         };
-        self.edit_form = Some(super::edit::EditForm::from_task(task));
+        // Collect all unique tags from loaded tasks + tag metadata for autocomplete.
+        let mut known: std::collections::BTreeSet<String> =
+            self.tag_metas.keys().cloned().collect();
+        for st in &self.tasks {
+            known.extend(st.task.tags.iter().cloned());
+        }
+        let known_tags: Vec<String> = known.into_iter().collect();
+        self.edit_form = Some(super::edit::EditForm::from_task(task, known_tags));
         self.mode = Mode::Edit;
         self.status = None;
     }

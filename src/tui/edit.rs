@@ -56,6 +56,15 @@ impl RecurMode {
     }
 }
 
+/// Sub-mode for the tag editor while [`Field::Tags`] is focused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TagMode {
+    /// Browsing / removing existing tags. The cursor selects one chip.
+    List,
+    /// Typing a new tag with autocompletion from the repo's known tags.
+    Add,
+}
+
 /// The logical fields of the form, in navigation order. The `Tab`/`Shift-Tab`
 /// keys move between adjacent variants; the modal renders one row per field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,8 +136,16 @@ pub struct EditForm {
     pub due: Input,
     pub start: Input,
     pub priority: Priority,
-    /// Free-entry tag input; committed tags live in `tags`.
+    /// Sub-mode for the tag field (browsing existing vs. typing new).
+    pub tag_mode: TagMode,
+    /// Selected chip index in [`TagMode::List`].
+    pub tag_cursor: usize,
+    /// Free-entry tag input; used while in [`TagMode::Add`].
     pub tag_input: Input,
+    /// Filtered autocomplete suggestions shown while in [`TagMode::Add`].
+    pub tag_suggestions: Vec<String>,
+    /// Selected suggestion index in [`TagMode::Add`].
+    pub suggestion_cursor: usize,
     /// The working tag list (mutated by add/remove during editing).
     pub tags: Vec<String>,
     pub assignee: Input,
@@ -149,6 +166,9 @@ pub struct EditForm {
     pub data_key: Input,
     pub data_value: Input,
 
+    /// All tags known to exist in the repository; used for autocomplete.
+    known_tags: Vec<String>,
+
     // ── Originals, for clear-semantics & recurrence anchor preservation ──────
     orig_due: Option<NaiveDate>,
     orig_start: Option<NaiveDate>,
@@ -164,7 +184,10 @@ pub struct EditForm {
 impl EditForm {
     /// Seeds a form from `task`. Every field is populated from the task's
     /// current value (dates rendered as ISO so the round-trip is loss-free).
-    pub fn from_task(task: &Task) -> Self {
+    ///
+    /// `known_tags` is the full list of tags that exist in the repository,
+    /// used to power the tag autocomplete in [`TagMode::Add`].
+    pub fn from_task(task: &Task, known_tags: Vec<String>) -> Self {
         let date_str = |d: Option<NaiveDate>| d.map(|d| d.to_string()).unwrap_or_default();
 
         let (recur_mode, recur_rule, recur_completion, recur_snap) = match &task.recurrence {
@@ -204,7 +227,11 @@ impl EditForm {
             due: Input::new(date_str(task.due)),
             start: Input::new(date_str(task.start)),
             priority: task.priority.clone(),
+            tag_mode: TagMode::List,
+            tag_cursor: 0,
             tag_input: Input::default(),
+            tag_suggestions: Vec::new(),
+            suggestion_cursor: 0,
             tags: task.tags.clone(),
             assignee: Input::new(task.assignee.clone().unwrap_or_default()),
             url: Input::new(task.url.clone().unwrap_or_default()),
@@ -219,6 +246,7 @@ impl EditForm {
             data: data.clone(),
             data_key: Input::default(),
             data_value: Input::default(),
+            known_tags,
             orig_due: task.due,
             orig_start: task.start,
             orig_assignee: task.assignee.clone(),
@@ -235,12 +263,31 @@ impl EditForm {
 
     /// Move focus to the next field.
     pub fn focus_next(&mut self) {
+        self.leave_tag_add_mode();
         self.focus = self.focus.next();
     }
 
     /// Move focus to the previous field.
     pub fn focus_prev(&mut self) {
+        self.leave_tag_add_mode();
         self.focus = self.focus.prev();
+    }
+
+    /// Whether the tag editor is in Add mode with suggestions available,
+    /// meaning Up/Down should navigate suggestions rather than move fields.
+    pub fn tags_wants_vertical_nav(&self) -> bool {
+        self.focus == Field::Tags
+            && self.tag_mode == TagMode::Add
+            && !self.tag_suggestions.is_empty()
+    }
+
+    fn leave_tag_add_mode(&mut self) {
+        if self.focus == Field::Tags && self.tag_mode == TagMode::Add {
+            self.tag_input = Input::default();
+            self.tag_suggestions.clear();
+            self.suggestion_cursor = 0;
+            self.tag_mode = TagMode::List;
+        }
     }
 
     /// Whether the focused field is a multi-line textarea (so the modal knows
@@ -346,24 +393,90 @@ impl EditForm {
     }
 
     fn handle_tags_key(&mut self, key: KeyEvent, ev: &ratatui::crossterm::event::Event) {
+        match self.tag_mode {
+            TagMode::List => self.handle_tags_list_key(key),
+            TagMode::Add => self.handle_tags_add_key(key, ev),
+        }
+    }
+
+    fn handle_tags_list_key(&mut self, key: KeyEvent) {
         match key.code {
-            // Enter commits the free-entry tag (validation happens at save).
+            KeyCode::Left => {
+                self.tag_cursor = self.tag_cursor.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                if !self.tags.is_empty() {
+                    self.tag_cursor = (self.tag_cursor + 1).min(self.tags.len() - 1);
+                }
+            }
+            KeyCode::Delete | KeyCode::Backspace => {
+                if !self.tags.is_empty() {
+                    self.tags.remove(self.tag_cursor);
+                    if self.tag_cursor >= self.tags.len() {
+                        self.tag_cursor = self.tags.len().saturating_sub(1);
+                    }
+                }
+            }
+            // Any printable character seeds the Add mode input.
+            KeyCode::Char(c) => {
+                self.tag_mode = TagMode::Add;
+                self.tag_input = Input::new(c.to_string());
+                self.rebuild_suggestions();
+            }
             KeyCode::Enter => {
-                let t = self.tag_input.value().trim().to_owned();
-                if !t.is_empty() && !self.tags.contains(&t) {
-                    self.tags.push(t);
+                self.tag_mode = TagMode::Add;
+                self.tag_input = Input::default();
+                self.rebuild_suggestions();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_tags_add_key(&mut self, key: KeyEvent, ev: &ratatui::crossterm::event::Event) {
+        match key.code {
+            KeyCode::Up => {
+                self.suggestion_cursor = self.suggestion_cursor.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                if !self.tag_suggestions.is_empty() {
+                    self.suggestion_cursor =
+                        (self.suggestion_cursor + 1).min(self.tag_suggestions.len() - 1);
+                }
+            }
+            KeyCode::Enter => {
+                let tag = if !self.tag_suggestions.is_empty() {
+                    self.tag_suggestions[self.suggestion_cursor].clone()
+                } else {
+                    self.tag_input.value().trim().to_owned()
+                };
+                if !tag.is_empty() && !self.tags.contains(&tag) {
+                    self.tags.push(tag);
+                    self.tag_cursor = self.tags.len() - 1;
                 }
                 self.tag_input = Input::default();
-            }
-            // Ctrl-D removes the last committed tag (a simple, keyboard-only way
-            // to drop a tag without a separate selection cursor).
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.tags.pop();
+                self.tag_suggestions.clear();
+                self.suggestion_cursor = 0;
+                self.tag_mode = TagMode::List;
             }
             _ => {
                 self.tag_input.handle_event(ev);
+                // Rebuild suggestions and reset the selection after every keystroke.
+                self.rebuild_suggestions();
+                self.suggestion_cursor = 0;
             }
         }
+    }
+
+    fn rebuild_suggestions(&mut self) {
+        let input = self.tag_input.value().to_lowercase();
+        self.tag_suggestions = self
+            .known_tags
+            .iter()
+            .filter(|t| !self.tags.contains(t))
+            .filter(|t| input.is_empty() || t.to_lowercase().contains(input.as_str()))
+            .take(8)
+            .cloned()
+            .collect();
     }
 
     fn handle_data_value_key(&mut self, key: KeyEvent, ev: &ratatui::crossterm::event::Event) {
@@ -671,7 +784,7 @@ mod tests {
         task.assignee = Some("alice".into());
         task.url = Some("https://example.com".into());
         task.description = Some("line1\nline2".into());
-        let form = EditForm::from_task(&task);
+        let form = EditForm::from_task(&task, vec![]);
         assert_eq!(form.title.value(), "Original");
         assert_eq!(form.due.value(), "2026-07-01");
         assert_eq!(form.priority, Priority::High);
@@ -685,7 +798,7 @@ mod tests {
     fn unchanged_form_produces_noop_params() {
         let mut task = Task::new("Title");
         task.due = Some(d(2026, 7, 1));
-        let form = EditForm::from_task(&task);
+        let form = EditForm::from_task(&task, vec![]);
         let p = form.to_edit_params(today()).unwrap();
         // No clear flags for unchanged set fields.
         assert!(!p.clear_due);
@@ -705,7 +818,7 @@ mod tests {
         task.assignee = Some("alice".into());
         task.url = Some("https://example.com".into());
         task.description = Some("desc".into());
-        let mut form = EditForm::from_task(&task);
+        let mut form = EditForm::from_task(&task, vec![]);
         form.due = Input::default();
         form.assignee = Input::default();
         form.url = Input::default();
@@ -722,7 +835,7 @@ mod tests {
     #[test]
     fn emptying_an_unset_field_is_noop() {
         let task = Task::new("Title");
-        let form = EditForm::from_task(&task);
+        let form = EditForm::from_task(&task, vec![]);
         let p = form.to_edit_params(today()).unwrap();
         assert!(!p.clear_due);
         assert!(!p.clear_assignee);
@@ -732,7 +845,7 @@ mod tests {
     #[test]
     fn empty_title_is_error() {
         let task = Task::new("Title");
-        let mut form = EditForm::from_task(&task);
+        let mut form = EditForm::from_task(&task, vec![]);
         form.title = Input::new("   ".to_owned());
         assert!(form.to_edit_params(today()).is_err());
     }
@@ -741,7 +854,7 @@ mod tests {
     fn tag_diff_add_and_remove() {
         let mut task = Task::new("Title");
         task.tags = vec!["@work".into(), "#laptop".into()];
-        let mut form = EditForm::from_task(&task);
+        let mut form = EditForm::from_task(&task, vec![]);
         // Remove #laptop, add urgent.
         form.tags = vec!["@work".into(), "urgent".into()];
         let p = form.to_edit_params(today()).unwrap();
@@ -752,7 +865,7 @@ mod tests {
     #[test]
     fn invalid_added_tag_is_error() {
         let task = Task::new("Title");
-        let mut form = EditForm::from_task(&task);
+        let mut form = EditForm::from_task(&task, vec![]);
         form.tags = vec!["bad..tag".into()];
         assert!(form.to_edit_params(today()).is_err());
     }
@@ -760,7 +873,7 @@ mod tests {
     #[test]
     fn invalid_url_is_error() {
         let task = Task::new("Title");
-        let mut form = EditForm::from_task(&task);
+        let mut form = EditForm::from_task(&task, vec![]);
         form.url = Input::new("ftp://nope".to_owned());
         assert!(form.to_edit_params(today()).is_err());
     }
@@ -768,7 +881,7 @@ mod tests {
     #[test]
     fn natural_language_due_resolves() {
         let task = Task::new("Title");
-        let mut form = EditForm::from_task(&task);
+        let mut form = EditForm::from_task(&task, vec![]);
         form.due = Input::new("2026-08-15".to_owned());
         let p = form.to_edit_params(today()).unwrap();
         assert_eq!(p.due, Some(d(2026, 8, 15)));
@@ -777,7 +890,7 @@ mod tests {
     #[test]
     fn priority_cycles() {
         let task = Task::new("Title");
-        let mut form = EditForm::from_task(&task);
+        let mut form = EditForm::from_task(&task, vec![]);
         form.focus = Field::Priority;
         let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
         let start = form.priority.clone();
@@ -791,7 +904,7 @@ mod tests {
     fn recurrence_none_clears() {
         let mut task = Task::new("Title");
         task.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
-        let mut form = EditForm::from_task(&task);
+        let mut form = EditForm::from_task(&task, vec![]);
         form.recur_mode = RecurMode::None;
         let p = form.to_edit_params(today()).unwrap();
         assert!(p.clear_recurrence);
@@ -807,7 +920,7 @@ mod tests {
             anchor,
             snap: None,
         });
-        let mut form = EditForm::from_task(&task);
+        let mut form = EditForm::from_task(&task, vec![]);
         // Change the rule but keep schedule mode → anchor must be preserved.
         form.recur_rule = Input::new("FREQ=WEEKLY;BYDAY=TU".to_owned());
         let p = form.to_edit_params(today()).unwrap();
@@ -824,7 +937,7 @@ mod tests {
     #[test]
     fn recurrence_new_schedule_anchors_on_due() {
         let task = Task::new("Title");
-        let mut form = EditForm::from_task(&task);
+        let mut form = EditForm::from_task(&task, vec![]);
         form.recur_mode = RecurMode::Schedule;
         form.recur_rule = Input::new("FREQ=MONTHLY;BYMONTHDAY=1".to_owned());
         form.due = Input::new("2026-09-10".to_owned());
@@ -840,7 +953,7 @@ mod tests {
     #[test]
     fn recurrence_completion_builds_interval_and_snap() {
         let task = Task::new("Title");
-        let mut form = EditForm::from_task(&task);
+        let mut form = EditForm::from_task(&task, vec![]);
         form.recur_mode = RecurMode::Completion;
         form.recur_completion = Input::new("14".to_owned());
         form.recur_snap = Input::new("friday".to_owned());
@@ -857,7 +970,7 @@ mod tests {
     #[test]
     fn recurrence_invalid_rrule_is_error() {
         let task = Task::new("Title");
-        let mut form = EditForm::from_task(&task);
+        let mut form = EditForm::from_task(&task, vec![]);
         form.recur_mode = RecurMode::Schedule;
         form.recur_rule = Input::new("NONSENSE".to_owned());
         assert!(form.to_edit_params(today()).is_err());
@@ -870,7 +983,7 @@ mod tests {
         let mut task = Task::new("Title");
         task.data.insert("keep".into(), serde_json::json!(1));
         task.data.insert("drop".into(), serde_json::json!("x"));
-        let mut form = EditForm::from_task(&task);
+        let mut form = EditForm::from_task(&task, vec![]);
         // Add a new key, change "keep", delete "drop".
         form.data.insert("new".into(), serde_json::json!(true));
         form.data.insert("keep".into(), serde_json::json!(2));
@@ -887,7 +1000,123 @@ mod tests {
     fn data_changes_empty_when_unchanged() {
         let mut task = Task::new("Title");
         task.data.insert("a".into(), serde_json::json!(1));
-        let form = EditForm::from_task(&task);
+        let form = EditForm::from_task(&task, vec![]);
         assert!(form.data_changes().is_empty());
+    }
+
+    // ── tag editor ───────────────────────────────────────────────────────────
+
+    fn press(form: &mut EditForm, code: KeyCode) {
+        form.focus = Field::Tags;
+        form.handle_field_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn tag_list_left_right_moves_cursor() {
+        let mut task = Task::new("T");
+        task.tags = vec!["@a".into(), "@b".into(), "@c".into()];
+        let mut form = EditForm::from_task(&task, vec![]);
+        assert_eq!(form.tag_cursor, 0);
+        press(&mut form, KeyCode::Right);
+        assert_eq!(form.tag_cursor, 1);
+        press(&mut form, KeyCode::Right);
+        assert_eq!(form.tag_cursor, 2);
+        // Cannot go past the last tag.
+        press(&mut form, KeyCode::Right);
+        assert_eq!(form.tag_cursor, 2);
+        press(&mut form, KeyCode::Left);
+        assert_eq!(form.tag_cursor, 1);
+    }
+
+    #[test]
+    fn tag_list_delete_removes_selected() {
+        let mut task = Task::new("T");
+        task.tags = vec!["@a".into(), "@b".into(), "@c".into()];
+        let mut form = EditForm::from_task(&task, vec![]);
+        // Move cursor to the middle tag and delete it.
+        press(&mut form, KeyCode::Right);
+        press(&mut form, KeyCode::Delete);
+        assert_eq!(form.tags, vec!["@a".to_owned(), "@c".to_owned()]);
+        // Cursor clamped to last valid index (index 1 → still valid at "@c").
+        assert_eq!(form.tag_cursor, 1);
+    }
+
+    #[test]
+    fn tag_list_delete_clamps_cursor_when_last_removed() {
+        let mut task = Task::new("T");
+        task.tags = vec!["@a".into(), "@b".into()];
+        let mut form = EditForm::from_task(&task, vec![]);
+        press(&mut form, KeyCode::Right); // cursor = 1 (@b)
+        press(&mut form, KeyCode::Delete);
+        assert_eq!(form.tags, vec!["@a".to_owned()]);
+        assert_eq!(form.tag_cursor, 0, "cursor clamped to last remaining tag");
+    }
+
+    #[test]
+    fn tag_enter_switches_to_add_mode() {
+        let task = Task::new("T");
+        let mut form = EditForm::from_task(&task, vec!["@work".into(), "@home".into()]);
+        press(&mut form, KeyCode::Enter);
+        assert_eq!(form.tag_mode, TagMode::Add);
+    }
+
+    #[test]
+    fn tag_add_suggestions_filtered_by_input() {
+        let task = Task::new("T");
+        let known = vec!["@work".into(), "@home".into(), "@hobby".into()];
+        let mut form = EditForm::from_task(&task, known);
+        press(&mut form, KeyCode::Enter); // enter Add mode
+        // Type 'h' — should match @home and @hobby.
+        press(&mut form, KeyCode::Char('h'));
+        assert_eq!(form.tag_suggestions, vec!["@home".to_owned(), "@hobby".to_owned()]);
+    }
+
+    #[test]
+    fn tag_add_suggestions_exclude_existing_tags() {
+        let mut task = Task::new("T");
+        task.tags = vec!["@work".into()];
+        let known = vec!["@work".into(), "@home".into()];
+        let mut form = EditForm::from_task(&task, known);
+        press(&mut form, KeyCode::Enter);
+        // No filter text → all non-owned known tags shown.
+        assert_eq!(form.tag_suggestions, vec!["@home".to_owned()]);
+    }
+
+    #[test]
+    fn tag_add_enter_picks_suggestion() {
+        let task = Task::new("T");
+        let known = vec!["@work".into(), "@home".into()];
+        let mut form = EditForm::from_task(&task, known);
+        press(&mut form, KeyCode::Enter); // enter Add mode
+        // Down once to select @home (index 1).
+        press(&mut form, KeyCode::Down);
+        press(&mut form, KeyCode::Enter); // commit
+        assert_eq!(form.tags, vec!["@home".to_owned()]);
+        assert_eq!(form.tag_mode, TagMode::List);
+    }
+
+    #[test]
+    fn tag_add_enter_with_no_suggestion_uses_typed_text() {
+        let task = Task::new("T");
+        let mut form = EditForm::from_task(&task, vec![]);
+        press(&mut form, KeyCode::Enter); // enter Add mode
+        // Type a new tag not in known_tags.
+        press(&mut form, KeyCode::Char('@'));
+        press(&mut form, KeyCode::Char('a'));
+        press(&mut form, KeyCode::Char('i'));
+        press(&mut form, KeyCode::Enter); // commit typed text
+        assert_eq!(form.tags, vec!["@ai".to_owned()]);
+        assert_eq!(form.tag_mode, TagMode::List);
+    }
+
+    #[test]
+    fn tag_focus_next_resets_add_mode() {
+        let task = Task::new("T");
+        let mut form = EditForm::from_task(&task, vec!["@x".into()]);
+        press(&mut form, KeyCode::Enter); // enter Add mode
+        assert_eq!(form.tag_mode, TagMode::Add);
+        form.focus_next(); // leaving Tags field
+        assert_eq!(form.tag_mode, TagMode::List);
+        assert!(form.tag_suggestions.is_empty());
     }
 }
