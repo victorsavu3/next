@@ -407,7 +407,6 @@ pub fn apply_edits(
 
     let _ = today; // held for future use
 
-    task.touch();
     let task_path = storage::task_path(repo_root, &task);
     store.save_task(&task)?;
     vcs.commit(&[task_path], &format!("next: edit {}", task.title))?;

@@ -79,7 +79,6 @@ fn set(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let task_id = ctx.transaction(|store, vcs, root| {
         let mut task = store.get_task(id)?;
         task.data.insert(key.to_owned(), value.clone());
-        task.touch();
 
         let task_path = storage::task_path(root, &task);
         store.save_task(&task)?;
@@ -108,7 +107,6 @@ fn unset(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
             anyhow::bail!("task [{}] has no data key {key:?}", &task.id.to_string()[..8]);
         }
         task.data.remove(key);
-        task.touch();
 
         let task_path = storage::task_path(root, &task);
         store.save_task(&task)?;

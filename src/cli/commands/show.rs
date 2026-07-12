@@ -118,10 +118,6 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
         "Created:  {}",
         task.created_at.format("%Y-%m-%d %H:%M UTC")
     );
-    println!(
-        "Updated:  {}",
-        task.updated_at.format("%Y-%m-%d %H:%M UTC")
-    );
     if let Some(completed) = task.completed_at {
         println!("Completed: {}", completed.format("%Y-%m-%d"));
     }

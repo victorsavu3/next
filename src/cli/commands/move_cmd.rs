@@ -29,7 +29,6 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
             None => {}
         }
 
-        task.touch();
         store.save_task(&task)?;
 
         let task_path = crate::core::storage::task_path(root, &task);

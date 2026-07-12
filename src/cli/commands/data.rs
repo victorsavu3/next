@@ -60,7 +60,6 @@ fn set(ctx: &mut AppContext, args: SetArgs) -> anyhow::Result<()> {
     ctx.repo.transaction(|store, vcs, root| {
         let mut task = store.get_task(id)?;
         task.data.insert(args.key.clone(), value.clone());
-        task.touch();
 
         let task_path = crate::core::storage::task_path(root, &task);
         store.save_task(&task)?;
@@ -86,7 +85,6 @@ fn unset(ctx: &mut AppContext, args: UnsetArgs) -> anyhow::Result<()> {
             anyhow::bail!("task [{}] has no data key {:?}", &task.id.to_string()[..8], args.key);
         }
         task.data.remove(&args.key);
-        task.touch();
 
         let task_path = crate::core::storage::task_path(root, &task);
         store.save_task(&task)?;

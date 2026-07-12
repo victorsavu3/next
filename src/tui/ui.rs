@@ -423,10 +423,6 @@ fn detail_lines(detail: &DetailData, today: NaiveDate, width: usize) -> Vec<Line
         "Created",
         task.created_at.format("%Y-%m-%d %H:%M UTC").to_string(),
     ));
-    lines.push(field(
-        "Updated",
-        task.updated_at.format("%Y-%m-%d %H:%M UTC").to_string(),
-    ));
     if let Some(completed) = task.completed_at {
         lines.push(field("Completed", completed.format("%Y-%m-%d").to_string()));
     }
@@ -1445,7 +1441,6 @@ mod tests {
         assert!(text.contains("Slug: rich-task"));
         assert!(text.contains("Recur: 7d after completion"));
         assert!(text.contains("Created: "));
-        assert!(text.contains("Updated: "));
         // Data entries sorted: alpha before zeta.
         let a = text.find("Data[alpha]").unwrap();
         let z = text.find("Data[zeta]").unwrap();

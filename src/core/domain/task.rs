@@ -141,13 +141,10 @@ pub struct Task {
 
     /// The date on which the task was completed. Set when the task is marked
     /// done (see [`Task::mark_done`]); `None` while the task is unresolved.
-    /// May be backdated relative to `updated_at` when a completion date is
-    /// supplied explicitly.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<NaiveDate>,
 
     pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -241,7 +238,6 @@ impl Task {
             recurrence_id: None,
             completed_at: None,
             created_at: now,
-            updated_at: now,
         }
     }
 
@@ -266,33 +262,28 @@ impl Task {
         matches!(self.status, Status::Open | Status::Started)
     }
 
-    /// Marks the task as started (in-progress), logs the event in `data["time_log"]`,
-    /// and sets `updated_at` to now.
+    /// Marks the task as started (in-progress) and logs the event in `data["time_log"]`.
     pub fn mark_started(&mut self) {
         self.status = Status::Started;
-        self.updated_at = Utc::now();
         self.append_time_event("start");
     }
 
-    /// Marks the task as stopped (back to open), logs the event in `data["time_log"]`,
-    /// and sets `updated_at` to now.
+    /// Marks the task as stopped (back to open) and logs the event in `data["time_log"]`.
     pub fn mark_stopped(&mut self) {
         self.status = Status::Open;
-        self.updated_at = Utc::now();
         self.append_time_event("stop");
     }
 
     fn append_time_event(&mut self, event: &str) {
         use serde_json::json;
-        let entry = json!({"event": event, "at": self.updated_at.to_rfc3339()});
+        let entry = json!({"event": event, "at": Utc::now().to_rfc3339()});
         let log = self.data.entry("time_log".to_owned()).or_insert_with(|| serde_json::Value::Array(vec![]));
         if let serde_json::Value::Array(arr) = log {
             arr.push(entry);
         }
     }
 
-    /// Marks the task as done, records `completion_date` in `completed_at`,
-    /// and sets `updated_at` to now.
+    /// Marks the task as done and records `completion_date` in `completed_at`.
     ///
     /// `completion_date` is the date the work is considered finished. It is
     /// usually today but may be backdated (e.g. via `next done --completed-at`),
@@ -300,18 +291,11 @@ impl Task {
     pub fn mark_done(&mut self, completion_date: NaiveDate) {
         self.status = Status::Done;
         self.completed_at = Some(completion_date);
-        self.updated_at = Utc::now();
     }
 
-    /// Marks the task as cancelled and sets `updated_at` to now.
+    /// Marks the task as cancelled.
     pub fn mark_cancelled(&mut self) {
         self.status = Status::Cancelled;
-        self.updated_at = Utc::now();
-    }
-
-    /// Touches `updated_at` without changing any other field.
-    pub fn touch(&mut self) {
-        self.updated_at = Utc::now();
     }
 }
 

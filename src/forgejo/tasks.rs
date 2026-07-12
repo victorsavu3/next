@@ -119,7 +119,6 @@ impl TaskStore for LibTaskStore {
             if !labels.is_empty() {
                 t.data.insert(keys::LABELS.into(), json!(labels));
             }
-            t.touch();
             let path = storage::task_path(root, &t);
             store.save_task(&t)?;
             vcs.commit(&[path], &format!("next: forgejo link {repo}#{number}"))?;

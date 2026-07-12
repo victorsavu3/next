@@ -1256,7 +1256,6 @@ impl App {
                         t.data.remove(&key);
                     }
                 }
-                t.touch();
                 let path = crate::core::storage::task_path(root, &t);
                 store.save_task(&t)?;
                 vcs.commit(&[path], &format!("next: data edit {key} on {}", t.title))?;
@@ -1567,7 +1566,6 @@ impl App {
         let result = self.repo.transaction(|store, vcs, root| {
             let mut t = store.get_task(task_id)?;
             t.parent_id = new_parent;
-            t.touch();
             store.save_task(&t)?;
             let path = crate::core::storage::task_path(root, &t);
             vcs.commit(&[path], &format!("next: move {}", t.title))?;
