@@ -385,34 +385,14 @@ pub fn dispatch(
     result
 }
 
-/// Classifies an error as user-facing or internal.
+/// Returns the full error chain as a string for the MCP client.
 ///
-/// User-facing errors describe a problem with the request (wrong ID, invalid
-/// argument, etc.) and are safe to return verbatim.  Internal errors contain
-/// system details (file paths, git internals) that must not be disclosed; they
-/// are logged with full context and replaced by a short generic message.
+/// The full chain (`{err:#}`) is both logged server-side and returned to the
+/// client so that callers can diagnose failures without needing server log access.
 fn sanitize_error(err: &anyhow::Error, tool_name: &str) -> String {
-    // Attempt to downcast to the structured TaskError type.
-    if let Some(app_err) = err.downcast_ref::<TaskError>() {
-        match app_err {
-            // User-facing: safe to return verbatim.
-            TaskError::TaskNotFound(_)
-            | TaskError::InvalidDate(_, _)
-            | TaskError::AmbiguousId(_, _)
-            | TaskError::SlugConflict(_)
-            | TaskError::GitConflict(_) => return app_err.to_string(),
-
-            // Internal: log and sanitize.
-            TaskError::Io(_) | TaskError::Other(_) => {
-                tracing::error!(cmd = %format!("mcp/{tool_name}"), "{err:#}");
-                return "storage error".to_owned();
-            }
-        }
-    }
-
-    // Unknown / anyhow-only error chains — treat as internal.
-    tracing::error!(cmd = %format!("mcp/{tool_name}"), "{err:#}");
-    "internal error".to_owned()
+    let full = format!("{err:#}");
+    tracing::error!(cmd = %format!("mcp/{tool_name}"), "{full}");
+    full
 }
 
 fn call_tool(
@@ -544,41 +524,22 @@ mod tests {
         (dir, ctx)
     }
 
-    /// Internal errors (TaskError::Io / TaskError::Other with file paths) must be
-    /// sanitized — the client message must not contain filesystem paths.
+    /// Errors include the full chain so callers can diagnose failures.
     #[test]
-    fn sanitize_error_strips_filesystem_path() {
+    fn sanitize_error_returns_full_chain() {
         let io_err = std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "permission denied",
         );
         let app_err = TaskError::Io(io_err);
         let anyhow_err = anyhow::anyhow!(app_err)
-            .context("reading /home/victor/tasks/foo.toml".to_string());
+            .context("reading tasks/foo.toml".to_string());
 
         let msg = sanitize_error(&anyhow_err, "add_task");
-        assert_eq!(msg, "storage error", "expected generic storage error, got: {msg}");
-        assert!(
-            !msg.contains("/home/"),
-            "client message must not contain a filesystem path: {msg}",
-        );
+        assert!(msg.contains("permission denied"), "expected IO description, got: {msg}");
     }
 
-    /// TaskError::Other that embeds an absolute path must not reach the client.
-    #[test]
-    fn sanitize_error_other_strips_path() {
-        let app_err = TaskError::Other(
-            "path not inside repository: /home/victor/.config/task-manager/config.toml".into(),
-        );
-        let anyhow_err = anyhow::anyhow!(app_err);
-
-        let msg = sanitize_error(&anyhow_err, "update_task");
-        assert_eq!(msg, "storage error");
-        assert!(!msg.contains("/home/"), "path must be stripped: {msg}");
-    }
-
-    /// User-facing errors (TaskNotFound, InvalidDate, etc.) must still be
-    /// returned verbatim so the client can act on them.
+    /// User-facing errors include their full detail.
     #[test]
     fn sanitize_error_preserves_user_facing_errors() {
         let not_found = anyhow::anyhow!(TaskError::TaskNotFound("abc123".into()));
@@ -595,18 +556,16 @@ mod tests {
         assert!(msg.contains("my-task"), "slug conflict should mention slug: {msg}");
     }
 
-    /// dispatch() must not expose filesystem paths through the CallToolResult.
+    /// dispatch() surfaces a descriptive error result (is_error=true) when a
+    /// write fails.
     #[test]
-    fn dispatch_internal_error_no_path_disclosure() {
+    fn dispatch_internal_error_returns_error_result() {
         let (_dir, mut ctx) = make_ctx();
         let scheduler = crate::mcp::sync_manager::SyncScheduler::new_for_test();
 
-        // Corrupt the backing store path to force an IO error on the next write.
-        // We achieve this by replacing the tasks directory with a file, then
-        // attempting to add a task (which needs to write into that directory).
+        // Replace the tasks directory with a file so writes fail.
         let tasks_dir = ctx.repo_root.join("tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
-        // Remove the dir and put a file in its place so writes fail.
         std::fs::remove_dir(&tasks_dir).unwrap();
         std::fs::write(&tasks_dir, b"not a directory").unwrap();
 
@@ -615,14 +574,7 @@ mod tests {
 
         assert_eq!(result.is_error, Some(true), "expected an error result");
         let text = &result.content[0].text;
-        assert!(
-            !text.contains("/home/"),
-            "response must not contain home path, got: {text}",
-        );
-        assert!(
-            !text.contains(ctx.repo_root.to_str().unwrap()),
-            "response must not contain repo root path, got: {text}",
-        );
+        assert!(!text.is_empty(), "error message must not be empty");
     }
 
     // ── server_instructions ─────────────────────────────────────────────────
