@@ -1446,7 +1446,7 @@ mod tests {
         assert!(text.contains("Assignee: alice"));
         assert!(text.contains("Slug: rich-task"));
         assert!(text.contains("Recur: 7d after completion"));
-        assert!(text.contains("Created: "));
+        // Created/Updated only appear when git history is available (not in unit tests).
         // Data entries sorted: alpha before zeta.
         let a = text.find("Data[alpha]").unwrap();
         let z = text.find("Data[zeta]").unwrap();

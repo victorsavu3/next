@@ -172,13 +172,13 @@ mod tests {
     }
 
     #[test]
-    fn forecast_does_not_project_completion_or_done() {
+    fn forecast_done_task_not_shown_completion_task_projected() {
         let (_dir, mut ctx) = make_ctx();
         use crate::core::domain::task::{Recurrence, Status, Task};
         use crate::core::storage;
         let today = Local::now().date_naive();
 
-        // Completion-type recurrence: not projected (only the concrete instance shows).
+        // Completion-type recurrence: concrete instance + projected future occurrences.
         let mut completion = Task::new("Water plants".to_owned());
         completion.due = Some(today + chrono::Duration::days(2));
         completion.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
@@ -186,7 +186,7 @@ mod tests {
         ctx.store.save_task(&completion).unwrap();
         ctx.vcs.commit(&[p1], "next: add Water plants").unwrap();
 
-        // Done schedule task: neither concrete nor projected (done is filtered out).
+        // Done schedule task: filtered out entirely (done is excluded by default).
         let mut done = Task::new("Old review".to_owned());
         done.due = Some(today + chrono::Duration::days(1));
         done.status = Status::Done;
@@ -201,9 +201,12 @@ mod tests {
 
         let result = get_forecast(&serde_json::json!({ "horizon_days": 30 }), &mut ctx).unwrap();
         let arr = result.as_array().unwrap();
-        // Only the single concrete completion-type task, no projections.
-        assert!(arr.iter().all(|e| e["projected"] == serde_json::json!(false)));
+        // Done task must not appear at all.
         assert!(arr.iter().all(|e| e["title"] != serde_json::json!("Old review")));
-        assert_eq!(arr.len(), 1);
+        // Completion-type task: one concrete + projected occurrences (7-day interval, 30-day horizon).
+        let concrete: Vec<_> = arr.iter().filter(|e| e["projected"] == serde_json::json!(false)).collect();
+        let projected: Vec<_> = arr.iter().filter(|e| e["projected"] == serde_json::json!(true)).collect();
+        assert_eq!(concrete.len(), 1, "one concrete instance expected");
+        assert!(!projected.is_empty(), "projected occurrences expected for completion recurrence");
     }
 }

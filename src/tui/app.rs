@@ -495,6 +495,7 @@ impl App {
             &filter_set,
             self.today,
             self.forecast_view.horizon(),
+            &self.task_dates,
         )
     }
 

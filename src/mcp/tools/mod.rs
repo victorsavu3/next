@@ -9,7 +9,6 @@ use std::fmt::Write as _;
 use serde_json::{json, Value};
 
 use crate::core::domain::tag::TagMeta;
-use crate::core::error::TaskError;
 use crate::TaskRepository;
 
 use self::tags::{CatalogEntry, TagCatalog};
@@ -503,6 +502,7 @@ fn run_autosync(autosync: bool, ctx: &mut TaskRepository, scheduler: &super::syn
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::error::TaskError;
     use crate::TaskRepository;
     use tempfile::TempDir;
 
