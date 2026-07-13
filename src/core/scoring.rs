@@ -1,9 +1,22 @@
 use std::collections::HashMap;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use uuid::Uuid;
 
 use serde::{Deserialize, Serialize};
+
+/// Git-derived timestamps for a task file — creation and last modification.
+///
+/// Both timestamps come from git history: `created_at` is the author time of
+/// the first commit that added the task file; `updated_at` is the author time
+/// of the most recent commit touching it.
+///
+/// Keyed by full task UUID in the maps passed to [`score_and_sort`].
+#[derive(Debug, Clone)]
+pub struct TaskDates {
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
 
 use crate::core::domain::{
     tag::TagMeta,
@@ -219,12 +232,16 @@ pub fn project_factor(parent_priority: Option<&Priority>, w: &ScoringConfig) -> 
 /// Age contribution to the urgency score.
 ///
 /// Grows linearly with age (days since creation) up to `age_max`.
-/// Returns 0.0 when age scoring is disabled for the task (long-term or future start date).
-pub fn age_factor(task: &Task, today: NaiveDate, w: &ScoringConfig) -> f64 {
+/// Returns 0.0 when age scoring is disabled for the task (long-term or future start date)
+/// or when no git creation date is available.
+pub fn age_factor(task: &Task, created_at: Option<DateTime<Utc>>, today: NaiveDate, w: &ScoringConfig) -> f64 {
     if task.age_scoring_disabled(today) {
         return 0.0;
     }
-    let age_days = (today - task.created_at.date_naive()).num_days().max(0) as f64;
+    let Some(created) = created_at else {
+        return 0.0;
+    };
+    let age_days = (today - created.date_naive()).num_days().max(0) as f64;
     (age_days * w.age_per_day).min(w.age_max)
 }
 
@@ -258,10 +275,12 @@ pub fn tag_no_time_urgency(tags: &[String], tag_metas: &HashMap<String, TagMeta>
 /// Computes the total urgency score for `task`.
 ///
 /// `parent` is the parent task (if any); its priority and tags both contribute.
+/// `task_dates` provides git-derived creation/update times; `None` disables age scoring.
 /// `tag_metas` is the full tag-metadata map from the store.
 pub fn score(
     task: &Task,
     parent: Option<&Task>,
+    task_dates: &HashMap<Uuid, TaskDates>,
     today: NaiveDate,
     w: &ScoringConfig,
     tag_metas: &HashMap<String, TagMeta>,
@@ -269,11 +288,12 @@ pub fn score(
     let no_time = tag_no_time_urgency(&task.tags, tag_metas);
     let own_tags = tag_factor(&task.tags, tag_metas, w);
     let parent_tags = parent.map_or(0.0, |p| tag_factor(&p.tags, tag_metas, w));
+    let created_at = task_dates.get(&task.id).map(|d| d.created_at);
 
     (if no_time { 0.0 } else { due_factor(task.due, today, w) })
         + priority_factor(&task.priority, w)
         + project_factor(parent.map(|p| &p.priority), w)
-        + (if no_time { 0.0 } else { age_factor(task, today, w) })
+        + (if no_time { 0.0 } else { age_factor(task, created_at, today, w) })
         + own_tags
         + parent_tags
         + started_factor(&task.status, w)
@@ -284,15 +304,17 @@ pub fn score(
 pub fn score_with_breakdown(
     task: &Task,
     parent: Option<&Task>,
+    task_dates: &HashMap<Uuid, TaskDates>,
     today: NaiveDate,
     w: &ScoringConfig,
     tag_metas: &HashMap<String, TagMeta>,
 ) -> ScoreBreakdown {
     let no_time = tag_no_time_urgency(&task.tags, tag_metas);
+    let created_at = task_dates.get(&task.id).map(|d| d.created_at);
     let due       = if no_time { 0.0 } else { due_factor(task.due, today, w) };
     let priority  = priority_factor(&task.priority, w);
     let project   = project_factor(parent.map(|p| &p.priority), w);
-    let age       = if no_time { 0.0 } else { age_factor(task, today, w) };
+    let age       = if no_time { 0.0 } else { age_factor(task, created_at, today, w) };
     let tags      = tag_factor(&task.tags, tag_metas, w);
     let parent_tags = parent.map_or(0.0, |p| tag_factor(&p.tags, tag_metas, w));
     let started   = started_factor(&task.status, w);
@@ -306,12 +328,15 @@ pub fn score_with_breakdown(
 ///
 /// `all_tasks` is used to look up parent tasks for the project-priority factor.
 /// It should be the full, unfiltered task list.
+/// `task_dates` provides git-derived creation/update timestamps; pass an empty map
+/// when git history is unavailable (tests, new uncommitted tasks lose age scoring).
 pub fn score_and_sort(
     tasks: Vec<Task>,
     all_tasks: &[Task],
     today: NaiveDate,
     w: &ScoringConfig,
     tag_metas: &HashMap<String, TagMeta>,
+    task_dates: &HashMap<Uuid, TaskDates>,
 ) -> Vec<ScoredTask> {
     let by_id: HashMap<Uuid, &Task> = all_tasks.iter().map(|t| (t.id, t)).collect();
 
@@ -319,7 +344,7 @@ pub fn score_and_sort(
         .into_iter()
         .map(|task| {
             let parent = task.parent_id.and_then(|id| by_id.get(&id).copied());
-            let s = score(&task, parent, today, w, tag_metas);
+            let s = score(&task, parent, task_dates, today, w, tag_metas);
             ScoredTask { task, score: s }
         })
         .collect();
@@ -443,36 +468,35 @@ mod tests {
 
     #[test]
     fn age_factor_zero_age() {
-        let task = Task::new("new task"); // created_at ≈ now
-        let score = age_factor(&task, today(), &weights());
-        // Created just now so age in days ≈ 0 → factor ≈ 0
-        assert!(score < 0.01);
+        let task = Task::new("new task");
+        // No creation date available → graceful degradation to 0.
+        let score = age_factor(&task, None, today(), &weights());
+        assert_eq!(score, 0.0);
     }
 
     #[test]
     fn age_factor_long_term_returns_zero() {
         let mut task = Task::new("long-term");
         task.long_term = true;
-        assert_eq!(age_factor(&task, today(), &weights()), 0.0);
+        assert_eq!(age_factor(&task, None, today(), &weights()), 0.0);
     }
 
     #[test]
     fn age_factor_future_start_returns_zero() {
         let mut task = Task::new("future");
         task.start = Some(today() + chrono::Duration::days(7));
-        assert_eq!(age_factor(&task, today(), &weights()), 0.0);
+        assert_eq!(age_factor(&task, None, today(), &weights()), 0.0);
     }
 
     #[test]
     fn age_factor_caps_at_max() {
-        let mut task = Task::new("old task");
-        // Set created_at far in the past to force the cap.
+        let task = Task::new("old task");
+        // Pass a creation date far in the past to force the cap.
         // age_max=2.0, age_per_day=0.01 → 200 days to reach cap.
         let old_ts = chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        task.created_at = old_ts;
-        let score = age_factor(&task, today(), &weights());
+        let score = age_factor(&task, Some(old_ts), today(), &weights());
         assert_eq!(score, 2.0); // capped at age_max
     }
 
@@ -540,8 +564,8 @@ mod tests {
     #[test]
     fn score_no_due_medium_priority_no_parent() {
         let task = Task::new("simple task");
-        let s = score(&task, None, today(), &weights(), &HashMap::new());
-        // priority_medium=1.0, no due, no parent, age≈0
+        let s = score(&task, None, &HashMap::new(), today(), &weights(), &HashMap::new());
+        // priority_medium=1.0, no due, no parent, age=0 (no git dates)
         assert!((s - 1.0).abs() < 0.01);
     }
 
@@ -553,14 +577,18 @@ mod tests {
 
         let w = weights();
         let metas = HashMap::new();
-        assert!(score(&overdue, None, today(), &w, &metas) > score(&normal, None, today(), &w, &metas));
+        let dates: HashMap<Uuid, TaskDates> = HashMap::new();
+        assert!(
+            score(&overdue, None, &dates, today(), &w, &metas)
+                > score(&normal, None, &dates, today(), &w, &metas)
+        );
     }
 
     #[test]
     fn score_adjustment_applied() {
         let mut task = Task::new("boosted");
         task.score_adjustment = 5.0;
-        let s = score(&task, None, today(), &weights(), &HashMap::new());
+        let s = score(&task, None, &HashMap::new(), today(), &weights(), &HashMap::new());
         assert!((s - 6.0).abs() < 0.01); // 1.0 (medium) + 5.0 (adj) + 0 (age)
     }
 
@@ -568,9 +596,9 @@ mod tests {
     fn score_started_bonus_applied() {
         let mut task = Task::new("in progress");
         task.mark_started();
-        let s = score(&task, None, today(), &weights(), &HashMap::new());
-        // 1.0 (medium) + 4.0 (started) + ~0 (age, negligible right after mark_started)
-        assert!((s - 5.0).abs() < 0.1);
+        let s = score(&task, None, &HashMap::new(), today(), &weights(), &HashMap::new());
+        // 1.0 (medium) + 4.0 (started) + 0 (age, no git dates)
+        assert!((s - 5.0).abs() < 0.01);
     }
 
     #[test]
@@ -579,7 +607,7 @@ mod tests {
         task.tags = vec!["@work".to_string()];
         let mut metas = HashMap::new();
         metas.insert("@work".to_string(), meta_with_priority(Priority::High));
-        let s = score(&task, None, today(), &weights(), &metas);
+        let s = score(&task, None, &HashMap::new(), today(), &weights(), &metas);
         // 1.0 (medium) + 1.0 (tag_high) = 2.0
         assert!((s - 2.0).abs() < 0.01);
     }
@@ -593,8 +621,9 @@ mod tests {
         let mut metas = HashMap::new();
         metas.insert("@work".to_string(), meta_with_priority(Priority::High));
 
-        let child_score = score(&child, Some(&parent), today(), &weights(), &metas);
-        let orphan_score = score(&child, None, today(), &weights(), &metas);
+        let dates: HashMap<Uuid, TaskDates> = HashMap::new();
+        let child_score = score(&child, Some(&parent), &dates, today(), &weights(), &metas);
+        let orphan_score = score(&child, None, &dates, today(), &weights(), &metas);
         // child gets +1.0 from parent's @work tag
         assert!((child_score - orphan_score - 1.0).abs() < 0.01);
     }
@@ -607,7 +636,7 @@ mod tests {
         let normal = Task::new("normal");
 
         let all = vec![normal.clone(), urgent.clone()];
-        let scored = score_and_sort(vec![normal, urgent], &all, today(), &weights(), &HashMap::new());
+        let scored = score_and_sort(vec![normal, urgent], &all, today(), &weights(), &HashMap::new(), &HashMap::new());
 
         assert_eq!(scored[0].task.title, "urgent");
         assert!(scored[0].score > scored[1].score);
@@ -624,7 +653,7 @@ mod tests {
         let orphan = Task::new("no parent");
 
         let all = vec![parent.clone(), child.clone(), orphan.clone()];
-        let scored = score_and_sort(vec![child, orphan], &all, today(), &weights(), &HashMap::new());
+        let scored = score_and_sort(vec![child, orphan], &all, today(), &weights(), &HashMap::new(), &HashMap::new());
 
         // child gets +0.5 from high-priority parent; orphan gets +0
         let child_score = scored.iter().find(|s| s.task.title == "child task").unwrap().score;
@@ -642,14 +671,14 @@ mod tests {
         let old_ts = chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        task.created_at = old_ts; // old task → age capped
+        // Provide a git creation date far in the past so age would normally be capped.
+        let mut dates: HashMap<Uuid, TaskDates> = HashMap::new();
+        dates.insert(task.id, TaskDates { created_at: old_ts, updated_at: old_ts });
 
         let mut metas = HashMap::new();
-        let mut meta = TagMeta { no_time_urgency: true, ..Default::default() };
-        meta.no_time_urgency = true;
-        metas.insert("wishlist".to_string(), meta);
+        metas.insert("wishlist".to_string(), TagMeta { no_time_urgency: true, ..Default::default() });
 
-        let s = score(&task, None, today(), &weights(), &metas);
+        let s = score(&task, None, &dates, today(), &weights(), &metas);
         // Only priority_factor(medium)=1.0 contributes; due and age are zeroed.
         assert!((s - 1.0).abs() < 0.01, "expected ~1.0, got {s}");
     }
@@ -661,7 +690,7 @@ mod tests {
         task.due = Some(today()); // due today
         let mut metas = HashMap::new();
         metas.insert("freeform".to_string(), TagMeta::default()); // no_time_urgency = false
-        let s = score(&task, None, today(), &weights(), &metas);
+        let s = score(&task, None, &HashMap::new(), today(), &weights(), &metas);
         // due_factor(due today) = 12.0, priority = 1.0 → > 12.0
         assert!(s > 12.0);
     }
@@ -679,7 +708,7 @@ mod tests {
         metas.insert("@work".to_string(), meta_with_priority(Priority::High));
 
         let all = vec![parent.clone(), child.clone(), orphan.clone()];
-        let scored = score_and_sort(vec![child, orphan], &all, today(), &weights(), &metas);
+        let scored = score_and_sort(vec![child, orphan], &all, today(), &weights(), &metas, &HashMap::new());
 
         let child_score = scored.iter().find(|s| s.task.title == "child task").unwrap().score;
         let orphan_score = scored.iter().find(|s| s.task.title == "no parent").unwrap().score;

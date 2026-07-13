@@ -54,9 +54,10 @@ pub fn get_forecast(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<
     let state = ctx.store.get_state()?;
     let all_tasks = ctx.store.list_tasks()?;
     let tag_metas = ctx.store.list_tag_metas()?;
+    let task_dates = ctx.task_git_dates_for(&all_tasks);
 
     let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
-    let scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.scoring, &tag_metas);
+    let scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.scoring, &tag_metas, &task_dates);
 
     let cutoff = today + chrono::Duration::days(horizon as i64);
 

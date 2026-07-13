@@ -147,4 +147,13 @@ pub trait VcsBackend: Send + Sync {
     /// Returns the SHA-1 hex string of the current HEAD commit.
     /// Used by the cache layer to detect whether a rebuild is needed.
     fn head_hash(&self) -> Result<String>;
+
+    /// Returns git-derived first/last commit timestamps for every task file under
+    /// `tasks_dir`. The map is keyed by the 8-character hex UUID prefix embedded
+    /// in each filename (e.g. `"abc12345"` for `water-plants-abc12345.toml`).
+    ///
+    /// Returns an empty map when no git history exists (new repo, test stub).
+    fn task_git_dates(&self, _tasks_dir: &std::path::Path) -> Result<HashMap<String, crate::core::scoring::TaskDates>> {
+        Ok(HashMap::new())
+    }
 }

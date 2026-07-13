@@ -18,7 +18,8 @@ use tui_input::backend::crossterm::EventHandler;
 use crate::core::domain::filter;
 use crate::core::domain::tag::TagMeta;
 use crate::core::domain::task::Task;
-use crate::core::scoring::{self, ScoreBreakdown, ScoredTask};
+use crate::core::scoring::{self, ScoreBreakdown, ScoredTask, TaskDates};
+use uuid::Uuid;
 use crate::core::{FilterArgs, TaskRepository};
 use crate::Config;
 
@@ -238,6 +239,8 @@ pub struct DetailData<'a> {
     pub blockers: Vec<String>,
     pub blocks: Vec<(String, String)>,
     pub breakdown: ScoreBreakdown,
+    /// Git-derived timestamps for this task (None when untracked).
+    pub task_dates: Option<TaskDates>,
 }
 
 /// One selectable entry in the move (parent-picker) list: either a concrete
@@ -303,6 +306,8 @@ pub struct App {
     all_tasks: Vec<Task>,
     /// Tag metadata from the last reload, cached for the detail breakdown.
     tag_metas: HashMap<String, TagMeta>,
+    /// Git-derived creation/update dates per task, cached from the last reload.
+    task_dates: HashMap<Uuid, TaskDates>,
 
     /// Vertical scroll offset (in lines) of the detail pane. Reset to 0 whenever
     /// the selection changes; clamped against the content by the draw layer.
@@ -372,6 +377,7 @@ impl App {
             selected: 0,
             all_tasks: Vec::new(),
             tag_metas: HashMap::new(),
+            task_dates: HashMap::new(),
             detail_scroll: 0,
             filter_tokens: Vec::new(),
             filter_future: false,
@@ -638,11 +644,13 @@ impl App {
         let breakdown = scoring::score_with_breakdown(
             task,
             parent_task,
+            &self.task_dates,
             self.today,
             &self.repo.scoring,
             &self.tag_metas,
         );
 
+        let task_dates = self.task_dates.get(&task.id).cloned();
         Some(DetailData {
             task,
             parent,
@@ -650,6 +658,7 @@ impl App {
             blockers,
             blocks,
             breakdown,
+            task_dates,
         })
     }
 
@@ -671,6 +680,7 @@ impl App {
         let state = store.get_state()?;
         let all_tasks = store.list_tasks()?;
         let tag_metas = store.list_tag_metas()?;
+        let task_dates = self.repo.task_git_dates_for(&all_tasks);
 
         let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, self.today);
         let scored = scoring::score_and_sort(
@@ -679,6 +689,7 @@ impl App {
             self.today,
             &self.repo.scoring,
             &tag_metas,
+            &task_dates,
         );
 
         let limit = self.config.list_limit;
@@ -686,9 +697,10 @@ impl App {
         if let Some(n) = limit {
             self.tasks.truncate(n);
         }
-        // Keep the full task list + tag metadata for the detail pane.
+        // Keep the full task list, tag metadata, and git dates for the detail pane.
         self.all_tasks = all_tasks;
         self.tag_metas = tag_metas;
+        self.task_dates = task_dates;
         self.clamp_selection();
         Ok(())
     }

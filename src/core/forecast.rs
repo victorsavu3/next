@@ -16,7 +16,7 @@ use crate::core::domain::state::GlobalState;
 use crate::core::domain::tag::TagMeta;
 use crate::core::domain::task::Task;
 use crate::core::recurrence;
-use crate::core::scoring::{self, ScoringConfig};
+use crate::core::scoring::{self, ScoringConfig, TaskDates};
 
 /// A single occurrence in the forecast: either a concrete existing task or a
 /// projected (not-yet-spawned) future instance of a recurrence series.
@@ -41,6 +41,7 @@ pub struct ForecastEntry {
 /// tasks due on or before `today + horizon` plus projected future occurrences of
 /// active schedule-type recurrence series, sorted by `(date, projected)` so the
 /// current instance precedes its projections on a shared date.
+#[allow(clippy::too_many_arguments)]
 pub fn build_entries(
     all_tasks: &[Task],
     state: &GlobalState,
@@ -49,9 +50,10 @@ pub fn build_entries(
     filter_set: &FilterSet,
     today: NaiveDate,
     horizon: u32,
+    task_dates: &HashMap<uuid::Uuid, TaskDates>,
 ) -> Vec<ForecastEntry> {
     let filtered = filter::apply(all_tasks.to_vec(), filter_set, state, today);
-    let scored = scoring::score_and_sort(filtered, all_tasks, today, scoring, tag_metas);
+    let scored = scoring::score_and_sort(filtered, all_tasks, today, scoring, tag_metas, task_dates);
 
     let cutoff = today + chrono::Duration::days(horizon as i64);
 
@@ -124,6 +126,7 @@ mod tests {
             &empty_filter(),
             today,
             30,
+            &HashMap::new(),
         );
         let titles: Vec<&str> = entries.iter().map(|e| e.title.as_str()).collect();
         assert!(titles.contains(&"due soon"));
@@ -151,6 +154,7 @@ mod tests {
             &empty_filter(),
             today,
             30,
+            &HashMap::new(),
         );
         // The concrete due date plus at least one projected occurrence.
         assert!(entries.iter().any(|e| !e.projected));
@@ -187,6 +191,7 @@ mod tests {
             &empty_filter(),
             today,
             30,
+            &HashMap::new(),
         );
         let projected: Vec<_> = entries.iter().filter(|e| e.projected).collect();
         assert!(!projected.is_empty(), "completion recurrence should emit projected entries");
@@ -213,6 +218,7 @@ mod tests {
             &filter,
             today,
             30,
+            &HashMap::new(),
         );
         let titles: Vec<&str> = entries.iter().map(|e| e.title.as_str()).collect();
         assert!(
@@ -237,6 +243,7 @@ mod tests {
             &empty_filter(),
             today,
             30,
+            &HashMap::new(),
         );
         assert!(
             entries.is_empty(),
@@ -265,6 +272,7 @@ mod tests {
             &filter_set,
             today,
             30,
+            &HashMap::new(),
         );
         let titles: Vec<&str> = entries.iter().map(|e| e.title.as_str()).collect();
         assert_eq!(titles, vec!["tagged"], "filter token must restrict entries");

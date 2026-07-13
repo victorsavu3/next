@@ -45,9 +45,10 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let state = ctx.repo.store().get_state()?;
     let all_tasks = ctx.repo.store().list_tasks()?;
     let tag_metas = ctx.repo.store().list_tag_metas()?;
+    let task_dates = ctx.repo.task_git_dates_for(&all_tasks);
 
     let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
-    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.repo.scoring, &tag_metas);
+    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.repo.scoring, &tag_metas, &task_dates);
     scored.truncate(count);
 
     if filter_args.json {

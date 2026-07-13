@@ -419,10 +419,16 @@ fn detail_lines(detail: &DetailData, today: NaiveDate, width: usize) -> Vec<Line
         };
         lines.push(field("Recur", value));
     }
-    lines.push(field(
-        "Created",
-        task.created_at.format("%Y-%m-%d %H:%M UTC").to_string(),
-    ));
+    if let Some(ref dates) = detail.task_dates {
+        lines.push(field(
+            "Created",
+            dates.created_at.format("%Y-%m-%d %H:%M UTC").to_string(),
+        ));
+        lines.push(field(
+            "Updated",
+            dates.updated_at.format("%Y-%m-%d %H:%M UTC").to_string(),
+        ));
+    }
     if let Some(completed) = task.completed_at {
         lines.push(field("Completed", completed.format("%Y-%m-%d").to_string()));
     }

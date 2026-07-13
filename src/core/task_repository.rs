@@ -6,11 +6,12 @@
 //! all build on. The CLI wraps it in `AppContext` to add `config.toml` handling
 //! (which is CLI-only); core/mcp/forgejo use `TaskRepository` directly.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use crate::core::{plugin::TaskEvent, scoring::ScoringConfig, Store, VcsBackend};
+use crate::core::{plugin::TaskEvent, scoring::{ScoringConfig, TaskDates}, Store, VcsBackend};
 
 pub struct TaskRepository {
     pub store: Box<dyn Store>,
@@ -77,6 +78,28 @@ impl TaskRepository {
     /// The plugin origin of this process, if any (loop guard).
     pub fn plugin_origin(&self) -> Option<&str> {
         self.plugin_origin.as_deref()
+    }
+
+    /// Returns git-derived creation/update timestamps for the given tasks,
+    /// resolved to full UUIDs by matching the 8-char hex file-suffix against
+    /// the provided task list.  Returns an empty map when git history is
+    /// unavailable (new repo, test environments without commits).
+    pub fn task_git_dates_for(&self, tasks: &[crate::core::domain::task::Task]) -> HashMap<Uuid, TaskDates> {
+        let tasks_dir = self.repo_root.join("tasks");
+        let by_hex8 = self.vcs.task_git_dates(&tasks_dir).unwrap_or_default();
+        if by_hex8.is_empty() {
+            return HashMap::new();
+        }
+        // Build a reverse map: 8-char hex prefix → full UUID from the loaded tasks.
+        tasks
+            .iter()
+            .filter_map(|t| {
+                let hex = t.id.to_string().replace('-', "");
+                let prefix = hex.get(..8)?;
+                let dates = by_hex8.get(prefix)?;
+                Some((t.id, dates.clone()))
+            })
+            .collect()
     }
 
     /// Runs `f` as a repository mutation transaction.

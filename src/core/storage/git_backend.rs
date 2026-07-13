@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     process::Command,
     sync::Mutex,
@@ -408,6 +409,53 @@ impl VcsBackend for GitBackend {
             Err(e) => Err(TaskError::Other(format!("git HEAD: {e}"))),
         };
         result
+    }
+
+    fn task_git_dates(&self, tasks_dir: &std::path::Path) -> crate::core::error::Result<HashMap<String, crate::core::scoring::TaskDates>> {
+        use chrono::{DateTime, Utc};
+        use crate::core::scoring::TaskDates;
+
+        // One `git log` walk over the tasks/ directory: newest commit first.
+        // Output format: a "COMMIT <unix-timestamp>" header line followed by
+        // one filename per changed task file (relative to repo root, no status letter).
+        let output = Command::new("git")
+            .args(["log", "--format=COMMIT %at", "--name-only", "--", "."])
+            .current_dir(tasks_dir)
+            .output()
+            .map_err(|e| TaskError::Other(format!("git log for task dates: {e}")))?;
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut dates: HashMap<String, TaskDates> = HashMap::new();
+        let mut current_ts: Option<DateTime<Utc>> = None;
+
+        for line in text.lines() {
+            if let Some(ts_str) = line.strip_prefix("COMMIT ") {
+                let secs: i64 = ts_str.trim().parse().unwrap_or(0);
+                current_ts = DateTime::from_timestamp(secs, 0);
+            } else if !line.is_empty() {
+                let Some(ts) = current_ts else { continue };
+                // Filename is relative to tasks_dir.  Extract the 8-char UUID hex
+                // suffix embedded before the ".toml" extension.
+                let stem = std::path::Path::new(line)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                // Filenames end in "-{uuid8}" (slug-named) or are just "{uuid8}.toml".
+                let hex8 = stem.rsplit('-').next().unwrap_or(stem);
+                if hex8.len() == 8 && hex8.chars().all(|c| c.is_ascii_hexdigit()) {
+                    let entry = dates.entry(hex8.to_owned()).or_insert_with(|| TaskDates {
+                        created_at: ts,
+                        updated_at: ts,
+                    });
+                    // git log is newest→oldest:
+                    // - or_insert sets updated_at on the first (newest) sighting
+                    // - every subsequent sighting moves created_at earlier
+                    entry.created_at = ts;
+                }
+            }
+        }
+
+        Ok(dates)
     }
 }
 

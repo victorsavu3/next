@@ -20,11 +20,12 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
 
     let all_tasks = ctx.repo.store().list_tasks()?;
     let tag_metas = ctx.repo.store().list_tag_metas()?;
+    let task_dates = ctx.repo.task_git_dates_for(&all_tasks);
     let parent = task
         .parent_id
         .and_then(|pid| all_tasks.iter().find(|t| t.id == pid));
 
-    let bd = scoring::score_with_breakdown(&task, parent, today, &ctx.repo.scoring, &tag_metas);
+    let bd = scoring::score_with_breakdown(&task, parent, &task_dates, today, &ctx.repo.scoring, &tag_metas);
 
     if args.json {
         let children: Vec<_> = all_tasks
@@ -114,10 +115,16 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
             }
         }
     }
-    println!(
-        "Created:  {}",
-        task.created_at.format("%Y-%m-%d %H:%M UTC")
-    );
+    if let Some(dates) = task_dates.get(&task.id) {
+        println!(
+            "Created:  {}",
+            dates.created_at.format("%Y-%m-%d %H:%M UTC")
+        );
+        println!(
+            "Updated:  {}",
+            dates.updated_at.format("%Y-%m-%d %H:%M UTC")
+        );
+    }
     if let Some(completed) = task.completed_at {
         println!("Completed: {}", completed.format("%Y-%m-%d"));
     }

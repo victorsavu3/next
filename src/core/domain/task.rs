@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
@@ -143,8 +143,6 @@ pub struct Task {
     /// done (see [`Task::mark_done`]); `None` while the task is unresolved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<NaiveDate>,
-
-    pub created_at: DateTime<Utc>,
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -215,7 +213,6 @@ impl std::str::FromStr for Priority {
 impl Task {
     /// Creates a new open task in the inbox with sensible defaults.
     pub fn new(title: impl Into<String>) -> Self {
-        let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
             title: title.into(),
@@ -237,7 +234,6 @@ impl Task {
             recurrence: None,
             recurrence_id: None,
             completed_at: None,
-            created_at: now,
         }
     }
 

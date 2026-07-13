@@ -48,6 +48,7 @@ pub fn build_entries(args: &Args, ctx: &AppContext) -> anyhow::Result<(Vec<Forec
     let state = ctx.repo.store().get_state()?;
     let all_tasks = ctx.repo.store().list_tasks()?;
     let tag_metas = ctx.repo.store().list_tag_metas()?;
+    let task_dates = ctx.repo.task_git_dates_for(&all_tasks);
 
     let entries = forecast::build_entries(
         &all_tasks,
@@ -57,6 +58,7 @@ pub fn build_entries(args: &Args, ctx: &AppContext) -> anyhow::Result<(Vec<Forec
         &filter_set,
         today,
         horizon,
+        &task_dates,
     );
 
     Ok((entries, horizon))

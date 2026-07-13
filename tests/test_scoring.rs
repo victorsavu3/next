@@ -40,7 +40,7 @@ fn score_all(env: &mut common::TestEnv) -> Vec<ScoredTask> {
     let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &filter_set, &state, today);
     let tag_metas = env.ctx.repo.store.list_tag_metas().unwrap();
-    scoring::score_and_sort(filtered, &all, today, &env.ctx.repo.scoring, &tag_metas)
+    scoring::score_and_sort(filtered, &all, today, &env.ctx.repo.scoring, &tag_metas, &std::collections::HashMap::new())
 }
 
 fn titles(tasks: &[ScoredTask]) -> Vec<&str> {
