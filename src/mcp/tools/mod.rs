@@ -136,6 +136,16 @@ pub fn all_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "get_diff",
+            description: "Return the current working-tree diff (git status + git diff HEAD). Useful for inspecting conflicts or uncommitted local changes before deciding how to resolve them.",
+            input_schema: json!({ "type": "object", "properties": {} }),
+        },
+        Tool {
+            name: "force_sync",
+            description: "Fetch from the remote and hard-reset the working tree to FETCH_HEAD, discarding all local changes and merge conflicts. Use this to recover when sync is stuck due to conflicts. Does not push — the remote is taken as the source of truth.",
+            input_schema: json!({ "type": "object", "properties": {} }),
+        },
+        Tool {
             name: "get_state",
             description: "Get the current machine-local state: active contexts, active users, and resource availability.",
             input_schema: json!({ "type": "object", "properties": {} }),
@@ -419,6 +429,7 @@ fn call_tool(
         "get_task"     => tasks::get_task(params, ctx),
         "get_state"    => state::get_state(params, ctx),
         "get_forecast" => view::get_forecast(params, ctx),
+        "get_diff"     => state::get_diff(params, ctx),
 
         // ── Mutation tools ────────────────────────────────────────────────────
         "add_task" => {
@@ -443,6 +454,15 @@ fn call_tool(
                 .try_acquire()
                 .ok_or_else(|| anyhow::anyhow!("sync already in progress — try again shortly"))?;
             let result = state::sync(params, ctx)?;
+            scheduler.cancel();
+            Ok(result)
+        }
+
+        "force_sync" => {
+            let _permit = scheduler
+                .try_acquire()
+                .ok_or_else(|| anyhow::anyhow!("sync already in progress — try again shortly"))?;
+            let result = state::force_sync(params, ctx)?;
             scheduler.cancel();
             Ok(result)
         }

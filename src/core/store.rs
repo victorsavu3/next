@@ -156,4 +156,22 @@ pub trait VcsBackend: Send + Sync {
     fn task_git_dates(&self, _tasks_dir: &std::path::Path) -> Result<HashMap<String, crate::core::scoring::TaskDates>> {
         Ok(HashMap::new())
     }
+
+    /// Returns the working-tree diff relative to HEAD.
+    ///
+    /// The string contains `git status --short` output followed by the full
+    /// `git diff HEAD` patch. Conflicted files appear in both sections.
+    /// Default: returns an error (not supported by non-git backends).
+    fn diff(&self) -> Result<String> {
+        Err(crate::core::error::TaskError::Other("diff not supported by this backend".into()))
+    }
+
+    /// Fetches from the default remote and hard-resets the working tree to
+    /// `FETCH_HEAD`, discarding all local changes and resolving any conflicts.
+    ///
+    /// Returns the new HEAD SHA-1 hex string so the caller can update caches.
+    /// Default: returns an error (not supported by non-git backends).
+    fn force_pull(&self) -> Result<String> {
+        Err(crate::core::error::TaskError::Other("force_pull not supported by this backend".into()))
+    }
 }

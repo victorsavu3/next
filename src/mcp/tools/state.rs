@@ -123,6 +123,25 @@ pub fn set_user_filter(params: &Value, ctx: &mut TaskRepository) -> anyhow::Resu
     Ok(serde_json::to_value(&state)?)
 }
 
+// ── get_diff ──────────────────────────────────────────────────────────────────
+
+pub fn get_diff(_params: &Value, ctx: &TaskRepository) -> anyhow::Result<Value> {
+    let diff = ctx.vcs.diff()?;
+    Ok(json!({ "diff": diff }))
+}
+
+// ── force_sync ────────────────────────────────────────────────────────────────
+
+/// Fetches from the default remote and hard-resets to `FETCH_HEAD`, discarding
+/// local changes and resolving any conflicts. Updates the store cache to match
+/// the new HEAD. Does NOT push — the remote is the source of truth here.
+pub fn force_sync(_params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
+    let new_head = ctx.vcs.force_pull()?;
+    ctx.store.after_pull(&new_head)?;
+    tracing::info!(cmd = "mcp/force_sync", head = %new_head, "reset to remote");
+    Ok(json!({ "status": "ok", "head": new_head }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

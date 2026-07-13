@@ -457,6 +457,75 @@ impl VcsBackend for GitBackend {
 
         Ok(dates)
     }
+
+    fn diff(&self) -> crate::core::error::Result<String> {
+        let _lock = self.acquire_repo_lock()?;
+
+        let status = Command::new("git")
+            .args(["status", "--short"])
+            .current_dir(&self.work_dir)
+            .output()
+            .map_err(|e| TaskError::Other(format!("git status: {e}")))?;
+
+        let diff = Command::new("git")
+            .args(["diff", "HEAD"])
+            .current_dir(&self.work_dir)
+            .output()
+            .map_err(|e| TaskError::Other(format!("git diff: {e}")))?;
+
+        let status_text = String::from_utf8_lossy(&status.stdout);
+        let diff_text = String::from_utf8_lossy(&diff.stdout);
+
+        let mut out = String::new();
+        if !status_text.trim().is_empty() {
+            out.push_str("# git status\n");
+            out.push_str(&status_text);
+        }
+        if !diff_text.trim().is_empty() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str("# git diff HEAD\n");
+            out.push_str(&diff_text);
+        }
+        if out.is_empty() {
+            out.push_str("working tree is clean");
+        }
+        Ok(out)
+    }
+
+    fn force_pull(&self) -> crate::core::error::Result<String> {
+        let _lock = self.acquire_repo_lock()?;
+
+        let fetch = Command::new("git")
+            .args(["fetch", "origin"])
+            .current_dir(&self.work_dir)
+            .output()
+            .map_err(|e| TaskError::Other(format!("git fetch: {e}")))?;
+        if !fetch.status.success() {
+            let stderr = String::from_utf8_lossy(&fetch.stderr);
+            return Err(TaskError::Other(format!("git fetch failed: {}", stderr.trim())));
+        }
+
+        let reset = Command::new("git")
+            .args(["reset", "--hard", "FETCH_HEAD"])
+            .current_dir(&self.work_dir)
+            .output()
+            .map_err(|e| TaskError::Other(format!("git reset: {e}")))?;
+        if !reset.status.success() {
+            let stderr = String::from_utf8_lossy(&reset.stderr);
+            return Err(TaskError::Other(format!("git reset failed: {}", stderr.trim())));
+        }
+
+        // Return the new HEAD so callers can update any caches.
+        let rev = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&self.work_dir)
+            .output()
+            .map_err(|e| TaskError::Other(format!("git rev-parse: {e}")))?;
+        let head = String::from_utf8_lossy(&rev.stdout).trim().to_owned();
+        Ok(head)
+    }
 }
 
 #[cfg(test)]
