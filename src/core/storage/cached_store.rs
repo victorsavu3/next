@@ -4,7 +4,7 @@ use crate::core::{
     domain::{state::GlobalState, tag::TagMeta, task::Task},
     error::{TaskError, Result},
     scoring::TaskDates,
-    store::Store,
+    store::{Page, Store, TaskQuery, DEFAULT_PAGE_SIZE},
 };
 use rusqlite::{params, Connection, OptionalExtension as _};
 use uuid::Uuid;
@@ -356,6 +356,66 @@ impl Store for CachedStore {
         self.reconcile(new_head)
     }
 
+    fn query_tasks(&self, q: &TaskQuery) -> Result<Page<Task>> {
+        let page_size = if q.page_size == 0 { DEFAULT_PAGE_SIZE } else { q.page_size };
+        let page = q.page.max(1);
+
+        let mut where_sql =
+            String::from(if q.archived { "archived <> 0" } else { "archived = 0" });
+        let mut args: Vec<String> = Vec::new();
+
+        if let Some(statuses) = &q.statuses {
+            if statuses.is_empty() {
+                return Ok(Page { items: Vec::new(), page, page_size, total: 0 });
+            }
+            let marks = vec!["?"; statuses.len()].join(", ");
+            where_sql.push_str(&format!(" AND status IN ({marks})"));
+            args.extend(statuses.iter().map(|s| status_name(s).to_owned()));
+        }
+        // Hierarchical tag match: exact tag or any descendant (`tag/...`).
+        const TAG_MATCH: &str = "(SELECT 1 FROM task_tags tt \
+             WHERE tt.task_id = tasks.id AND (tt.tag = ? OR tt.tag LIKE ? || '/%'))";
+        for tag in &q.required_tags {
+            where_sql.push_str(&format!(" AND EXISTS {TAG_MATCH}"));
+            args.push(tag.clone());
+            args.push(tag.clone());
+        }
+        for tag in &q.excluded_tags {
+            where_sql.push_str(&format!(" AND NOT EXISTS {TAG_MATCH}"));
+            args.push(tag.clone());
+            args.push(tag.clone());
+        }
+
+        self.with_conn(|conn| {
+            let total = conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM tasks WHERE {where_sql}"),
+                    rusqlite::params_from_iter(args.iter()),
+                    |r| r.get::<_, i64>(0),
+                )
+                .map_err(|e| TaskError::Other(format!("sqlite query count: {e}")))?
+                as u64;
+
+            // Same order as store::sort_for_query: unresolved first (by id),
+            // then most recent completion; ISO dates sort lexicographically.
+            let offset = (page as u64 - 1) * page_size as u64;
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT data FROM tasks WHERE {where_sql} \
+                     ORDER BY (completed_at IS NOT NULL), completed_at DESC, id \
+                     LIMIT {page_size} OFFSET {offset}"
+                ))
+                .map_err(|e| TaskError::Other(format!("sqlite prepare query: {e}")))?;
+            let items = collect_task_rows(
+                stmt.query_map(rusqlite::params_from_iter(args.iter()), |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(|e| TaskError::Other(format!("sqlite query tasks: {e}")))?,
+            )?;
+            Ok(Page { items, page, page_size, total })
+        })
+    }
+
     fn task_dates(&self) -> Result<HashMap<Uuid, TaskDates>> {
         self.with_conn(|conn| {
             let mut stmt = conn
@@ -494,9 +554,9 @@ fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn status_str(task: &Task) -> &'static str {
+fn status_name(status: &crate::core::domain::task::Status) -> &'static str {
     use crate::core::domain::task::Status;
-    match task.status {
+    match status {
         Status::Open => "open",
         Status::Started => "started",
         Status::Done => "done",
@@ -542,7 +602,7 @@ fn upsert_task(conn: &Connection, task: &Task, rel_path: &str, dates: Option<&Ta
         params![
             id_str,
             task.slug.as_deref(),
-            status_str(task),
+            status_name(&task.status),
             priority_str(task),
             task.due.map(|d| d.to_string()),
             task.start.map(|d| d.to_string()),
@@ -1022,6 +1082,115 @@ mod tests {
         // Deleting the task must remove all its tag rows.
         store.delete_task(task.id).unwrap();
         assert_eq!(count_tags(&store, &id), 0);
+    }
+
+    #[test]
+    fn query_status_filter_and_pagination() {
+        let (_dir, mut store, _vcs) = setup();
+        for i in 0..3 {
+            let mut t = Task::new(format!("Done {i}"));
+            t.mark_done(chrono::NaiveDate::from_ymd_opt(2026, 6, 10 + i).unwrap());
+            store.save_task(&t).unwrap();
+        }
+        store.save_task(&Task::new("Open A")).unwrap();
+        store.save_task(&Task::new("Open B")).unwrap();
+
+        let q = TaskQuery {
+            statuses: Some(vec![Status::Done]),
+            page_size: 2,
+            ..Default::default()
+        };
+        let p1 = store.query_tasks(&q).unwrap();
+        assert_eq!(p1.total, 3);
+        assert_eq!(p1.items.len(), 2);
+        // Most recent completion first.
+        assert_eq!(p1.items[0].title, "Done 2");
+
+        let p2 = store.query_tasks(&TaskQuery { page: 2, ..q.clone() }).unwrap();
+        assert_eq!(p2.total, 3);
+        assert_eq!(p2.items.len(), 1);
+        let p3 = store.query_tasks(&TaskQuery { page: 3, ..q }).unwrap();
+        assert!(p3.items.is_empty());
+
+        // No overlap or gaps across pages.
+        let mut ids: Vec<_> = p1.items.iter().chain(&p2.items).map(|t| t.id).collect();
+        ids.dedup();
+        assert_eq!(ids.len(), 3);
+    }
+
+    #[test]
+    fn query_tag_hierarchy() {
+        let (_dir, mut store, _vcs) = setup();
+        let mut work = Task::new("Frontend");
+        work.tags = vec!["@work/frontend".into()];
+        let mut home = Task::new("Kitchen");
+        home.tags = vec!["@home".into()];
+        let mut worker = Task::new("Networking");
+        worker.tags = vec!["@workshop".into()]; // must NOT match "@work"
+        store.save_task(&work).unwrap();
+        store.save_task(&home).unwrap();
+        store.save_task(&worker).unwrap();
+
+        let q = TaskQuery { required_tags: vec!["@work".into()], ..Default::default() };
+        let got = store.query_tasks(&q).unwrap();
+        assert_eq!(got.items.len(), 1, "parent tag matches descendants only");
+        assert_eq!(got.items[0].id, work.id);
+
+        let q = TaskQuery { excluded_tags: vec!["@work".into()], ..Default::default() };
+        let got = store.query_tasks(&q).unwrap();
+        let titles: Vec<_> = got.items.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(got.items.len(), 2);
+        assert!(titles.contains(&"Kitchen") && titles.contains(&"Networking"));
+    }
+
+    #[test]
+    fn query_archived_is_empty_for_now() {
+        let (_dir, mut store, _vcs) = setup();
+        store.save_task(&Task::new("Active")).unwrap();
+        let got = store
+            .query_tasks(&TaskQuery { archived: true, ..Default::default() })
+            .unwrap();
+        assert_eq!(got.total, 0);
+        assert!(got.items.is_empty());
+    }
+
+    #[test]
+    fn query_matches_reference_implementation() {
+        // The SQL pushdown must agree with the trait's in-memory default.
+        let (dir, mut store, _vcs) = setup();
+        let mut a = Task::new("A");
+        a.tags = vec!["@work/frontend".into(), "rust".into()];
+        let mut b = Task::new("B");
+        b.tags = vec!["@work".into()];
+        b.mark_done(chrono::NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
+        let mut c = Task::new("C");
+        c.tags = vec!["@home".into(), "rust".into()];
+        for t in [&a, &b, &c] {
+            store.save_task(t).unwrap();
+        }
+
+        let queries = [
+            TaskQuery::default(),
+            TaskQuery { statuses: Some(vec![Status::Open]), ..Default::default() },
+            TaskQuery { required_tags: vec!["@work".into()], ..Default::default() },
+            TaskQuery {
+                required_tags: vec!["rust".into()],
+                excluded_tags: vec!["@home".into()],
+                ..Default::default()
+            },
+            TaskQuery { page_size: 2, page: 2, ..Default::default() },
+        ];
+        // A bare TomlStore over the same directory exercises the default impl.
+        let reference =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        for q in queries {
+            let sql = store.query_tasks(&q).unwrap();
+            let mem = reference.query_tasks(&q).unwrap();
+            let sql_ids: Vec<_> = sql.items.iter().map(|t| t.id).collect();
+            let mem_ids: Vec<_> = mem.items.iter().map(|t| t.id).collect();
+            assert_eq!(sql_ids, mem_ids, "query {q:?} diverged from reference");
+            assert_eq!(sql.total, mem.total, "total for {q:?}");
+        }
     }
 
     #[test]

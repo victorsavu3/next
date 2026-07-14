@@ -23,7 +23,7 @@ pub mod value;
 
 pub use error::{Result, TaskError};
 pub use filter_args::FilterArgs;
-pub use store::{PullResult, Store, VcsBackend};
+pub use store::{Page, PullResult, Store, TaskQuery, VcsBackend};
 pub use sync::{sync, SyncOutcome};
 pub use task_repository::TaskRepository;
 pub use value::parse_value;

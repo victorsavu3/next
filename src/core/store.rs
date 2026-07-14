@@ -3,9 +3,91 @@ use std::{collections::HashMap, path::PathBuf};
 use uuid::Uuid;
 
 use crate::core::{
-    domain::{state::GlobalState, tag::TagMeta, task::Task},
+    domain::{state::GlobalState, tag::TagMeta, task::{Status, Task}},
     error::Result,
 };
+
+/// Default number of items per [`Page`] when a query does not set one.
+pub const DEFAULT_PAGE_SIZE: u32 = 1000;
+
+/// A storage-level task query, compiled to SQL by the cached store.
+///
+/// Carries the *cheap* filter gates — the ones expressible as indexed column
+/// and tag-table predicates. Relational gates (open blockers, parent with
+/// open children, resource availability) stay in `domain::filter`, applied to
+/// the already-reduced result.
+#[derive(Debug, Clone)]
+pub struct TaskQuery {
+    /// Keep only tasks whose status is in the list. `None` = any status.
+    pub statuses: Option<Vec<Status>>,
+    /// `false` — only active-tier tasks; `true` — only archived tasks.
+    pub archived: bool,
+    /// Task must carry every listed tag (a parent segment matches descendants).
+    pub required_tags: Vec<String>,
+    /// Task must carry none of the listed tags (same descendant semantics).
+    pub excluded_tags: Vec<String>,
+    /// 1-indexed page to return; values below 1 are treated as 1.
+    pub page: u32,
+    /// Items per page; 0 falls back to [`DEFAULT_PAGE_SIZE`].
+    pub page_size: u32,
+}
+
+impl Default for TaskQuery {
+    fn default() -> Self {
+        Self {
+            statuses: None,
+            archived: false,
+            required_tags: Vec::new(),
+            excluded_tags: Vec::new(),
+            page: 1,
+            page_size: DEFAULT_PAGE_SIZE,
+        }
+    }
+}
+
+impl TaskQuery {
+    /// Whether `task` (assumed active-tier) passes this query's filter gates.
+    /// The reference semantics that SQL-backed implementations must match.
+    pub fn matches(&self, task: &Task) -> bool {
+        if self.archived {
+            // A plain store has no archive tier.
+            return false;
+        }
+        if let Some(statuses) = &self.statuses {
+            if !statuses.contains(&task.status) {
+                return false;
+            }
+        }
+        if !self.required_tags.iter().all(|req| task.tags.iter().any(|t| tag_matches(t, req))) {
+            return false;
+        }
+        if self.excluded_tags.iter().any(|exc| task.tags.iter().any(|t| tag_matches(t, exc))) {
+            return false;
+        }
+        true
+    }
+}
+
+/// Whether `task_tag` equals `filter` or is a descendant of it
+/// (`@work/frontend` matches the filter `@work`).
+pub fn tag_matches(task_tag: &str, filter: &str) -> bool {
+    task_tag == filter
+        || (task_tag.len() > filter.len()
+            && task_tag.starts_with(filter)
+            && task_tag.as_bytes()[filter.len()] == b'/')
+}
+
+/// One page of query results, with enough metadata for the caller to tell a
+/// complete result from a truncated one.
+#[derive(Debug, Clone)]
+pub struct Page<T> {
+    pub items: Vec<T>,
+    /// The 1-indexed page these items belong to.
+    pub page: u32,
+    pub page_size: u32,
+    /// Matching items before pagination.
+    pub total: u64,
+}
 
 /// Result of a `VcsBackend::pull` operation.
 #[derive(Debug, Clone)]
@@ -137,6 +219,40 @@ pub trait Store: Send + Sync {
     fn task_dates(&self) -> Result<HashMap<Uuid, crate::core::scoring::TaskDates>> {
         Ok(HashMap::new())
     }
+
+    /// Returns the tasks matching `q`, paginated.
+    ///
+    /// The default implementation filters `list_tasks()` in memory and is the
+    /// reference semantics; indexed stores (the SQLite cache) override it with
+    /// a pushed-down query. Result order is stable across implementations and
+    /// pages: unresolved tasks first (by id), then by most recent completion.
+    fn query_tasks(&self, q: &TaskQuery) -> Result<Page<Task>> {
+        let mut items: Vec<Task> = self
+            .list_tasks()?
+            .into_iter()
+            .filter(|t| q.matches(t))
+            .collect();
+        sort_for_query(&mut items);
+        let total = items.len() as u64;
+        let page_size = if q.page_size == 0 { DEFAULT_PAGE_SIZE } else { q.page_size };
+        let page = q.page.max(1);
+        let offset = (page as usize - 1).saturating_mul(page_size as usize);
+        let items: Vec<Task> = items.into_iter().skip(offset).take(page_size as usize).collect();
+        Ok(Page { items, page, page_size, total })
+    }
+}
+
+/// Sorts tasks into the canonical query order: unresolved tasks first (by
+/// id), then resolved tasks by most recent completion, ties broken by id.
+/// Deterministic, so consecutive pages never overlap or skip.
+pub fn sort_for_query(tasks: &mut [Task]) {
+    use std::cmp::Ordering;
+    tasks.sort_by(|a, b| match (a.completed_at, b.completed_at) {
+        (None, None) => a.id.cmp(&b.id),
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (Some(x), Some(y)) => y.cmp(&x).then_with(|| a.id.cmp(&b.id)),
+    });
 }
 
 /// Version-control backend.
