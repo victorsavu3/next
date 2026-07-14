@@ -186,6 +186,58 @@ impl TomlStore {
         &self.root
     }
 
+    /// Saves `task` at its canonical path, removing the file at
+    /// `old_rel_path` when the task moved (slug or title change).
+    ///
+    /// The path-indexed fast path used by `CachedStore`: the caller supplies
+    /// the previous location from its index instead of this store scanning
+    /// the whole `tasks/` directory, and has already checked slug uniqueness
+    /// against that index. The canonical slug file is still probed here to
+    /// catch a not-yet-committed write by another process that the caller's
+    /// index cannot know about.
+    pub(crate) fn save_task_at(&mut self, task: &Task, old_rel_path: Option<&str>) -> Result<()> {
+        let _lock = self.acquire_repo_lock()?;
+
+        if let Some(ref slug) = task.slug {
+            let candidate = self.tasks_dir().join(format!("{slug}.toml"));
+            if let Ok(content) = fs::read_to_string(&candidate) {
+                if let Ok(existing) = toml::from_str::<Task>(&content) {
+                    if existing.id != task.id && existing.slug.as_deref() == Some(slug.as_str()) {
+                        return Err(TaskError::SlugConflict(slug.clone()));
+                    }
+                }
+            }
+        }
+
+        let new_path = self
+            .tasks_dir()
+            .join(crate::core::storage::filenames::generate_filename(task));
+        if let Some(old_rel) = old_rel_path {
+            let old_abs = self.root.join(old_rel);
+            if old_abs != new_path {
+                let _ = fs::remove_file(&old_abs);
+            }
+        }
+
+        let content = toml::to_string_pretty(task)
+            .map_err(|e| TaskError::Other(format!("TOML serialization error: {e}")))?;
+        atomic_write(&new_path, &content)?;
+        Ok(())
+    }
+
+    /// Deletes the task file at `rel_path`; falls back to the directory scan
+    /// when the hint is stale (file already gone or moved).
+    pub(crate) fn delete_task_at(&mut self, id: Uuid, rel_path: &str) -> Result<()> {
+        let _lock = self.acquire_repo_lock()?;
+        let abs = self.root.join(rel_path);
+        if abs.exists() {
+            fs::remove_file(&abs)?;
+            Ok(())
+        } else {
+            self.delete_task(id)
+        }
+    }
+
     /// Reads every task file together with its repo-relative path
     /// (`tasks/<filename>`, forward slashes — the same form git reports).
     pub(crate) fn list_tasks_with_paths(&self) -> Result<Vec<(String, Task)>> {

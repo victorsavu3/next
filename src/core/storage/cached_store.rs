@@ -220,13 +220,51 @@ impl Store for CachedStore {
     }
 
     fn save_task(&mut self, task: &Task) -> Result<()> {
-        self.inner.save_task(task)?;
+        // Hold the (re-entrant) repo lock across the index lookups and the
+        // file write, so the slug check cannot interleave with another
+        // process's write.
+        let _lock = self.inner.acquire_repo_lock()?;
+
+        let id_str = task.id.to_string();
+        if let Some(ref slug) = task.slug {
+            let taken: Option<String> = self.with_conn(|conn| {
+                conn.query_row(
+                    "SELECT id FROM tasks WHERE slug = ?1 AND id <> ?2",
+                    params![slug, id_str],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| TaskError::Other(format!("sqlite slug check: {e}")))
+            })?;
+            if taken.is_some() {
+                return Err(TaskError::SlugConflict(slug.clone()));
+            }
+        }
+
+        let old_path: Option<String> = self.with_conn(|conn| {
+            conn.query_row("SELECT path FROM tasks WHERE id = ?1", params![id_str], |r| r.get(0))
+                .optional()
+                .map_err(|e| TaskError::Other(format!("sqlite path lookup: {e}")))
+        })?;
+
+        self.inner.save_task_at(task, old_path.as_deref())?;
         self.with_conn(|conn| upsert_task(conn, task, &Self::rel_task_path(task)))
     }
 
     fn delete_task(&mut self, id: Uuid) -> Result<()> {
-        self.inner.delete_task(id)?;
+        let _lock = self.inner.acquire_repo_lock()?;
         let id_str = id.to_string();
+        let path: Option<String> = self.with_conn(|conn| {
+            conn.query_row("SELECT path FROM tasks WHERE id = ?1", params![id_str], |r| r.get(0))
+                .optional()
+                .map_err(|e| TaskError::Other(format!("sqlite path lookup: {e}")))
+        })?;
+        match path {
+            Some(rel) => self.inner.delete_task_at(id, &rel)?,
+            // Not in the cache — fall back to the scan (errors when absent
+            // on disk too, preserving TaskNotFound semantics).
+            None => self.inner.delete_task(id)?,
+        }
         self.with_conn(|conn| {
             conn.execute("DELETE FROM tasks WHERE id = ?1", params![id_str])
                 .map_err(|e| TaskError::Other(format!("sqlite delete task: {e}")))?;
@@ -883,6 +921,64 @@ mod tests {
         // Deleting the task must remove all its tag rows.
         store.delete_task(task.id).unwrap();
         assert_eq!(count_tags(&store, &id), 0);
+    }
+
+    #[test]
+    fn slug_conflict_detected_via_cache() {
+        let (_dir, mut store, _vcs) = setup();
+        let mut t1 = Task::new("First");
+        t1.slug = Some("shared".into());
+        let mut t2 = Task::new("Second");
+        t2.slug = Some("shared".into());
+
+        store.save_task(&t1).unwrap();
+        let err = store.save_task(&t2).unwrap_err();
+        assert!(matches!(err, TaskError::SlugConflict(_)));
+
+        // Re-saving the owner of the slug is not a conflict.
+        t1.title = "First renamed".into();
+        store.save_task(&t1).unwrap();
+    }
+
+    #[test]
+    fn slug_rename_moves_file_and_updates_path() {
+        let (dir, mut store, _vcs) = setup();
+        let mut task = Task::new("Mover");
+        task.slug = Some("old-name".into());
+        store.save_task(&task).unwrap();
+        assert!(dir.path().join("tasks/old-name.toml").exists());
+
+        task.slug = Some("new-name".into());
+        store.save_task(&task).unwrap();
+
+        assert!(!dir.path().join("tasks/old-name.toml").exists());
+        assert!(dir.path().join("tasks/new-name.toml").exists());
+        assert_eq!(store.list_tasks().unwrap().len(), 1);
+
+        let path: String = store
+            .with_conn(|conn| {
+                conn.query_row(
+                    "SELECT path FROM tasks WHERE id = ?1",
+                    params![task.id.to_string()],
+                    |r| r.get(0),
+                )
+                .map_err(|e| TaskError::Other(e.to_string()))
+            })
+            .unwrap();
+        assert_eq!(path, "tasks/new-name.toml");
+    }
+
+    #[test]
+    fn delete_uses_path_hint() {
+        let (dir, mut store, _vcs) = setup();
+        let mut task = Task::new("Doomed");
+        task.slug = Some("doomed".into());
+        store.save_task(&task).unwrap();
+        assert!(dir.path().join("tasks/doomed.toml").exists());
+
+        store.delete_task(task.id).unwrap();
+        assert!(!dir.path().join("tasks/doomed.toml").exists());
+        assert!(store.list_tasks().unwrap().is_empty());
     }
 
     #[test]
