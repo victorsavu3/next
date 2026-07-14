@@ -8,6 +8,7 @@ use crate::core::{
 use rusqlite::{params, Connection, OptionalExtension as _};
 use uuid::Uuid;
 
+use super::git_backend::FileChange;
 use super::TomlStore;
 
 /// TOML-backed store with an SQLite read cache.
@@ -21,6 +22,8 @@ use super::TomlStore;
 /// committed to git — add `.next.db` to your `.gitignore`.
 pub struct CachedStore {
     inner: TomlStore,
+    /// Repository root, used to resolve repo-relative paths from git diffs.
+    root: PathBuf,
     conn: Mutex<Connection>,
 }
 
@@ -28,21 +31,20 @@ impl CachedStore {
     /// Opens (or creates) the SQLite cache at `db_path`.
     ///
     /// `head_hash` is the current git HEAD SHA or `"unborn"` for a fresh repo.
-    /// If the stored hash differs from `head_hash` the cache is rebuilt from
-    /// the TOML files before returning.
+    /// If the stored hash differs from `head_hash` the cache is reconciled
+    /// (incrementally when possible) with the TOML files before returning.
     pub fn open(inner: TomlStore, db_path: PathBuf, head_hash: &str) -> Result<Self> {
         let conn = Connection::open(&db_path)
             .map_err(|e| TaskError::Other(format!("sqlite open {}: {e}", db_path.display())))?;
         configure_connection(&conn)?;
         setup_schema(&conn)?;
-        let stored = get_meta(&conn, "head_hash")?;
+        let root = inner.root().to_path_buf();
         let this = Self {
             inner,
+            root,
             conn: Mutex::new(conn),
         };
-        if stored.as_deref() != Some(head_hash) {
-            this.rebuild(head_hash)?;
-        }
+        this.reconcile(head_hash)?;
         Ok(this)
     }
 
@@ -80,6 +82,80 @@ impl CachedStore {
     fn rel_task_path(task: &Task) -> String {
         format!("tasks/{}", crate::core::storage::filenames::generate_filename(task))
     }
+
+    /// Brings the cache in line with `new_head`.
+    ///
+    /// No-op when the stored head already matches. Otherwise tries an
+    /// incremental update from the git tree diff — cost proportional to the
+    /// number of changed files — and falls back to a full rebuild when the
+    /// diff cannot be computed (no stored head, an unborn branch, a stored
+    /// head that no longer resolves).
+    fn reconcile(&self, new_head: &str) -> Result<()> {
+        let stored = self.with_conn(|conn| get_meta(conn, "head_hash"))?;
+        if stored.as_deref() == Some(new_head) {
+            return Ok(());
+        }
+        if let Some(stored) = stored {
+            if let Some(changes) = super::git_backend::changed_paths(&self.root, &stored, new_head) {
+                return self.apply_changes(&changes, new_head);
+            }
+        }
+        self.rebuild(new_head)
+    }
+
+    /// Applies an incremental set of file changes to the cache.
+    fn apply_changes(&self, changes: &[FileChange], new_head: &str) -> Result<()> {
+        // Deletes first, so a rename (delete + add of the same task under a
+        // new filename) nets out to the surviving row.
+        self.with_conn(|conn| {
+            for change in changes {
+                let FileChange::Delete(path) = change else { continue };
+                if is_task_file(path) {
+                    delete_by_path(conn, path)?;
+                }
+            }
+            Ok(())
+        })?;
+        for change in changes {
+            let FileChange::Upsert(path) = change else { continue };
+            if !is_task_file(path) {
+                continue;
+            }
+            let abs = self.root.join(path);
+            match std::fs::read_to_string(&abs) {
+                Ok(content) => {
+                    let task = toml::from_str::<Task>(&content).map_err(|e| {
+                        TaskError::Other(format!("parse error in {}: {e}", abs.display()))
+                    })?;
+                    self.with_conn(|conn| upsert_task(conn, &task, path))?;
+                }
+                // Vanished between diff and read (e.g. a concurrent writer) —
+                // drop any stale row for that path.
+                Err(_) => self.with_conn(|conn| delete_by_path(conn, path))?,
+            }
+        }
+        self.with_conn(|conn| set_meta(conn, "head_hash", new_head))
+    }
+}
+
+/// Whether a repo-relative path is an individual task file.
+fn is_task_file(path: &str) -> bool {
+    path.starts_with("tasks/") && path.ends_with(".toml")
+}
+
+/// Removes the task row (and its tag rows) stored at `path`, if any.
+fn delete_by_path(conn: &Connection, path: &str) -> Result<()> {
+    let id: Option<String> = conn
+        .query_row("SELECT id FROM tasks WHERE path = ?1", params![path], |r| r.get(0))
+        .optional()
+        .map_err(|e| TaskError::Other(format!("sqlite lookup by path: {e}")))?;
+    if let Some(id) = id {
+        conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])
+            .map_err(|e| TaskError::Other(format!("sqlite delete by path: {e}")))?;
+        conn.execute("DELETE FROM task_tags WHERE task_id = ?1", params![id])
+            .map_err(|e| TaskError::Other(format!("sqlite delete tags by path: {e}")))?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -192,11 +268,7 @@ impl Store for CachedStore {
     }
 
     fn after_pull(&mut self, new_head: &str) -> Result<()> {
-        let stored = self.with_conn(|conn| get_meta(conn, "head_hash"))?;
-        if stored.as_deref() != Some(new_head) {
-            self.rebuild(new_head)?;
-        }
-        Ok(())
+        self.reconcile(new_head)
     }
 
     fn note_head(&mut self, new_head: &str) -> Result<()> {
@@ -645,6 +717,107 @@ mod tests {
         let all = store.list_tasks().unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].title, "Pulled task");
+    }
+
+    #[test]
+    fn after_pull_applies_incremental_changes() {
+        let (dir, mut store, vcs) = setup();
+        let mut alpha = Task::new("Alpha");
+        alpha.slug = Some("alpha".into());
+        let mut beta = Task::new("Beta");
+        beta.slug = Some("beta".into());
+        let mut delta = Task::new("Delta");
+        delta.slug = Some("delta".into());
+        store.save_task(&alpha).unwrap();
+        store.save_task(&beta).unwrap();
+        store.save_task(&delta).unwrap();
+        let paths: Vec<_> = [&alpha, &beta, &delta]
+            .iter()
+            .map(|t| crate::core::storage::task_path(dir.path(), t))
+            .collect();
+        vcs.commit(&paths, "initial").unwrap();
+        store.note_head(&vcs.head_hash().unwrap()).unwrap();
+
+        // External changes, as a pull would leave them on disk.
+        alpha.title = "Alpha II".into();
+        fs::write(
+            dir.path().join("tasks/alpha.toml"),
+            toml::to_string_pretty(&alpha).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(dir.path().join("tasks/beta.toml")).unwrap();
+        let mut gamma = Task::new("Gamma");
+        gamma.slug = Some("gamma".into());
+        fs::write(
+            dir.path().join("tasks/gamma.toml"),
+            toml::to_string_pretty(&gamma).unwrap(),
+        )
+        .unwrap();
+        vcs.commit(
+            &[
+                dir.path().join("tasks/alpha.toml"),
+                dir.path().join("tasks/beta.toml"),
+                dir.path().join("tasks/gamma.toml"),
+            ],
+            "external",
+        )
+        .unwrap();
+        let head2 = vcs.head_hash().unwrap();
+
+        // Discriminator: drop delta's row directly. The incremental path must
+        // not touch it (its file did not change between the heads), while a
+        // full rebuild would resurrect it.
+        store
+            .with_conn(|conn| {
+                conn.execute("DELETE FROM tasks WHERE slug = 'delta'", [])
+                    .map_err(|e| TaskError::Other(e.to_string()))?;
+                Ok(())
+            })
+            .unwrap();
+
+        store.after_pull(&head2).unwrap();
+
+        assert_eq!(store.get_task(alpha.id).unwrap().title, "Alpha II");
+        assert!(store.get_task_by_slug("beta").unwrap().is_none());
+        assert!(store.get_task_by_slug("gamma").unwrap().is_some());
+        assert!(
+            store.get_task_by_slug("delta").unwrap().is_none(),
+            "incremental reconcile must not rescan unchanged files"
+        );
+    }
+
+    #[test]
+    fn rename_via_git_diff_updates_path() {
+        let (dir, mut store, vcs) = setup();
+        let mut task = Task::new("Movable");
+        task.slug = Some("before".into());
+        store.save_task(&task).unwrap();
+        vcs.commit(&[dir.path().join("tasks/before.toml")], "add").unwrap();
+        store.note_head(&vcs.head_hash().unwrap()).unwrap();
+
+        // Externally rename the file (slug change): delete + add in one commit.
+        task.slug = Some("after".into());
+        fs::write(
+            dir.path().join("tasks/after.toml"),
+            toml::to_string_pretty(&task).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(dir.path().join("tasks/before.toml")).unwrap();
+        vcs.commit(
+            &[
+                dir.path().join("tasks/before.toml"),
+                dir.path().join("tasks/after.toml"),
+            ],
+            "rename",
+        )
+        .unwrap();
+
+        store.after_pull(&vcs.head_hash().unwrap()).unwrap();
+
+        assert!(store.get_task_by_slug("before").unwrap().is_none());
+        let found = store.get_task_by_slug("after").unwrap().unwrap();
+        assert_eq!(found.id, task.id);
+        assert_eq!(store.list_tasks().unwrap().len(), 1);
     }
 
     #[test]

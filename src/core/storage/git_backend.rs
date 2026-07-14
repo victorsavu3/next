@@ -528,6 +528,64 @@ impl VcsBackend for GitBackend {
     }
 }
 
+/// A file change between two commits, as reported by a tree diff.
+///
+/// Paths are repo-relative with forward slashes, exactly as git reports them.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FileChange {
+    /// The file exists in the new tree — its content should be (re)loaded.
+    Upsert(String),
+    /// The file is gone from the new tree.
+    Delete(String),
+}
+
+/// Diffs the trees of `old_head`..`new_head` in the repository at `root`.
+///
+/// Returns `None` when the diff cannot be computed — unknown revisions (an
+/// unborn branch, a head garbage-collected away, a corrupt store) or an
+/// unrepresentable delta — in which case the caller must fall back to a full
+/// scan. Cost is proportional to the number of changed files, not to history
+/// length or tree size.
+pub(crate) fn changed_paths(root: &Path, old_head: &str, new_head: &str) -> Option<Vec<FileChange>> {
+    let repo = Repository::open(root).ok()?;
+    let tree_of = |rev: &str| {
+        repo.revparse_single(rev)
+            .ok()?
+            .peel_to_commit()
+            .ok()?
+            .tree()
+            .ok()
+    };
+    let old_tree = tree_of(old_head)?;
+    let new_tree = tree_of(new_head)?;
+    let diff = repo
+        .diff_tree_to_tree(Some(&old_tree), Some(&new_tree), None)
+        .ok()?;
+
+    let mut changes = Vec::new();
+    for delta in diff.deltas() {
+        let path_of = |file: git2::DiffFile<'_>| Some(file.path()?.to_str()?.to_owned());
+        use git2::Delta;
+        match delta.status() {
+            Delta::Added | Delta::Modified | Delta::Copied | Delta::Typechange => {
+                changes.push(FileChange::Upsert(path_of(delta.new_file())?));
+            }
+            Delta::Deleted => {
+                changes.push(FileChange::Delete(path_of(delta.old_file())?));
+            }
+            // Rename detection is off, so renames arrive as Delete + Add;
+            // handle the status anyway in case a caller enables it later.
+            Delta::Renamed => {
+                changes.push(FileChange::Delete(path_of(delta.old_file())?));
+                changes.push(FileChange::Upsert(path_of(delta.new_file())?));
+            }
+            // Anything else (conflicts, unreadable entries) → full scan.
+            _ => return None,
+        }
+    }
+    Some(changes)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -600,5 +658,43 @@ mod tests {
 
         let hash = backend.head_hash().unwrap();
         assert_eq!(hash.len(), 40);
+    }
+
+    #[test]
+    fn changed_paths_reports_add_modify_delete() {
+        let dir = tempfile::TempDir::new().unwrap();
+        init_repo(dir.path());
+        let backend = GitBackend::open(dir.path()).unwrap();
+
+        let f1 = dir.path().join("one.txt");
+        let f2 = dir.path().join("two.txt");
+        fs::write(&f1, "1").unwrap();
+        fs::write(&f2, "2").unwrap();
+        backend.commit(&[f1.clone(), f2.clone()], "first").unwrap();
+        let h1 = backend.head_hash().unwrap();
+
+        fs::write(&f1, "1 modified").unwrap();
+        fs::remove_file(&f2).unwrap();
+        let f3 = dir.path().join("three.txt");
+        fs::write(&f3, "3").unwrap();
+        backend.commit(&[f1, f2, f3], "second").unwrap();
+        let h2 = backend.head_hash().unwrap();
+
+        let mut changes = changed_paths(dir.path(), &h1, &h2).unwrap();
+        changes.sort_by_key(|c| match c {
+            FileChange::Upsert(p) | FileChange::Delete(p) => p.clone(),
+        });
+        assert_eq!(
+            changes,
+            vec![
+                FileChange::Upsert("one.txt".into()),
+                FileChange::Upsert("three.txt".into()),
+                FileChange::Delete("two.txt".into()),
+            ]
+        );
+
+        // Unknown revisions → None; the caller falls back to a full scan.
+        assert!(changed_paths(dir.path(), "0000000000000000000000000000000000000000", &h2).is_none());
+        assert!(changed_paths(dir.path(), "unborn", &h2).is_none());
     }
 }

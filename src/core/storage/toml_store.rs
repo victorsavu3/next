@@ -181,6 +181,11 @@ impl TomlStore {
             .collect())
     }
 
+    /// Returns the repository root this store was opened at.
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// Reads every task file together with its repo-relative path
     /// (`tasks/<filename>`, forward slashes — the same form git reports).
     pub(crate) fn list_tasks_with_paths(&self) -> Result<Vec<(String, Task)>> {
