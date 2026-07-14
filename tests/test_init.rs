@@ -124,16 +124,8 @@ fn init_then_add_task_works() {
     run(dir.path()).unwrap();
 
     // Set up git user so commits succeed (init already ran `git init`).
-    for args in [
-        vec!["config", "user.email", "test@test.com"],
-        vec!["config", "user.name", "Test"],
-    ] {
-        std::process::Command::new("git")
-            .args(&args)
-            .current_dir(dir.path())
-            .status()
-            .unwrap();
-    }
+    common::git(dir.path(), &["config", "user.email", "test@test.com"]);
+    common::git(dir.path(), &["config", "user.name", "Test"]);
 
     let (store, vcs) = next::core::storage::open(dir.path().to_path_buf()).unwrap();
     let mut ctx = next::AppContext {

@@ -92,19 +92,15 @@ fn until_rule_stops_spawning_after_last_occurrence() {
     assert_eq!(next_due, d(2026, 5, 11));
 
     // Complete the remaining occurrences up through May 25.
-    for (slug_hint, completion) in [
-        (next_task.id.to_string(), "2026-05-11"),
-    ] {
-        done::run(
-            done::Args {
-                id: slug_hint,
-                completed_at: Some(completion.into()),
-                json: false,
-            },
-            &mut env.ctx,
-        )
-        .unwrap();
-    }
+    done::run(
+        done::Args {
+            id: next_task.id.to_string(),
+            completed_at: Some("2026-05-11".into()),
+            json: false,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
     // Find the May 18 task and complete it.
     let open: Vec<_> = env
         .ctx

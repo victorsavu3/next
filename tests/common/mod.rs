@@ -23,18 +23,23 @@ pub fn setup() -> TestEnv {
 /// Initialise a git repo with test user config at `dir` (used by `setup` and
 /// by tests that need a pre-existing repo before running `next init`).
 pub fn setup_in(dir: &Path) {
-    for args in [
-        vec!["init", "-q"],
-        vec!["config", "user.email", "test@test.com"],
-        vec!["config", "user.name", "Test"],
-    ] {
-        let status = std::process::Command::new("git")
-            .args(&args)
-            .current_dir(dir)
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?} failed");
+    git(dir, &["init", "-q"]);
+    git(dir, &["config", "user.email", "test@test.com"]);
+    git(dir, &["config", "user.name", "Test"]);
+}
+
+/// Runs `git <args>` in `dir`, stripping the repo-scoping variables that
+/// `git commit` exports to hook subprocesses (`GIT_DIR`, `GIT_WORK_TREE`, …).
+/// Without this, a suite run by a pre-commit hook operates on the enclosing
+/// repository instead of the test's temp dir.
+pub fn git(dir: &Path, args: &[&str]) {
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(args).current_dir(dir);
+    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+        cmd.env_remove(var);
     }
+    let status = cmd.status().unwrap();
+    assert!(status.success(), "git {args:?} failed in {}", dir.display());
 }
 
 fn init_git_repo(dir: &Path) {

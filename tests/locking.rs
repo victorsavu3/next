@@ -18,17 +18,23 @@ use tempfile::TempDir;
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Runs `git <args>` in `dir`, stripping the repo-scoping variables that
+/// `git commit` exports to hook subprocesses (`GIT_DIR`, …) so tests running
+/// under a pre-commit hook stay inside their temp dir.
+fn run_git(dir: &Path, args: &[&str]) {
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(dir);
+    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+        cmd.env_remove(var);
+    }
+    let status = cmd.status().unwrap();
+    assert!(status.success(), "git {args:?} failed in {}", dir.display());
+}
+
 fn init_git(dir: &Path) {
-    let run = |args: &[&str]| {
-        Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .status()
-            .unwrap();
-    };
-    run(&["init", "-q"]);
-    run(&["config", "user.email", "test@example.com"]);
-    run(&["config", "user.name", "Test"]);
+    run_git(dir, &["init", "-q"]);
+    run_git(dir, &["config", "user.email", "test@example.com"]);
+    run_git(dir, &["config", "user.name", "Test"]);
 }
 
 fn fresh_store(root: &Path) -> TomlStore {
@@ -544,20 +550,12 @@ fn concurrent_save_and_commit_no_errors() {
 fn pull_and_task_save_do_not_trample() {
     // Set up a bare remote with one initial commit.
     let remote_dir = TempDir::new().unwrap();
-    Command::new("git")
-        .args(["init", "--bare", "-q"])
-        .current_dir(remote_dir.path())
-        .status()
-        .unwrap();
+    run_git(remote_dir.path(), &["init", "--bare", "-q"]);
 
     // Working repo A: add a task and push.
     let repo_a = TempDir::new().unwrap();
     init_git(repo_a.path());
-    Command::new("git")
-        .args(["remote", "add", "origin", remote_dir.path().to_str().unwrap()])
-        .current_dir(repo_a.path())
-        .status()
-        .unwrap();
+    run_git(repo_a.path(), &["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
 
     let (mut store_a, vcs_a) = next::core::storage::open(repo_a.path().to_path_buf()).unwrap();
     let task_a = Task::new("Remote task");
@@ -569,11 +567,7 @@ fn pull_and_task_save_do_not_trample() {
     // Working repo B: pull from remote while also saving local tasks concurrently.
     let repo_b = TempDir::new().unwrap();
     init_git(repo_b.path());
-    Command::new("git")
-        .args(["remote", "add", "origin", remote_dir.path().to_str().unwrap()])
-        .current_dir(repo_b.path())
-        .status()
-        .unwrap();
+    run_git(repo_b.path(), &["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
     next::core::storage::open(repo_b.path().to_path_buf()).unwrap(); // creates tasks/
 
     let root_b = Arc::new(repo_b.path().to_path_buf());

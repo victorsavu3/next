@@ -23,11 +23,15 @@ fn init_git_repo(dir: &Path) {
         vec!["config", "user.email", "test@test.com"],
         vec!["config", "user.name", "Test"],
     ] {
-        std::process::Command::new("git")
-            .args(&args)
-            .current_dir(dir)
-            .status()
-            .expect("git command failed");
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(&args).current_dir(dir);
+        // Strip the repo-scoping vars `git commit` exports to hook
+        // subprocesses (`GIT_DIR`, …) so a suite run by a pre-commit hook
+        // stays in `dir`.
+        for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+            cmd.env_remove(var);
+        }
+        cmd.status().expect("git command failed");
     }
 }
 
@@ -125,12 +129,12 @@ async fn initialize_handshake() {
 }
 
 #[tokio::test]
-async fn tools_list_returns_13_tools() {
+async fn tools_list_returns_15_tools() {
     let dir = tempfile::tempdir().unwrap();
     let addr = start_test_server("tok", None, dir.path()).await;
     let resp = mcp_call(&Client::new(), addr, "tok", "tools/list", json!({})).await;
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 13);
+    assert_eq!(tools.len(), 15);
 }
 
 #[tokio::test]
@@ -361,7 +365,8 @@ async fn get_forecast_projects_schedule_recurrence() {
         json!({ "title": "One off", "due": due_in(3), "autosync": false })).await;
     assert!(!is_error(&add2));
 
-    // Completion-type recurring task due in 2 days → concrete only, no projection.
+    // Completion-type recurring task due in 2 days → concrete entry plus
+    // projected occurrences (assumed done ASAP).
     let add3 = tool_call(&c, addr, "tok", "add_task",
         json!({ "title": "Water plants", "due": due_in(2),
                 "recur_completion": 7, "autosync": false })).await;
@@ -371,16 +376,20 @@ async fn get_forecast_projects_schedule_recurrence() {
     assert!(!is_error(&resp));
     let v: Vec<Value> = serde_json::from_str(&result_text(&resp)).unwrap();
 
-    let projected: Vec<_> = v.iter().filter(|e| e["projected"] == json!(true)).collect();
     // 30-day horizon, weekly anchored on today → 4 projected occurrences.
-    assert_eq!(projected.len(), 4, "expected 4 projected weekly occurrences");
-    assert!(projected.iter().all(|e| e["title"] == json!("Weekly review")));
+    let weekly: Vec<_> = v
+        .iter()
+        .filter(|e| e["projected"] == json!(true) && e["title"] == json!("Weekly review"))
+        .collect();
+    assert_eq!(weekly.len(), 4, "expected 4 projected weekly occurrences");
 
     // The non-recurring and completion-type tasks appear as concrete entries.
     assert!(v.iter().any(|e| e["title"] == json!("One off") && e["projected"] == json!(false)));
     assert!(v.iter().any(|e| e["title"] == json!("Water plants") && e["projected"] == json!(false)));
-    // Completion-type recurrence is never projected.
-    assert!(!v.iter().any(|e| e["title"] == json!("Water plants") && e["projected"] == json!(true)));
+    // Completion-type recurrence projects too (assumed done ASAP)…
+    assert!(v.iter().any(|e| e["title"] == json!("Water plants") && e["projected"] == json!(true)));
+    // …but a non-recurring task is never projected.
+    assert!(!v.iter().any(|e| e["title"] == json!("One off") && e["projected"] == json!(true)));
 }
 
 // ── Webhook tests ─────────────────────────────────────────────────────────────

@@ -17,6 +17,8 @@ pub mod store;
 pub mod sync;
 pub mod sync_state;
 pub mod task_repository;
+#[cfg(test)]
+pub(crate) mod test_git;
 pub mod value;
 
 pub use error::{Result, TaskError};

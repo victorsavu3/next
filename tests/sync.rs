@@ -12,11 +12,14 @@ use tempfile::TempDir;
 // ---------------------------------------------------------------------------
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .status()
-        .unwrap();
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(dir);
+    // Strip the repo-scoping vars `git commit` exports to hook subprocesses
+    // (`GIT_DIR`, …) so a suite run by a pre-commit hook stays in `dir`.
+    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+        cmd.env_remove(var);
+    }
+    let status = cmd.status().unwrap();
     assert!(status.success(), "git {args:?} failed in {}", dir.display());
 }
 
@@ -47,12 +50,10 @@ fn local_with_remote(remote_path: &Path) -> (TempDir, CachedStore, GitBackend) {
 fn clone_of(remote_path: &Path) -> (TempDir, PathBuf, CachedStore, GitBackend) {
     let base = TempDir::new().unwrap();
     let clone_path = base.path().join("repo");
-    Command::new("git")
-        .args(["clone", "-q"])
-        .arg(remote_path)
-        .arg(&clone_path)
-        .status()
-        .unwrap();
+    run_git(
+        base.path(),
+        &["clone", "-q", remote_path.to_str().unwrap(), clone_path.to_str().unwrap()],
+    );
     run_git(&clone_path, &["config", "user.email", "test@example.com"]);
     run_git(&clone_path, &["config", "user.name", "Test"]);
     let (store, vcs) = next::core::storage::open(clone_path.clone()).unwrap();

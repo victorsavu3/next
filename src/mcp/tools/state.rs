@@ -150,17 +150,7 @@ mod tests {
 
     fn make_ctx() -> (TempDir, TaskRepository) {
         let dir = tempfile::tempdir().unwrap();
-        for args in [
-            vec!["init", "-q"],
-            vec!["config", "user.email", "test@test.com"],
-            vec!["config", "user.name", "Test"],
-        ] {
-            std::process::Command::new("git")
-                .args(&args)
-                .current_dir(dir.path())
-                .status()
-                .unwrap();
-        }
+        crate::core::test_git::init_test_repo(dir.path());
         let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
         let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)

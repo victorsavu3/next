@@ -85,12 +85,27 @@ pub fn run(_args: Args, dir: &Path) -> anyhow::Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Environment variables that scope a `git` invocation to a repository.
+/// Stripped so `next init` always targets `dir`, even when invoked from a
+/// process that inherited them (e.g. a git hook exporting `GIT_DIR`).
+const GIT_SCOPE_VARS: [&str; 5] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+];
+
 fn git(dir: &Path, args: &[&str]) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .args(args)
+    let mut cmd = Command::new("git");
+    cmd.args(args)
         .current_dir(dir)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    for var in GIT_SCOPE_VARS {
+        cmd.env_remove(var);
+    }
+    let status = cmd
         .status()
         .with_context(|| format!("failed to run git {}", args.join(" ")))?;
 
@@ -163,12 +178,13 @@ fn ensure_gitignored(gitignore_path: &Path, entry: &str) -> anyhow::Result<()> {
 }
 
 fn has_any_commits(dir: &Path) -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--verify", "HEAD"])
+    let mut cmd = Command::new("git");
+    cmd.args(["rev-parse", "--verify", "HEAD"])
         .current_dir(dir)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .stderr(Stdio::null());
+    for var in GIT_SCOPE_VARS {
+        cmd.env_remove(var);
+    }
+    cmd.status().map(|s| s.success()).unwrap_or(false)
 }
