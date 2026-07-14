@@ -9,14 +9,7 @@
 use std::path::Path;
 use std::process::Command;
 
-/// Environment variables that scope a `git` invocation to a repository.
-const GIT_SCOPE_VARS: [&str; 5] = [
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_COMMON_DIR",
-    "GIT_OBJECT_DIRECTORY",
-];
+use crate::core::storage::git_backend::GIT_SCOPE_VARS;
 
 /// Runs `git <args>` in `dir` with the hook environment stripped, asserting success.
 pub fn git(dir: &Path, args: &[&str]) {

@@ -3,6 +3,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 use crate::core::{
     domain::{state::GlobalState, tag::TagMeta, task::Task},
     error::{TaskError, Result},
+    scoring::TaskDates,
     store::Store,
 };
 use rusqlite::{params, Connection, OptionalExtension as _};
@@ -62,13 +63,22 @@ impl CachedStore {
     fn rebuild(&self, head_hash: &str) -> Result<()> {
         let tasks = self.inner.list_tasks_with_paths()?;
         let state = self.inner.get_state()?;
+        // One git-history walk to backfill the date columns; empty when the
+        // repo has no history (fresh init, tests).
+        let backfill =
+            super::git_backend::task_git_dates(&self.root.join("tasks")).unwrap_or_default();
         self.with_conn(|conn| {
             conn.execute("DELETE FROM tasks", [])
                 .map_err(|e| TaskError::Other(format!("sqlite clear tasks: {e}")))?;
             conn.execute("DELETE FROM task_tags", [])
                 .map_err(|e| TaskError::Other(format!("sqlite clear task_tags: {e}")))?;
             for (path, task) in &tasks {
-                upsert_task(conn, task, path)?;
+                // Prefer the rename-stable UUID suffix; fall back to the
+                // exact filename (covers slug-named files).
+                let hex = task.id.simple().to_string();
+                let filename = path.strip_prefix("tasks/").unwrap_or(path);
+                let dates = backfill.get(&hex[..8]).or_else(|| backfill.get(filename));
+                upsert_task(conn, task, path, dates)?;
             }
             let state_json = serde_json::to_string(&state)
                 .map_err(|e| TaskError::Other(format!("serialize state: {e}")))?;
@@ -105,13 +115,22 @@ impl CachedStore {
 
     /// Applies an incremental set of file changes to the cache.
     fn apply_changes(&self, changes: &[FileChange], new_head: &str) -> Result<()> {
+        // The exact change time of each file lies somewhere in the diffed
+        // commit range; the new head's time is the closest cheap bound.
+        let head_time = super::git_backend::commit_time(&self.root, new_head);
+        let head_dates = head_time.map(|t| TaskDates { created_at: t, updated_at: t });
+
         // Deletes first, so a rename (delete + add of the same task under a
-        // new filename) nets out to the surviving row.
+        // new filename) nets out to the surviving row. Stash the deleted
+        // rows' creation times so a rename does not reset task age.
+        let mut stashed_created: HashMap<String, String> = HashMap::new();
         self.with_conn(|conn| {
             for change in changes {
                 let FileChange::Delete(path) = change else { continue };
                 if is_task_file(path) {
-                    delete_by_path(conn, path)?;
+                    if let Some((id, Some(created))) = delete_by_path(conn, path)? {
+                        stashed_created.insert(id, created);
+                    }
                 }
             }
             Ok(())
@@ -127,11 +146,22 @@ impl CachedStore {
                     let task = toml::from_str::<Task>(&content).map_err(|e| {
                         TaskError::Other(format!("parse error in {}: {e}", abs.display()))
                     })?;
-                    self.with_conn(|conn| upsert_task(conn, &task, path))?;
+                    let restored = stashed_created.get(&task.id.to_string());
+                    self.with_conn(|conn| {
+                        upsert_task(conn, &task, path, head_dates.as_ref())?;
+                        if let Some(created) = restored {
+                            conn.execute(
+                                "UPDATE tasks SET created_at = ?2 WHERE id = ?1",
+                                params![task.id.to_string(), created],
+                            )
+                            .map_err(|e| TaskError::Other(format!("sqlite restore created_at: {e}")))?;
+                        }
+                        Ok(())
+                    })?;
                 }
                 // Vanished between diff and read (e.g. a concurrent writer) —
                 // drop any stale row for that path.
-                Err(_) => self.with_conn(|conn| delete_by_path(conn, path))?,
+                Err(_) => self.with_conn(|conn| delete_by_path(conn, path).map(|_| ()))?,
             }
         }
         self.with_conn(|conn| set_meta(conn, "head_hash", new_head))
@@ -143,19 +173,32 @@ fn is_task_file(path: &str) -> bool {
     path.starts_with("tasks/") && path.ends_with(".toml")
 }
 
+/// Parses an RFC 3339 timestamp column value into UTC.
+fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|d| d.with_timezone(&chrono::Utc))
+}
+
 /// Removes the task row (and its tag rows) stored at `path`, if any.
-fn delete_by_path(conn: &Connection, path: &str) -> Result<()> {
-    let id: Option<String> = conn
-        .query_row("SELECT id FROM tasks WHERE path = ?1", params![path], |r| r.get(0))
+/// Returns the removed row's id and creation time so a rename (delete + add
+/// of the same task) can carry the creation time over.
+fn delete_by_path(conn: &Connection, path: &str) -> Result<Option<(String, Option<String>)>> {
+    let row: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT id, created_at FROM tasks WHERE path = ?1",
+            params![path],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .optional()
         .map_err(|e| TaskError::Other(format!("sqlite lookup by path: {e}")))?;
-    if let Some(id) = id {
+    if let Some((id, _)) = &row {
         conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])
             .map_err(|e| TaskError::Other(format!("sqlite delete by path: {e}")))?;
         conn.execute("DELETE FROM task_tags WHERE task_id = ?1", params![id])
             .map_err(|e| TaskError::Other(format!("sqlite delete tags by path: {e}")))?;
     }
-    Ok(())
+    Ok(row)
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +291,11 @@ impl Store for CachedStore {
         })?;
 
         self.inner.save_task_at(task, old_path.as_deref())?;
-        self.with_conn(|conn| upsert_task(conn, task, &Self::rel_task_path(task)))
+        // A local write is about to be committed, so "now" matches the commit
+        // author time; on an existing row only updated_at advances.
+        let now = chrono::Utc::now();
+        let dates = TaskDates { created_at: now, updated_at: now };
+        self.with_conn(|conn| upsert_task(conn, task, &Self::rel_task_path(task), Some(&dates)))
     }
 
     fn delete_task(&mut self, id: Uuid) -> Result<()> {
@@ -309,6 +356,38 @@ impl Store for CachedStore {
         self.reconcile(new_head)
     }
 
+    fn task_dates(&self) -> Result<HashMap<Uuid, TaskDates>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, created_at, updated_at FROM tasks
+                     WHERE created_at IS NOT NULL AND updated_at IS NOT NULL",
+                )
+                .map_err(|e| TaskError::Other(format!("sqlite prepare dates: {e}")))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .map_err(|e| TaskError::Other(format!("sqlite query dates: {e}")))?;
+            let mut dates = HashMap::new();
+            for row in rows {
+                let (id, created, updated) =
+                    row.map_err(|e| TaskError::Other(format!("sqlite dates row: {e}")))?;
+                let (Ok(id), Some(created), Some(updated)) =
+                    (Uuid::parse_str(&id), parse_rfc3339(&created), parse_rfc3339(&updated))
+                else {
+                    continue;
+                };
+                dates.insert(id, TaskDates { created_at: created, updated_at: updated });
+            }
+            Ok(dates)
+        })
+    }
+
     fn note_head(&mut self, new_head: &str) -> Result<()> {
         self.with_conn(|conn| set_meta(conn, "head_hash", new_head))
     }
@@ -338,7 +417,7 @@ fn configure_connection(conn: &Connection) -> Result<()> {
 
 /// Bumped whenever the table layout changes. A mismatch drops and recreates
 /// the task tables and clears the stored head so `open()` rebuilds from TOML.
-const SCHEMA_VERSION: &str = "2";
+const SCHEMA_VERSION: &str = "3";
 
 fn setup_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
@@ -377,6 +456,8 @@ fn setup_schema(conn: &Connection) -> Result<()> {
             assignee     TEXT,
             archived     INTEGER NOT NULL DEFAULT 0,
             path         TEXT NOT NULL,
+            created_at   TEXT,
+            updated_at   TEXT,
             data         TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS task_tags (
@@ -432,14 +513,32 @@ fn priority_str(task: &Task) -> &'static str {
     }
 }
 
-fn upsert_task(conn: &Connection, task: &Task, rel_path: &str) -> Result<()> {
+/// Inserts or updates a task row.
+///
+/// `dates` seeds the git-derived timestamp columns: on a fresh row both are
+/// taken from it; on an existing row `created_at` is preserved and only
+/// `updated_at` advances (kept when `dates` is `None`).
+fn upsert_task(conn: &Connection, task: &Task, rel_path: &str, dates: Option<&TaskDates>) -> Result<()> {
     let data = serde_json::to_string(task)
         .map_err(|e| TaskError::Other(format!("serialize task {}: {e}", task.id)))?;
     let id_str = task.id.to_string();
     conn.execute(
-        "INSERT OR REPLACE INTO tasks(id, slug, status, priority, due, start,
-             completed_at, parent_id, assignee, archived, path, data)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11)",
+        "INSERT INTO tasks(id, slug, status, priority, due, start,
+             completed_at, parent_id, assignee, archived, path,
+             created_at, updated_at, data)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?12, ?13)
+         ON CONFLICT(id) DO UPDATE SET
+             slug = excluded.slug,
+             status = excluded.status,
+             priority = excluded.priority,
+             due = excluded.due,
+             start = excluded.start,
+             completed_at = excluded.completed_at,
+             parent_id = excluded.parent_id,
+             assignee = excluded.assignee,
+             path = excluded.path,
+             updated_at = COALESCE(excluded.updated_at, tasks.updated_at),
+             data = excluded.data",
         params![
             id_str,
             task.slug.as_deref(),
@@ -451,6 +550,8 @@ fn upsert_task(conn: &Connection, task: &Task, rel_path: &str) -> Result<()> {
             task.parent_id.map(|p| p.to_string()),
             task.assignee.as_deref(),
             rel_path,
+            dates.map(|d| d.created_at.to_rfc3339()),
+            dates.map(|d| d.updated_at.to_rfc3339()),
             data,
         ],
     )
@@ -921,6 +1022,99 @@ mod tests {
         // Deleting the task must remove all its tag rows.
         store.delete_task(task.id).unwrap();
         assert_eq!(count_tags(&store, &id), 0);
+    }
+
+    #[test]
+    fn save_task_sets_and_preserves_created_at() {
+        let (_dir, mut store, _vcs) = setup();
+        let mut task = Task::new("Dated");
+        store.save_task(&task).unwrap();
+        let d1 = store.task_dates().unwrap()[&task.id].clone();
+        assert_eq!(d1.created_at, d1.updated_at);
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        task.title = "Dated II".into();
+        store.save_task(&task).unwrap();
+        let d2 = store.task_dates().unwrap()[&task.id].clone();
+        assert_eq!(d2.created_at, d1.created_at, "created_at must not change on update");
+        assert!(d2.updated_at > d1.updated_at, "updated_at must advance");
+    }
+
+    #[test]
+    fn rebuild_backfills_dates_from_git_history() {
+        let (dir, mut store, vcs) = setup();
+        let mut slugged = Task::new("Slugged");
+        slugged.slug = Some("slugged".into());
+        let plain = Task::new("Plain");
+        store.save_task(&slugged).unwrap();
+        store.save_task(&plain).unwrap();
+        vcs.commit(
+            &[
+                crate::core::storage::task_path(dir.path(), &slugged),
+                crate::core::storage::task_path(dir.path(), &plain),
+            ],
+            "add tasks",
+        )
+        .unwrap();
+        let head = vcs.head_hash().unwrap();
+
+        // Fresh cache in a separate db file → full rebuild with backfill.
+        let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let store2 = CachedStore::open(inner, dir.path().join(".next2.db"), &head).unwrap();
+        let dates = store2.task_dates().unwrap();
+        assert!(dates.contains_key(&plain.id), "uuid-suffixed file must be backfilled");
+        assert!(
+            dates.contains_key(&slugged.id),
+            "slug-named file must be backfilled via its filename key"
+        );
+    }
+
+    #[test]
+    fn incremental_upsert_keeps_created_at() {
+        let (dir, mut store, vcs) = setup();
+        let mut task = Task::new("Evolving");
+        task.slug = Some("evolving".into());
+        store.save_task(&task).unwrap();
+        vcs.commit(&[dir.path().join("tasks/evolving.toml")], "add").unwrap();
+        store.note_head(&vcs.head_hash().unwrap()).unwrap();
+        let before = store.task_dates().unwrap()[&task.id].clone();
+
+        task.title = "Evolved".into();
+        fs::write(
+            dir.path().join("tasks/evolving.toml"),
+            toml::to_string_pretty(&task).unwrap(),
+        )
+        .unwrap();
+        vcs.commit(&[dir.path().join("tasks/evolving.toml")], "modify").unwrap();
+        store.after_pull(&vcs.head_hash().unwrap()).unwrap();
+
+        let after = store.task_dates().unwrap()[&task.id].clone();
+        assert_eq!(after.created_at, before.created_at, "external modify keeps created_at");
+        assert_eq!(store.get_task(task.id).unwrap().title, "Evolved");
+    }
+
+    #[test]
+    fn rename_keeps_created_at() {
+        let (dir, mut store, vcs) = setup();
+        let mut task = Task::new("Renamed");
+        task.slug = Some("r1".into());
+        store.save_task(&task).unwrap();
+        vcs.commit(&[dir.path().join("tasks/r1.toml")], "add").unwrap();
+        store.note_head(&vcs.head_hash().unwrap()).unwrap();
+        let before = store.task_dates().unwrap()[&task.id].clone();
+
+        task.slug = Some("r2".into());
+        fs::write(dir.path().join("tasks/r2.toml"), toml::to_string_pretty(&task).unwrap()).unwrap();
+        fs::remove_file(dir.path().join("tasks/r1.toml")).unwrap();
+        vcs.commit(
+            &[dir.path().join("tasks/r1.toml"), dir.path().join("tasks/r2.toml")],
+            "rename",
+        )
+        .unwrap();
+        store.after_pull(&vcs.head_hash().unwrap()).unwrap();
+
+        let after = store.task_dates().unwrap()[&task.id].clone();
+        assert_eq!(after.created_at, before.created_at, "rename keeps created_at");
     }
 
     #[test]

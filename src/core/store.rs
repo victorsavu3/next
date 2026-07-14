@@ -130,6 +130,13 @@ pub trait Store: Send + Sync {
     fn note_head(&mut self, _new_head: &str) -> Result<()> {
         Ok(())
     }
+
+    /// Git-derived creation/update timestamps for all cached tasks, keyed by
+    /// task id. Maintained by the storage layer from git history and used by
+    /// scoring (age factor). Default: empty, for stores without a date index.
+    fn task_dates(&self) -> Result<HashMap<Uuid, crate::core::scoring::TaskDates>> {
+        Ok(HashMap::new())
+    }
 }
 
 /// Version-control backend.
@@ -147,15 +154,6 @@ pub trait VcsBackend: Send + Sync {
     /// Returns the SHA-1 hex string of the current HEAD commit.
     /// Used by the cache layer to detect whether a rebuild is needed.
     fn head_hash(&self) -> Result<String>;
-
-    /// Returns git-derived first/last commit timestamps for every task file under
-    /// `tasks_dir`. The map is keyed by the 8-character hex UUID prefix embedded
-    /// in each filename (e.g. `"abc12345"` for `water-plants-abc12345.toml`).
-    ///
-    /// Returns an empty map when no git history exists (new repo, test stub).
-    fn task_git_dates(&self, _tasks_dir: &std::path::Path) -> Result<HashMap<String, crate::core::scoring::TaskDates>> {
-        Ok(HashMap::new())
-    }
 
     /// Returns the working-tree diff relative to HEAD.
     ///

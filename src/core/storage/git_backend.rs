@@ -115,13 +115,34 @@ fn remote_callbacks<'a>(explicit: Option<(String, String)>) -> git2::RemoteCallb
     cb
 }
 
+/// Environment variables that scope a `git` invocation to a repository.
+/// Stripped from every subprocess so the command targets its working
+/// directory, never a repository inherited from the caller's environment
+/// (e.g. a git hook exporting `GIT_DIR`).
+pub(crate) const GIT_SCOPE_VARS: [&str; 5] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+];
+
+/// A `git` subprocess command rooted at `dir` with the scope env stripped.
+fn git_cmd(dir: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(dir);
+    for var in GIT_SCOPE_VARS {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
 impl GitBackend {
     /// Runs `git pull` as a subprocess in the repository directory.
     fn subprocess_pull(&self) -> Result<PullResult> {
         let _lock = self.acquire_repo_lock()?;
-        let output = Command::new("git")
+        let output = git_cmd(&self.work_dir)
             .args(["pull", "--no-edit"])
-            .current_dir(&self.work_dir)
             .output()
             .map_err(|e| TaskError::Other(format!("spawn git pull: {e}")))?;
 
@@ -146,9 +167,8 @@ impl GitBackend {
     /// Runs `git push` as a subprocess in the repository directory.
     fn subprocess_push(&self) -> Result<()> {
         let _lock = self.acquire_repo_lock()?;
-        let output = Command::new("git")
+        let output = git_cmd(&self.work_dir)
             .args(["push"])
-            .current_dir(&self.work_dir)
             .output()
             .map_err(|e| TaskError::Other(format!("spawn git push: {e}")))?;
 
@@ -411,65 +431,16 @@ impl VcsBackend for GitBackend {
         result
     }
 
-    fn task_git_dates(&self, tasks_dir: &std::path::Path) -> crate::core::error::Result<HashMap<String, crate::core::scoring::TaskDates>> {
-        use chrono::{DateTime, Utc};
-        use crate::core::scoring::TaskDates;
-
-        // One `git log` walk over the tasks/ directory: newest commit first.
-        // Output format: a "COMMIT <unix-timestamp>" header line followed by
-        // one filename per changed task file (relative to repo root, no status letter).
-        let output = Command::new("git")
-            .args(["log", "--format=COMMIT %at", "--name-only", "--", "."])
-            .current_dir(tasks_dir)
-            .output()
-            .map_err(|e| TaskError::Other(format!("git log for task dates: {e}")))?;
-
-        let text = String::from_utf8_lossy(&output.stdout);
-        let mut dates: HashMap<String, TaskDates> = HashMap::new();
-        let mut current_ts: Option<DateTime<Utc>> = None;
-
-        for line in text.lines() {
-            if let Some(ts_str) = line.strip_prefix("COMMIT ") {
-                let secs: i64 = ts_str.trim().parse().unwrap_or(0);
-                current_ts = DateTime::from_timestamp(secs, 0);
-            } else if !line.is_empty() {
-                let Some(ts) = current_ts else { continue };
-                // Filename is relative to tasks_dir.  Extract the 8-char UUID hex
-                // suffix embedded before the ".toml" extension.
-                let stem = std::path::Path::new(line)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
-                // Filenames end in "-{uuid8}" (slug-named) or are just "{uuid8}.toml".
-                let hex8 = stem.rsplit('-').next().unwrap_or(stem);
-                if hex8.len() == 8 && hex8.chars().all(|c| c.is_ascii_hexdigit()) {
-                    let entry = dates.entry(hex8.to_owned()).or_insert_with(|| TaskDates {
-                        created_at: ts,
-                        updated_at: ts,
-                    });
-                    // git log is newest→oldest:
-                    // - or_insert sets updated_at on the first (newest) sighting
-                    // - every subsequent sighting moves created_at earlier
-                    entry.created_at = ts;
-                }
-            }
-        }
-
-        Ok(dates)
-    }
-
     fn diff(&self) -> crate::core::error::Result<String> {
         let _lock = self.acquire_repo_lock()?;
 
-        let status = Command::new("git")
+        let status = git_cmd(&self.work_dir)
             .args(["status", "--short"])
-            .current_dir(&self.work_dir)
             .output()
             .map_err(|e| TaskError::Other(format!("git status: {e}")))?;
 
-        let diff = Command::new("git")
+        let diff = git_cmd(&self.work_dir)
             .args(["diff", "HEAD"])
-            .current_dir(&self.work_dir)
             .output()
             .map_err(|e| TaskError::Other(format!("git diff: {e}")))?;
 
@@ -497,9 +468,8 @@ impl VcsBackend for GitBackend {
     fn force_pull(&self) -> crate::core::error::Result<String> {
         let _lock = self.acquire_repo_lock()?;
 
-        let fetch = Command::new("git")
+        let fetch = git_cmd(&self.work_dir)
             .args(["fetch", "origin"])
-            .current_dir(&self.work_dir)
             .output()
             .map_err(|e| TaskError::Other(format!("git fetch: {e}")))?;
         if !fetch.status.success() {
@@ -507,9 +477,8 @@ impl VcsBackend for GitBackend {
             return Err(TaskError::Other(format!("git fetch failed: {}", stderr.trim())));
         }
 
-        let reset = Command::new("git")
+        let reset = git_cmd(&self.work_dir)
             .args(["reset", "--hard", "FETCH_HEAD"])
-            .current_dir(&self.work_dir)
             .output()
             .map_err(|e| TaskError::Other(format!("git reset: {e}")))?;
         if !reset.status.success() {
@@ -518,14 +487,74 @@ impl VcsBackend for GitBackend {
         }
 
         // Return the new HEAD so callers can update any caches.
-        let rev = Command::new("git")
+        let rev = git_cmd(&self.work_dir)
             .args(["rev-parse", "HEAD"])
-            .current_dir(&self.work_dir)
             .output()
             .map_err(|e| TaskError::Other(format!("git rev-parse: {e}")))?;
         let head = String::from_utf8_lossy(&rev.stdout).trim().to_owned();
         Ok(head)
     }
+}
+
+/// Git-derived first/last commit times for every task file under `tasks_dir`.
+///
+/// One `git log` walk over the directory, newest commit first. Each file's
+/// dates are recorded under two keys: its exact filename, and — when the stem
+/// carries the 8-hex-char UUID suffix — that suffix, which stays stable across
+/// slug and title renames. Used only to backfill the cache's date columns on
+/// a full rebuild; steady-state maintenance is incremental.
+pub(crate) fn task_git_dates(
+    tasks_dir: &Path,
+) -> crate::core::error::Result<HashMap<String, crate::core::scoring::TaskDates>> {
+    use crate::core::scoring::TaskDates;
+    use chrono::{DateTime, Utc};
+
+    // Output format: a "COMMIT <unix-timestamp>" header line followed by one
+    // path per changed task file.
+    let output = git_cmd(tasks_dir)
+        .args(["log", "--format=COMMIT %at", "--name-only", "--", "."])
+        .output()
+        .map_err(|e| TaskError::Other(format!("git log for task dates: {e}")))?;
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut dates: HashMap<String, TaskDates> = HashMap::new();
+    let mut current_ts: Option<DateTime<Utc>> = None;
+
+    for line in text.lines() {
+        if let Some(ts_str) = line.strip_prefix("COMMIT ") {
+            let secs: i64 = ts_str.trim().parse().unwrap_or(0);
+            current_ts = DateTime::from_timestamp(secs, 0);
+        } else if !line.is_empty() {
+            let Some(ts) = current_ts else { continue };
+            let file = std::path::Path::new(line);
+            let Some(name) = file.file_name().and_then(|n| n.to_str()) else { continue };
+            let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+
+            // git log is newest→oldest: the first sighting of a key fixes
+            // updated_at, every later (older) sighting moves created_at back.
+            let mut record = |key: &str| {
+                let entry = dates.entry(key.to_owned()).or_insert(TaskDates {
+                    created_at: ts,
+                    updated_at: ts,
+                });
+                entry.created_at = ts;
+            };
+            record(name);
+            let hex8 = stem.rsplit('-').next().unwrap_or(stem);
+            if hex8.len() == 8 && hex8.chars().all(|c| c.is_ascii_hexdigit()) {
+                record(hex8);
+            }
+        }
+    }
+
+    Ok(dates)
+}
+
+/// Author time of `rev` in the repository at `root`, if it resolves.
+pub(crate) fn commit_time(root: &Path, rev: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let repo = Repository::open(root).ok()?;
+    let commit = repo.revparse_single(rev).ok()?.peel_to_commit().ok()?;
+    chrono::DateTime::from_timestamp(commit.time().seconds(), 0)
 }
 
 /// A file change between two commits, as reported by a tree diff.

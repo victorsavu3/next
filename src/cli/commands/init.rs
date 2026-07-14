@@ -85,16 +85,7 @@ pub fn run(_args: Args, dir: &Path) -> anyhow::Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Environment variables that scope a `git` invocation to a repository.
-/// Stripped so `next init` always targets `dir`, even when invoked from a
-/// process that inherited them (e.g. a git hook exporting `GIT_DIR`).
-const GIT_SCOPE_VARS: [&str; 5] = [
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_COMMON_DIR",
-    "GIT_OBJECT_DIRECTORY",
-];
+use crate::core::storage::git_backend::GIT_SCOPE_VARS;
 
 fn git(dir: &Path, args: &[&str]) -> anyhow::Result<()> {
     let mut cmd = Command::new("git");

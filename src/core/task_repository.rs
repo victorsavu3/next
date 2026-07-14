@@ -80,25 +80,16 @@ impl TaskRepository {
         self.plugin_origin.as_deref()
     }
 
-    /// Returns git-derived creation/update timestamps for the given tasks,
-    /// resolved to full UUIDs by matching the 8-char hex file-suffix against
-    /// the provided task list.  Returns an empty map when git history is
-    /// unavailable (new repo, test environments without commits).
+    /// Returns git-derived creation/update timestamps for the given tasks.
+    ///
+    /// Served from the store's date index (maintained incrementally by the
+    /// cache from git history) — no git walk per call. Returns an empty map
+    /// when the store has no dates (fresh repo without commits).
     pub fn task_git_dates_for(&self, tasks: &[crate::core::domain::task::Task]) -> HashMap<Uuid, TaskDates> {
-        let tasks_dir = self.repo_root.join("tasks");
-        let by_hex8 = self.vcs.task_git_dates(&tasks_dir).unwrap_or_default();
-        if by_hex8.is_empty() {
-            return HashMap::new();
-        }
-        // Build a reverse map: 8-char hex prefix → full UUID from the loaded tasks.
+        let mut all = self.store.task_dates().unwrap_or_default();
         tasks
             .iter()
-            .filter_map(|t| {
-                let hex = t.id.to_string().replace('-', "");
-                let prefix = hex.get(..8)?;
-                let dates = by_hex8.get(prefix)?;
-                Some((t.id, dates.clone()))
-            })
+            .filter_map(|t| all.remove(&t.id).map(|dates| (t.id, dates)))
             .collect()
     }
 
