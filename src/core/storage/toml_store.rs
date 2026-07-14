@@ -174,6 +174,16 @@ impl TomlStore {
     }
 
     fn read_all_tasks(&self) -> Result<Vec<Task>> {
+        Ok(self
+            .list_tasks_with_paths()?
+            .into_iter()
+            .map(|(_, task)| task)
+            .collect())
+    }
+
+    /// Reads every task file together with its repo-relative path
+    /// (`tasks/<filename>`, forward slashes — the same form git reports).
+    pub(crate) fn list_tasks_with_paths(&self) -> Result<Vec<(String, Task)>> {
         let mut tasks = Vec::new();
         for entry in fs::read_dir(self.tasks_dir())? {
             let path = entry?.path();
@@ -184,7 +194,11 @@ impl TomlStore {
             let task = toml::from_str::<Task>(&content).map_err(|e| {
                 TaskError::Other(format!("parse error in {}: {e}", path.display()))
             })?;
-            tasks.push(task);
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            tasks.push((format!("tasks/{name}"), task));
         }
         Ok(tasks)
     }

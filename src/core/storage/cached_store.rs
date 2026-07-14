@@ -58,13 +58,15 @@ impl CachedStore {
     }
 
     fn rebuild(&self, head_hash: &str) -> Result<()> {
-        let tasks = self.inner.list_tasks()?;
+        let tasks = self.inner.list_tasks_with_paths()?;
         let state = self.inner.get_state()?;
         self.with_conn(|conn| {
             conn.execute("DELETE FROM tasks", [])
                 .map_err(|e| TaskError::Other(format!("sqlite clear tasks: {e}")))?;
-            for task in &tasks {
-                upsert_task(conn, task)?;
+            conn.execute("DELETE FROM task_tags", [])
+                .map_err(|e| TaskError::Other(format!("sqlite clear task_tags: {e}")))?;
+            for (path, task) in &tasks {
+                upsert_task(conn, task, path)?;
             }
             let state_json = serde_json::to_string(&state)
                 .map_err(|e| TaskError::Other(format!("serialize state: {e}")))?;
@@ -72,6 +74,11 @@ impl CachedStore {
             set_meta(conn, "head_hash", head_hash)?;
             Ok(())
         })
+    }
+
+    /// Repo-relative path (`tasks/<filename>`) where `task` is stored on disk.
+    fn rel_task_path(task: &Task) -> String {
+        format!("tasks/{}", crate::core::storage::filenames::generate_filename(task))
     }
 }
 
@@ -138,7 +145,7 @@ impl Store for CachedStore {
 
     fn save_task(&mut self, task: &Task) -> Result<()> {
         self.inner.save_task(task)?;
-        self.with_conn(|conn| upsert_task(conn, task))
+        self.with_conn(|conn| upsert_task(conn, task, &Self::rel_task_path(task)))
     }
 
     fn delete_task(&mut self, id: Uuid) -> Result<()> {
@@ -147,6 +154,8 @@ impl Store for CachedStore {
         self.with_conn(|conn| {
             conn.execute("DELETE FROM tasks WHERE id = ?1", params![id_str])
                 .map_err(|e| TaskError::Other(format!("sqlite delete task: {e}")))?;
+            conn.execute("DELETE FROM task_tags WHERE task_id = ?1", params![id_str])
+                .map_err(|e| TaskError::Other(format!("sqlite delete task tags: {e}")))?;
             Ok(())
         })
     }
@@ -217,6 +226,10 @@ fn configure_connection(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Bumped whenever the table layout changes. A mismatch drops and recreates
+/// the task tables and clears the stored head so `open()` rebuilds from TOML.
+const SCHEMA_VERSION: &str = "2";
+
 fn setup_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
@@ -224,12 +237,48 @@ fn setup_schema(conn: &Connection) -> Result<()> {
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        ",
+    )
+    .map_err(|e| TaskError::Other(format!("sqlite meta setup: {e}")))?;
+
+    if get_meta(conn, "schema_version")?.as_deref() != Some(SCHEMA_VERSION) {
+        conn.execute_batch(
+            "
+            DROP TABLE IF EXISTS tasks;
+            DROP TABLE IF EXISTS task_tags;
+            DELETE FROM meta WHERE key = 'head_hash';
+            ",
+        )
+        .map_err(|e| TaskError::Other(format!("sqlite schema upgrade: {e}")))?;
+        set_meta(conn, "schema_version", SCHEMA_VERSION)?;
+    }
+
+    conn.execute_batch(
+        "
         CREATE TABLE IF NOT EXISTS tasks (
-            id   TEXT PRIMARY KEY,
-            slug TEXT,
-            data TEXT NOT NULL
+            id           TEXT PRIMARY KEY,
+            slug         TEXT,
+            status       TEXT NOT NULL,
+            priority     TEXT NOT NULL,
+            due          TEXT,
+            start        TEXT,
+            completed_at TEXT,
+            parent_id    TEXT,
+            assignee     TEXT,
+            archived     INTEGER NOT NULL DEFAULT 0,
+            path         TEXT NOT NULL,
+            data         TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_tasks_slug ON tasks(slug);
+        CREATE TABLE IF NOT EXISTS task_tags (
+            task_id TEXT NOT NULL,
+            tag     TEXT NOT NULL,
+            PRIMARY KEY (task_id, tag)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tasks_slug   ON tasks(slug);
+        CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(archived, status);
+        CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
+        CREATE INDEX IF NOT EXISTS idx_tasks_path   ON tasks(path);
+        CREATE INDEX IF NOT EXISTS idx_task_tags_tag ON task_tags(tag);
         ",
     )
     .map_err(|e| TaskError::Other(format!("sqlite schema setup: {e}")))
@@ -254,14 +303,57 @@ fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn upsert_task(conn: &Connection, task: &Task) -> Result<()> {
+fn status_str(task: &Task) -> &'static str {
+    use crate::core::domain::task::Status;
+    match task.status {
+        Status::Open => "open",
+        Status::Started => "started",
+        Status::Done => "done",
+        Status::Cancelled => "cancelled",
+    }
+}
+
+fn priority_str(task: &Task) -> &'static str {
+    use crate::core::domain::task::Priority;
+    match task.priority {
+        Priority::Low => "low",
+        Priority::Medium => "medium",
+        Priority::High => "high",
+    }
+}
+
+fn upsert_task(conn: &Connection, task: &Task, rel_path: &str) -> Result<()> {
     let data = serde_json::to_string(task)
         .map_err(|e| TaskError::Other(format!("serialize task {}: {e}", task.id)))?;
+    let id_str = task.id.to_string();
     conn.execute(
-        "INSERT OR REPLACE INTO tasks(id, slug, data) VALUES(?1, ?2, ?3)",
-        params![task.id.to_string(), task.slug.as_deref(), data],
+        "INSERT OR REPLACE INTO tasks(id, slug, status, priority, due, start,
+             completed_at, parent_id, assignee, archived, path, data)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11)",
+        params![
+            id_str,
+            task.slug.as_deref(),
+            status_str(task),
+            priority_str(task),
+            task.due.map(|d| d.to_string()),
+            task.start.map(|d| d.to_string()),
+            task.completed_at.map(|d| d.to_string()),
+            task.parent_id.map(|p| p.to_string()),
+            task.assignee.as_deref(),
+            rel_path,
+            data,
+        ],
     )
     .map_err(|e| TaskError::Other(format!("sqlite upsert task {}: {e}", task.id)))?;
+    conn.execute("DELETE FROM task_tags WHERE task_id = ?1", params![id_str])
+        .map_err(|e| TaskError::Other(format!("sqlite clear tags for {}: {e}", task.id)))?;
+    for tag in &task.tags {
+        conn.execute(
+            "INSERT OR IGNORE INTO task_tags(task_id, tag) VALUES(?1, ?2)",
+            params![id_str, tag],
+        )
+        .map_err(|e| TaskError::Other(format!("sqlite insert tag for {}: {e}", task.id)))?;
+    }
     Ok(())
 }
 
@@ -553,5 +645,106 @@ mod tests {
         let all = store.list_tasks().unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].title, "Pulled task");
+    }
+
+    #[test]
+    fn schema_v2_columns_populated() {
+        let (_dir, mut store, _vcs) = setup();
+        let mut task = Task::new("Columned");
+        task.slug = Some("columned".into());
+        task.status = Status::Done;
+        task.priority = Priority::High;
+        task.due = chrono::NaiveDate::from_ymd_opt(2026, 8, 1);
+        task.completed_at = chrono::NaiveDate::from_ymd_opt(2026, 7, 1);
+        task.assignee = Some("victor".into());
+        store.save_task(&task).unwrap();
+
+        let (status, priority, due, completed, assignee, path): (String, String, String, String, String, String) = store
+            .with_conn(|conn| {
+                conn.query_row(
+                    "SELECT status, priority, due, completed_at, assignee, path
+                     FROM tasks WHERE id = ?1",
+                    params![task.id.to_string()],
+                    |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+                    },
+                )
+                .map_err(|e| TaskError::Other(e.to_string()))
+            })
+            .unwrap();
+        assert_eq!(status, "done");
+        assert_eq!(priority, "high");
+        assert_eq!(due, "2026-08-01");
+        assert_eq!(completed, "2026-07-01");
+        assert_eq!(assignee, "victor");
+        assert_eq!(path, "tasks/columned.toml");
+    }
+
+    #[test]
+    fn task_tags_rows_maintained() {
+        let (_dir, mut store, _vcs) = setup();
+        let mut task = Task::new("Tagged");
+        task.tags = vec!["@work".into(), "rust".into()];
+        store.save_task(&task).unwrap();
+
+        let count_tags = |store: &CachedStore, id: &str| -> i64 {
+            store
+                .with_conn(|conn| {
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM task_tags WHERE task_id = ?1",
+                        params![id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| TaskError::Other(e.to_string()))
+                })
+                .unwrap()
+        };
+        let id = task.id.to_string();
+        assert_eq!(count_tags(&store, &id), 2);
+
+        // Removing a tag must remove its row.
+        task.tags = vec!["rust".into()];
+        store.save_task(&task).unwrap();
+        assert_eq!(count_tags(&store, &id), 1);
+
+        // Deleting the task must remove all its tag rows.
+        store.delete_task(task.id).unwrap();
+        assert_eq!(count_tags(&store, &id), 0);
+    }
+
+    #[test]
+    fn schema_v1_db_is_dropped_and_rebuilt() {
+        let dir = TempDir::new().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+
+        // A real task on disk that the rebuild must pick up.
+        let mut inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let task = Task::new("Survivor");
+        inner.save_task(&task).unwrap();
+
+        // Hand-craft a v1 database: no schema_version, old table layout, a
+        // stale row, and a head_hash matching what we will open with (so only
+        // the version mismatch can trigger the rebuild).
+        let db_path = dir.path().join(".next.db");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "
+                CREATE TABLE meta  (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE tasks (id TEXT PRIMARY KEY, slug TEXT, data TEXT NOT NULL);
+                INSERT INTO meta(key, value) VALUES('head_hash', 'same-head');
+                INSERT INTO tasks(id, slug, data) VALUES('stale', NULL, '{}');
+                ",
+            )
+            .unwrap();
+        }
+
+        let store = CachedStore::open(inner, db_path, "same-head").unwrap();
+        let all = store.list_tasks().unwrap();
+        assert_eq!(all.len(), 1, "stale v1 row must be gone, disk task present");
+        assert_eq!(all[0].title, "Survivor");
+
+        let version = store.with_conn(|conn| get_meta(conn, "schema_version")).unwrap();
+        assert_eq!(version.as_deref(), Some(SCHEMA_VERSION));
     }
 }
