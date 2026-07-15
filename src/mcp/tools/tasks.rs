@@ -31,10 +31,18 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
     let today = Local::now().date_naive();
     let tokens = strings_param(params, "filter_tokens");
     let include_all = bool_param(params, "include_all");
-    let limit: Option<usize> = params
+    let limit: Option<u32> = params
         .get("limit")
         .and_then(|v| v.as_u64())
-        .map(|n| n as usize);
+        .map(|n| n as u32);
+    let page: u32 = params.get("page").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    // `limit` is the legacy name for the same cap; `page_size` wins when both given.
+    let page_size: u32 = params
+        .get("page_size")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32)
+        .or(limit)
+        .unwrap_or(crate::core::store::DEFAULT_PAGE_SIZE);
 
     let mut filter_args = crate::core::FilterArgs::parse(tokens);
     filter_args.all = include_all;
@@ -51,13 +59,10 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
     let task_dates = ctx.task_git_dates_for(&all_tasks);
 
     let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
-    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.scoring, &tag_metas, &task_dates);
+    let scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.scoring, &tag_metas, &task_dates);
 
-    if let Some(n) = limit {
-        scored.truncate(n);
-    }
-
-    Ok(serde_json::to_value(&scored)?)
+    let result = crate::core::store::paginate(scored, page, page_size);
+    Ok(serde_json::to_value(&result)?)
 }
 
 // ── get_task ─────────────────────────────────────────────────────────────────
@@ -352,7 +357,8 @@ mod tests {
         assert_eq!(result["title"], "Buy milk");
 
         let list = list_tasks(&serde_json::json!({}), &mut ctx).unwrap();
-        assert_eq!(list.as_array().unwrap().len(), 1);
+        assert_eq!(list["items"].as_array().unwrap().len(), 1);
+        assert_eq!(list["total"], 1);
     }
 
     #[test]
@@ -394,7 +400,7 @@ mod tests {
 
         // Original is done; a new instance should have been spawned.
         let all = list_tasks(&json!({ "include_all": true }), &mut ctx).unwrap();
-        let tasks = all.as_array().unwrap();
+        let tasks = all["items"].as_array().unwrap();
         assert_eq!(tasks.len(), 2, "expected original + spawned next instance");
     }
 
@@ -407,7 +413,7 @@ mod tests {
         delete_task(&json!({ "id": id }), &mut ctx).unwrap();
 
         let list = list_tasks(&json!({ "include_all": true }), &mut ctx).unwrap();
-        assert_eq!(list.as_array().unwrap().len(), 0);
+        assert_eq!(list["items"].as_array().unwrap().len(), 0);
     }
 
     #[test]

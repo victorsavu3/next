@@ -47,6 +47,8 @@ fn main() -> anyhow::Result<()> {
             all_users: false,
             json: false,
             limit: None,
+            page_size: None,
+            page: 1,
             tokens: vec![],
         })
     });

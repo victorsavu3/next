@@ -21,13 +21,15 @@ pub fn all_tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "list_tasks",
-            description: "List tasks scored by urgency. Supports filter tokens (+tag, -tag, parent:slug, context:@name, user:name).",
+            description: "List tasks scored by urgency. Supports filter tokens (+tag, -tag, parent:slug, context:@name, user:name). Returns { items, page, page_size, total }; total > items.len() means the result is truncated — fetch the next page.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "filter_tokens": { "type": "array", "items": { "type": "string" }, "description": "Filter tokens e.g. [\"+@work\", \"-done\", \"parent:infra\"]" },
                     "context": { "type": "array", "items": { "type": "string" }, "description": "Override active context for this call (e.g. [\"@work\"]). Pass [] to disable context filtering. Overrides state." },
-                    "limit": { "type": "integer", "description": "Maximum number of tasks to return" },
+                    "limit": { "type": "integer", "description": "Legacy alias for page_size" },
+                    "page_size": { "type": "integer", "description": "Tasks per page (default 1000)" },
+                    "page": { "type": "integer", "description": "1-indexed page of results (default 1)" },
                     "include_all": { "type": "boolean", "description": "Disable implicit filters (blocked, future start, done/cancelled)" }
                 }
             }),

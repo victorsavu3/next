@@ -27,9 +27,17 @@ pub struct Args {
     pub json: bool,
 
     /// Maximum number of tasks to show. Overrides `list_limit` in config.
-    /// Without this flag (and with no config default), all matching tasks are shown.
+    /// Shorthand for `--page-size` (both cap the window on the result).
     #[arg(short = 'n', long)]
     pub limit: Option<usize>,
+
+    /// Tasks per page (default 1000, or `list_limit` from config).
+    #[arg(long)]
+    pub page_size: Option<u32>,
+
+    /// 1-indexed page of results to show.
+    #[arg(long, default_value_t = 1)]
+    pub page: u32,
 
     /// Filter tokens: +tag, -tag, parent:slug (project scope), context:@name, user:name.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -53,17 +61,21 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let task_dates = ctx.repo.task_git_dates_for(&all_tasks);
 
     let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
-    let mut scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.repo.scoring, &tag_metas, &task_dates);
+    let scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.repo.scoring, &tag_metas, &task_dates);
 
-    let limit = args.limit.or(ctx.config.list_limit);
-    if let Some(n) = limit {
-        scored.truncate(n);
-    }
+    // Precedence: --page-size, then the legacy --limit / list_limit caps.
+    let page_size = args
+        .page_size
+        .or(args.limit.map(|n| n as u32))
+        .or(ctx.config.list_limit.map(|n| n as u32))
+        .unwrap_or(crate::core::store::DEFAULT_PAGE_SIZE);
+    let page = crate::core::store::paginate(scored, args.page, page_size);
 
     if filter_args.json {
-        println!("{}", serde_json::to_string_pretty(&scored)?);
+        println!("{}", serde_json::to_string_pretty(&page)?);
     } else {
-        render::render_task_list(&scored);
+        render::render_task_list(&page.items);
+        render::render_page_footer(&page);
     }
 
     Ok(())

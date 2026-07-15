@@ -79,7 +79,7 @@ pub fn tag_matches(task_tag: &str, filter: &str) -> bool {
 
 /// One page of query results, with enough metadata for the caller to tell a
 /// complete result from a truncated one.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Page<T> {
     pub items: Vec<T>,
     /// The 1-indexed page these items belong to.
@@ -87,6 +87,34 @@ pub struct Page<T> {
     pub page_size: u32,
     /// Matching items before pagination.
     pub total: u64,
+}
+
+impl<T> Page<T> {
+    /// Total number of pages (at least 1).
+    pub fn page_count(&self) -> u64 {
+        (self.total.max(1)).div_ceil(self.page_size.max(1) as u64)
+    }
+
+    /// Whether the result is a window on a larger set — i.e. the response
+    /// must carry a pagination indication.
+    pub fn is_paginated(&self) -> bool {
+        self.total > self.items.len() as u64
+    }
+}
+
+/// Cuts one page out of an already-filtered, already-ordered result list.
+///
+/// Used by consumers that paginate *after* in-memory work (scored listings);
+/// SQL-backed queries page in the database instead. `page` below 1 is treated
+/// as 1; `page_size` 0 falls back to [`DEFAULT_PAGE_SIZE`]. A page past the
+/// end yields an empty `items`, with `total` still describing the full set.
+pub fn paginate<T>(items: Vec<T>, page: u32, page_size: u32) -> Page<T> {
+    let page_size = if page_size == 0 { DEFAULT_PAGE_SIZE } else { page_size };
+    let page = page.max(1);
+    let total = items.len() as u64;
+    let offset = (page as usize - 1).saturating_mul(page_size as usize);
+    let items: Vec<T> = items.into_iter().skip(offset).take(page_size as usize).collect();
+    Page { items, page, page_size, total }
 }
 
 /// Result of a `VcsBackend::pull` operation.
@@ -233,12 +261,7 @@ pub trait Store: Send + Sync {
             .filter(|t| q.matches(t))
             .collect();
         sort_for_query(&mut items);
-        let total = items.len() as u64;
-        let page_size = if q.page_size == 0 { DEFAULT_PAGE_SIZE } else { q.page_size };
-        let page = q.page.max(1);
-        let offset = (page as usize - 1).saturating_mul(page_size as usize);
-        let items: Vec<Task> = items.into_iter().skip(offset).take(page_size as usize).collect();
-        Ok(Page { items, page, page_size, total })
+        Ok(paginate(items, q.page, q.page_size))
     }
 }
 
@@ -287,5 +310,45 @@ pub trait VcsBackend: Send + Sync {
     /// Default: returns an error (not supported by non-git backends).
     fn force_pull(&self) -> Result<String> {
         Err(crate::core::error::TaskError::Other("force_pull not supported by this backend".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paginate_windows_and_totals() {
+        let p = paginate((0..10).collect::<Vec<_>>(), 2, 3);
+        assert_eq!(p.items, vec![3, 4, 5]);
+        assert_eq!((p.page, p.page_size, p.total), (2, 3, 10));
+        assert_eq!(p.page_count(), 4);
+        assert!(p.is_paginated());
+    }
+
+    #[test]
+    fn paginate_past_end_is_empty_with_total() {
+        let p = paginate(vec![1, 2], 5, 10);
+        assert!(p.items.is_empty());
+        assert_eq!(p.total, 2);
+        assert!(p.is_paginated(), "an empty window on a non-empty set is paginated");
+    }
+
+    #[test]
+    fn paginate_defaults_page_and_size() {
+        // page 0 → 1; page_size 0 → DEFAULT_PAGE_SIZE.
+        let p = paginate(vec![1, 2, 3], 0, 0);
+        assert_eq!(p.items, vec![1, 2, 3]);
+        assert_eq!((p.page, p.page_size), (1, DEFAULT_PAGE_SIZE));
+        assert_eq!(p.page_count(), 1);
+        assert!(!p.is_paginated());
+    }
+
+    #[test]
+    fn tag_matches_hierarchy() {
+        assert!(tag_matches("@work", "@work"));
+        assert!(tag_matches("@work/frontend", "@work"));
+        assert!(!tag_matches("@workshop", "@work"));
+        assert!(!tag_matches("@work", "@work/frontend"));
     }
 }

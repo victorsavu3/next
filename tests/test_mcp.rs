@@ -185,8 +185,10 @@ async fn add_and_list_task() {
 
     let list = tool_call(&c, addr, "tok", "list_tasks", json!({})).await;
     assert!(!is_error(&list));
-    let tasks: Vec<Value> = serde_json::from_str(&result_text(&list)).unwrap();
-    assert_eq!(tasks.len(), 1);
+    let page: Value = serde_json::from_str(&result_text(&list)).unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["page"], 1);
 }
 
 #[tokio::test]
@@ -246,8 +248,8 @@ async fn update_task_done_with_recurrence_spawns_next() {
         json!({ "id": id, "action": "done", "autosync": false })).await;
 
     let list = tool_call(&c, addr, "tok", "list_tasks", json!({ "include_all": true })).await;
-    let tasks: Vec<Value> = serde_json::from_str(&result_text(&list)).unwrap();
-    assert_eq!(tasks.len(), 2, "original + spawned next instance");
+    let page: Value = serde_json::from_str(&result_text(&list)).unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len(), 2, "original + spawned next instance");
 }
 
 #[tokio::test]
@@ -265,8 +267,9 @@ async fn delete_task() {
     assert!(!is_error(&del));
 
     let list = tool_call(&c, addr, "tok", "list_tasks", json!({ "include_all": true })).await;
-    let tasks: Vec<Value> = serde_json::from_str(&result_text(&list)).unwrap();
-    assert!(tasks.is_empty());
+    let page: Value = serde_json::from_str(&result_text(&list)).unwrap();
+    assert!(page["items"].as_array().unwrap().is_empty());
+    assert_eq!(page["total"], 0);
 }
 
 // ── State tools ───────────────────────────────────────────────────────────────
