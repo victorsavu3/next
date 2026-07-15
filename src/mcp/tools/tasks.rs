@@ -54,12 +54,13 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
     }
 
     let state = ctx.store.get_state()?;
-    let all_tasks = ctx.store.list_tasks()?;
+    let candidates = crate::core::listing::load_candidates(&*ctx.store, &filter_set)?;
     let tag_metas = ctx.store.list_tag_metas()?;
-    let task_dates = ctx.task_git_dates_for(&all_tasks);
 
-    let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
-    let scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.scoring, &tag_metas, &task_dates);
+    let filtered = filter::apply(candidates.clone(), &filter_set, &state, today);
+    let pool = crate::core::listing::extend_with_parents(&*ctx.store, candidates)?;
+    let task_dates = ctx.task_git_dates_for(&pool);
+    let scored = scoring::score_and_sort(filtered, &pool, today, &ctx.scoring, &tag_metas, &task_dates);
 
     let result = crate::core::store::paginate(scored, page, page_size);
     Ok(serde_json::to_value(&result)?)
@@ -77,13 +78,24 @@ pub fn get_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
     let task = ctx.store.get_task(id)?;
 
     let today = Local::now().date_naive();
-    let all_tasks = ctx.store.list_tasks()?;
     let tag_metas = ctx.store.list_tag_metas()?;
-    let task_dates = ctx.task_git_dates_for(&all_tasks);
-    let parent = task.parent_id.and_then(|pid| all_tasks.iter().find(|t| t.id == pid));
-    let breakdown = scoring::score_with_breakdown(&task, parent, &task_dates, today, &ctx.scoring, &tag_metas);
+    let parent = match task.parent_id {
+        Some(pid) => ctx.store.get_tasks(&[pid])?.pop(),
+        None => None,
+    };
+    let children = ctx
+        .store
+        .query_tasks(&crate::core::TaskQuery {
+            parent_id: Some(id),
+            ..crate::core::TaskQuery::unpaginated()
+        })?
+        .items;
 
-    let children: Vec<&Task> = all_tasks.iter().filter(|t| t.parent_id == Some(id)).collect();
+    let mut dated: Vec<Task> = vec![task.clone()];
+    dated.extend(parent.clone());
+    let task_dates = ctx.task_git_dates_for(&dated);
+    let breakdown =
+        scoring::score_with_breakdown(&task, parent.as_ref(), &task_dates, today, &ctx.scoring, &tag_metas);
 
     Ok(json!({
         "task": task,

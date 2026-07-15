@@ -18,20 +18,26 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let id = resolve_task_id(ctx.repo.store(), &args.id)?;
     let task = ctx.repo.store().get_task(id)?;
 
-    let all_tasks = ctx.repo.store().list_tasks()?;
     let tag_metas = ctx.repo.store().list_tag_metas()?;
-    let task_dates = ctx.repo.task_git_dates_for(&all_tasks);
-    let parent = task
-        .parent_id
-        .and_then(|pid| all_tasks.iter().find(|t| t.id == pid));
+    let parent = match task.parent_id {
+        Some(pid) => ctx.repo.store().get_tasks(&[pid])?.pop(),
+        None => None,
+    };
+    let mut dated: Vec<_> = vec![task.clone()];
+    dated.extend(parent.clone());
+    let task_dates = ctx.repo.task_git_dates_for(&dated);
 
-    let bd = scoring::score_with_breakdown(&task, parent, &task_dates, today, &ctx.repo.scoring, &tag_metas);
+    let bd = scoring::score_with_breakdown(&task, parent.as_ref(), &task_dates, today, &ctx.repo.scoring, &tag_metas);
 
     if args.json {
-        let children: Vec<_> = all_tasks
-            .iter()
-            .filter(|t| t.parent_id == Some(task.id))
-            .collect();
+        let children = ctx
+            .repo
+            .store()
+            .query_tasks(&crate::core::TaskQuery {
+                parent_id: Some(task.id),
+                ..crate::core::TaskQuery::unpaginated()
+            })?
+            .items;
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({
             "task": task,
             "score": bd.total,
@@ -75,10 +81,14 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
         println!("Parent:   [{}] {}", &p.id.to_string()[..8], p.title);
     }
 
-    let children: Vec<_> = all_tasks
-        .iter()
-        .filter(|t| t.parent_id == Some(task.id))
-        .collect();
+    let children = ctx
+        .repo
+        .store()
+        .query_tasks(&crate::core::TaskQuery {
+            parent_id: Some(task.id),
+            ..crate::core::TaskQuery::unpaginated()
+        })?
+        .items;
     if !children.is_empty() {
         println!("Children:");
         for child in &children {
@@ -86,11 +96,12 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
         }
     }
     if !task.blocked_by.is_empty() {
+        let blockers = ctx.repo.store().get_tasks(&task.blocked_by)?;
         let blocker_strs: Vec<String> = task
             .blocked_by
             .iter()
             .map(|bid| {
-                all_tasks
+                blockers
                     .iter()
                     .find(|t| t.id == *bid)
                     .map(|t| format!("[{}] {}", &t.id.to_string()[..8], t.title))

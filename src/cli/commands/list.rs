@@ -1,5 +1,5 @@
 use chrono::Local;
-use crate::core::{domain::filter, scoring};
+use crate::core::{domain::filter, listing, scoring};
 
 use crate::{cli::render, core::FilterArgs};
 use crate::AppContext;
@@ -56,12 +56,13 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
 
     let filter_set = filter_args.to_filter_set()?;
     let state = ctx.repo.store().get_state()?;
-    let all_tasks = ctx.repo.store().list_tasks()?;
+    let candidates = listing::load_candidates(ctx.repo.store(), &filter_set)?;
     let tag_metas = ctx.repo.store().list_tag_metas()?;
-    let task_dates = ctx.repo.task_git_dates_for(&all_tasks);
 
-    let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, today);
-    let scored = scoring::score_and_sort(filtered, &all_tasks, today, &ctx.repo.scoring, &tag_metas, &task_dates);
+    let filtered = filter::apply(candidates.clone(), &filter_set, &state, today);
+    let pool = listing::extend_with_parents(ctx.repo.store(), candidates)?;
+    let task_dates = ctx.repo.task_git_dates_for(&pool);
+    let scored = scoring::score_and_sort(filtered, &pool, today, &ctx.repo.scoring, &tag_metas, &task_dates);
 
     // Precedence: --page-size, then the legacy --limit / list_limit caps.
     let page_size = args

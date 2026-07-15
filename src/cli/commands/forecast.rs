@@ -46,12 +46,13 @@ pub fn build_entries(args: &Args, ctx: &AppContext) -> anyhow::Result<(Vec<Forec
 
     let filter_set = filter_args.to_filter_set()?;
     let state = ctx.repo.store().get_state()?;
-    let all_tasks = ctx.repo.store().list_tasks()?;
+    let candidates = crate::core::listing::load_candidates(ctx.repo.store(), &filter_set)?;
+    let pool = crate::core::listing::extend_with_parents(ctx.repo.store(), candidates)?;
     let tag_metas = ctx.repo.store().list_tag_metas()?;
-    let task_dates = ctx.repo.task_git_dates_for(&all_tasks);
+    let task_dates = ctx.repo.task_git_dates_for(&pool);
 
     let entries = forecast::build_entries(
-        &all_tasks,
+        &pool,
         &state,
         &ctx.repo.scoring,
         &tag_metas,

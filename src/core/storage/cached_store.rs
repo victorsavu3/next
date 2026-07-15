@@ -356,6 +356,26 @@ impl Store for CachedStore {
         self.reconcile(new_head)
     }
 
+    fn get_tasks(&self, ids: &[Uuid]) -> Result<Vec<Task>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let marks = vec!["?"; ids.len()].join(", ");
+        let id_strs: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(&format!("SELECT data FROM tasks WHERE id IN ({marks})"))
+                .map_err(|e| TaskError::Other(format!("sqlite prepare get_tasks: {e}")))?;
+            let result = collect_task_rows(
+                stmt.query_map(rusqlite::params_from_iter(id_strs.iter()), |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(|e| TaskError::Other(format!("sqlite get_tasks: {e}")))?,
+            );
+            result
+        })
+    }
+
     fn query_tasks(&self, q: &TaskQuery) -> Result<Page<Task>> {
         let page_size = if q.page_size == 0 { DEFAULT_PAGE_SIZE } else { q.page_size };
         let page = q.page.max(1);
@@ -371,6 +391,10 @@ impl Store for CachedStore {
             let marks = vec!["?"; statuses.len()].join(", ");
             where_sql.push_str(&format!(" AND status IN ({marks})"));
             args.extend(statuses.iter().map(|s| status_name(s).to_owned()));
+        }
+        if let Some(pid) = q.parent_id {
+            where_sql.push_str(" AND parent_id = ?");
+            args.push(pid.to_string());
         }
         // Hierarchical tag match: exact tag or any descendant (`tag/...`).
         const TAG_MATCH: &str = "(SELECT 1 FROM task_tags tt \
@@ -1141,6 +1165,41 @@ mod tests {
         let titles: Vec<_> = got.items.iter().map(|t| t.title.as_str()).collect();
         assert_eq!(got.items.len(), 2);
         assert!(titles.contains(&"Kitchen") && titles.contains(&"Networking"));
+    }
+
+    #[test]
+    fn get_tasks_batch_skips_missing() {
+        let (_dir, mut store, _vcs) = setup();
+        let a = Task::new("A");
+        let b = Task::new("B");
+        store.save_task(&a).unwrap();
+        store.save_task(&b).unwrap();
+
+        let got = store.get_tasks(&[a.id, Uuid::new_v4(), b.id]).unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(store.get_tasks(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn query_by_parent_returns_all_status_children() {
+        let (_dir, mut store, _vcs) = setup();
+        let parent = Task::new("Project");
+        let mut open_child = Task::new("Open child");
+        open_child.parent_id = Some(parent.id);
+        let mut done_child = Task::new("Done child");
+        done_child.parent_id = Some(parent.id);
+        done_child.mark_done(chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap());
+        let unrelated = Task::new("Unrelated");
+        for t in [&parent, &open_child, &done_child, &unrelated] {
+            store.save_task(t).unwrap();
+        }
+
+        let got = store
+            .query_tasks(&TaskQuery { parent_id: Some(parent.id), ..TaskQuery::unpaginated() })
+            .unwrap();
+        assert_eq!(got.total, 2);
+        let ids: Vec<_> = got.items.iter().map(|t| t.id).collect();
+        assert!(ids.contains(&open_child.id) && ids.contains(&done_child.id));
     }
 
     #[test]

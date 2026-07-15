@@ -22,6 +22,8 @@ pub struct TaskQuery {
     pub statuses: Option<Vec<Status>>,
     /// `false` — only active-tier tasks; `true` — only archived tasks.
     pub archived: bool,
+    /// Keep only direct children of this task.
+    pub parent_id: Option<Uuid>,
     /// Task must carry every listed tag (a parent segment matches descendants).
     pub required_tags: Vec<String>,
     /// Task must carry none of the listed tags (same descendant semantics).
@@ -37,6 +39,7 @@ impl Default for TaskQuery {
         Self {
             statuses: None,
             archived: false,
+            parent_id: None,
             required_tags: Vec::new(),
             excluded_tags: Vec::new(),
             page: 1,
@@ -46,6 +49,12 @@ impl Default for TaskQuery {
 }
 
 impl TaskQuery {
+    /// A query returning every match in one page — for internal pipelines
+    /// (filtering, scoring) that need the complete set, not a window.
+    pub fn unpaginated() -> Self {
+        Self { page_size: u32::MAX, ..Self::default() }
+    }
+
     /// Whether `task` (assumed active-tier) passes this query's filter gates.
     /// The reference semantics that SQL-backed implementations must match.
     pub fn matches(&self, task: &Task) -> bool {
@@ -55,6 +64,11 @@ impl TaskQuery {
         }
         if let Some(statuses) = &self.statuses {
             if !statuses.contains(&task.status) {
+                return false;
+            }
+        }
+        if let Some(pid) = self.parent_id {
+            if task.parent_id != Some(pid) {
                 return false;
             }
         }
@@ -246,6 +260,15 @@ pub trait Store: Send + Sync {
     /// scoring (age factor). Default: empty, for stores without a date index.
     fn task_dates(&self) -> Result<HashMap<Uuid, crate::core::scoring::TaskDates>> {
         Ok(HashMap::new())
+    }
+
+    /// Returns the tasks with the given ids, skipping ids that no longer
+    /// resolve (a deleted parent must not fail the whole listing).
+    ///
+    /// The default fetches one by one; indexed stores override with a batch
+    /// query.
+    fn get_tasks(&self, ids: &[Uuid]) -> Result<Vec<Task>> {
+        Ok(ids.iter().filter_map(|id| self.get_task(*id).ok()).collect())
     }
 
     /// Returns the tasks matching `q`, paginated.
