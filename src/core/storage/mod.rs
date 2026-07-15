@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod cached_store;
 pub mod filenames;
 pub mod git_backend;

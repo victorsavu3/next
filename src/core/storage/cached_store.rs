@@ -67,6 +67,9 @@ impl CachedStore {
         // repo has no history (fresh init, tests).
         let backfill =
             super::git_backend::task_git_dates(&self.root.join("tasks")).unwrap_or_default();
+        // Archive segments are self-contained: entries carry frozen dates,
+        // so they never touch git history.
+        let segments = super::archive::segment_paths(&self.root)?;
         self.with_conn(|conn| {
             conn.execute("DELETE FROM tasks", [])
                 .map_err(|e| TaskError::Other(format!("sqlite clear tasks: {e}")))?;
@@ -78,14 +81,19 @@ impl CachedStore {
                 let hex = task.id.simple().to_string();
                 let filename = path.strip_prefix("tasks/").unwrap_or(path);
                 let dates = backfill.get(&hex[..8]).or_else(|| backfill.get(filename));
-                upsert_task(conn, task, path, dates)?;
+                upsert_task_row(conn, task, path, dates, 0)?;
             }
             let state_json = serde_json::to_string(&state)
                 .map_err(|e| TaskError::Other(format!("serialize state: {e}")))?;
             set_meta(conn, "state", &state_json)?;
             set_meta(conn, "head_hash", head_hash)?;
             Ok(())
-        })
+        })?;
+        for (rel, abs) in &segments {
+            let entries = super::archive::read_segment(abs)?;
+            self.with_conn(|conn| upsert_segment_rows(conn, rel, &entries))?;
+        }
+        Ok(())
     }
 
     /// Repo-relative path (`tasks/<filename>`) where `task` is stored on disk.
@@ -122,7 +130,8 @@ impl CachedStore {
 
         // Deletes first, so a rename (delete + add of the same task under a
         // new filename) nets out to the surviving row. Stash the deleted
-        // rows' creation times so a rename does not reset task age.
+        // rows' creation times so a rename does not reset task age. A deleted
+        // segment drops every row it carried.
         let mut stashed_created: HashMap<String, String> = HashMap::new();
         self.with_conn(|conn| {
             for change in changes {
@@ -131,41 +140,64 @@ impl CachedStore {
                     if let Some((id, Some(created))) = delete_by_path(conn, path)? {
                         stashed_created.insert(id, created);
                     }
+                } else if super::archive::is_segment_path(path) {
+                    while delete_by_path(conn, path)?.is_some() {}
                 }
             }
             Ok(())
         })?;
         for change in changes {
             let FileChange::Upsert(path) = change else { continue };
-            if !is_task_file(path) {
-                continue;
-            }
-            let abs = self.root.join(path);
-            match std::fs::read_to_string(&abs) {
-                Ok(content) => {
-                    let task = toml::from_str::<Task>(&content).map_err(|e| {
-                        TaskError::Other(format!("parse error in {}: {e}", abs.display()))
-                    })?;
-                    let restored = stashed_created.get(&task.id.to_string());
-                    self.with_conn(|conn| {
-                        upsert_task(conn, &task, path, head_dates.as_ref())?;
-                        if let Some(created) = restored {
-                            conn.execute(
-                                "UPDATE tasks SET created_at = ?2 WHERE id = ?1",
-                                params![task.id.to_string(), created],
-                            )
-                            .map_err(|e| TaskError::Other(format!("sqlite restore created_at: {e}")))?;
-                        }
-                        Ok(())
-                    })?;
+            if is_task_file(path) {
+                let abs = self.root.join(path);
+                match std::fs::read_to_string(&abs) {
+                    Ok(content) => {
+                        let task = toml::from_str::<Task>(&content).map_err(|e| {
+                            TaskError::Other(format!("parse error in {}: {e}", abs.display()))
+                        })?;
+                        let restored = stashed_created.get(&task.id.to_string());
+                        self.with_conn(|conn| {
+                            upsert_task_row(conn, &task, path, head_dates.as_ref(), 0)?;
+                            if let Some(created) = restored {
+                                conn.execute(
+                                    "UPDATE tasks SET created_at = ?2 WHERE id = ?1",
+                                    params![task.id.to_string(), created],
+                                )
+                                .map_err(|e| TaskError::Other(format!("sqlite restore created_at: {e}")))?;
+                            }
+                            Ok(())
+                        })?;
+                    }
+                    // Vanished between diff and read (e.g. a concurrent writer) —
+                    // drop any stale row for that path.
+                    Err(_) => self.with_conn(|conn| delete_by_path(conn, path).map(|_| ()))?,
                 }
-                // Vanished between diff and read (e.g. a concurrent writer) —
-                // drop any stale row for that path.
-                Err(_) => self.with_conn(|conn| delete_by_path(conn, path).map(|_| ()))?,
+            } else if super::archive::is_segment_path(path) {
+                // A changed segment replaces all rows it previously carried.
+                let entries = super::archive::read_segment(&self.root.join(path))?;
+                self.with_conn(|conn| upsert_segment_rows(conn, path, &entries))?;
             }
         }
         self.with_conn(|conn| set_meta(conn, "head_hash", new_head))
     }
+}
+
+/// Replaces every cached row stored at segment `rel_path` with `entries`
+/// (archived tier, frozen dates carried by the entries themselves).
+fn upsert_segment_rows(
+    conn: &Connection,
+    rel_path: &str,
+    entries: &[super::archive::ArchivedTask],
+) -> Result<()> {
+    while delete_by_path(conn, rel_path)?.is_some() {}
+    for entry in entries {
+        let dates = match (entry.created_at, entry.updated_at) {
+            (Some(c), Some(u)) => Some(TaskDates { created_at: c, updated_at: u }),
+            _ => None,
+        };
+        upsert_task_row(conn, &entry.task, rel_path, dates.as_ref(), 1)?;
+    }
+    Ok(())
 }
 
 /// Whether a repo-relative path is an individual task file.
@@ -250,9 +282,11 @@ impl Store for CachedStore {
     }
 
     fn list_tasks(&self) -> Result<Vec<Task>> {
+        // Active tiers only: archived tasks are reached through query_tasks
+        // (archived: true) or the tier-transparent id/slug/prefix lookups.
         self.with_conn(|conn| {
             let mut stmt = conn
-                .prepare("SELECT data FROM tasks")
+                .prepare("SELECT data FROM tasks WHERE archived = 0")
                 .map_err(|e| TaskError::Other(format!("sqlite prepare list: {e}")))?;
             let result = collect_task_rows(
                 stmt.query_map([], |row| row.get::<_, String>(0))
@@ -295,7 +329,7 @@ impl Store for CachedStore {
         // author time; on an existing row only updated_at advances.
         let now = chrono::Utc::now();
         let dates = TaskDates { created_at: now, updated_at: now };
-        self.with_conn(|conn| upsert_task(conn, task, &Self::rel_task_path(task), Some(&dates)))
+        self.with_conn(|conn| upsert_task_row(conn, task, &Self::rel_task_path(task), Some(&dates), 0))
     }
 
     fn delete_task(&mut self, id: Uuid) -> Result<()> {
@@ -601,8 +635,15 @@ fn priority_str(task: &Task) -> &'static str {
 ///
 /// `dates` seeds the git-derived timestamp columns: on a fresh row both are
 /// taken from it; on an existing row `created_at` is preserved and only
-/// `updated_at` advances (kept when `dates` is `None`).
-fn upsert_task(conn: &Connection, task: &Task, rel_path: &str, dates: Option<&TaskDates>) -> Result<()> {
+/// `updated_at` advances (kept when `dates` is `None`). `archived` records
+/// the storage tier (0 = active `tasks/` file, 1 = warm archive segment).
+fn upsert_task_row(
+    conn: &Connection,
+    task: &Task,
+    rel_path: &str,
+    dates: Option<&TaskDates>,
+    archived: i64,
+) -> Result<()> {
     let data = serde_json::to_string(task)
         .map_err(|e| TaskError::Other(format!("serialize task {}: {e}", task.id)))?;
     let id_str = task.id.to_string();
@@ -610,7 +651,7 @@ fn upsert_task(conn: &Connection, task: &Task, rel_path: &str, dates: Option<&Ta
         "INSERT INTO tasks(id, slug, status, priority, due, start,
              completed_at, parent_id, assignee, archived, path,
              created_at, updated_at, data)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?12, ?13)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?14, ?10, ?11, ?12, ?13)
          ON CONFLICT(id) DO UPDATE SET
              slug = excluded.slug,
              status = excluded.status,
@@ -620,6 +661,7 @@ fn upsert_task(conn: &Connection, task: &Task, rel_path: &str, dates: Option<&Ta
              completed_at = excluded.completed_at,
              parent_id = excluded.parent_id,
              assignee = excluded.assignee,
+             archived = excluded.archived,
              path = excluded.path,
              updated_at = COALESCE(excluded.updated_at, tasks.updated_at),
              data = excluded.data",
@@ -637,6 +679,7 @@ fn upsert_task(conn: &Connection, task: &Task, rel_path: &str, dates: Option<&Ta
             dates.map(|d| d.created_at.to_rfc3339()),
             dates.map(|d| d.updated_at.to_rfc3339()),
             data,
+            archived,
         ],
     )
     .map_err(|e| TaskError::Other(format!("sqlite upsert task {}: {e}", task.id)))?;
@@ -1211,6 +1254,58 @@ mod tests {
             .unwrap();
         assert_eq!(got.total, 0);
         assert!(got.items.is_empty());
+    }
+
+    #[test]
+    fn archive_segments_flow_through_cache() {
+        use crate::core::storage::archive::{write_segment, ArchivedTask};
+
+        let (dir, mut store, vcs) = setup();
+        store.save_task(&Task::new("Active")).unwrap();
+
+        // An external archive commit: a new segment appears on disk.
+        let mut old = Task::new("Ancient");
+        old.slug = Some("ancient".into());
+        old.mark_done(chrono::NaiveDate::from_ymd_opt(2025, 12, 5).unwrap());
+        let seg_abs = dir.path().join("archive/2025/12-001.toml");
+        let frozen = chrono::DateTime::from_timestamp(1_700_000_000, 0);
+        write_segment(
+            &seg_abs,
+            vec![ArchivedTask { created_at: frozen, updated_at: frozen, task: old.clone() }],
+        )
+        .unwrap();
+        vcs.commit(std::slice::from_ref(&seg_abs), "archive pass").unwrap();
+        store.after_pull(&vcs.head_hash().unwrap()).unwrap();
+
+        // Hidden from active listings and queries…
+        assert_eq!(store.list_tasks().unwrap().len(), 1);
+        assert_eq!(store.query_tasks(&TaskQuery::default()).unwrap().total, 1);
+        // …visible through the archived query, ordered lookups intact…
+        let archived = store
+            .query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() })
+            .unwrap();
+        assert_eq!(archived.total, 1);
+        assert_eq!(archived.items[0].id, old.id);
+        // …and tier-transparent for direct reads, with frozen dates served.
+        assert_eq!(store.get_task(old.id).unwrap().title, "Ancient");
+        assert!(store.get_task_by_slug("ancient").unwrap().is_some());
+        assert_eq!(store.task_dates().unwrap()[&old.id].created_at, frozen.unwrap());
+
+        // A fresh rebuild (new db) also picks segments up without history.
+        let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let store2 =
+            CachedStore::open(inner, dir.path().join(".next2.db"), &vcs.head_hash().unwrap())
+                .unwrap();
+        assert_eq!(
+            store2.query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+            1
+        );
+
+        // Segment removal (e.g. cold-tier prune) drops the rows.
+        std::fs::remove_file(&seg_abs).unwrap();
+        vcs.commit(&[seg_abs], "prune segment").unwrap();
+        store.after_pull(&vcs.head_hash().unwrap()).unwrap();
+        assert!(store.get_task(old.id).is_err());
     }
 
     #[test]
