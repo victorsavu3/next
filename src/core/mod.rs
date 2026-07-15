@@ -1,6 +1,7 @@
 //! Core library — everything that is not a feature-gated binary
 //! (`cli` / `mcp` / `forgejo`). Built with no features, the crate is just this.
 
+pub mod archiver;
 pub mod bootstrap;
 pub mod config;
 pub mod domain;

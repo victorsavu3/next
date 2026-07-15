@@ -73,6 +73,7 @@ fn main() -> anyhow::Result<()> {
         Command::User(_) => "user",
         Command::Forecast(_) => "forecast",
         Command::Sync(_) => "sync",
+        Command::Archive(_) => "archive",
         Command::Tag(_) => "tag",
         Command::Tree(_) => "tree",
         Command::Plugin(_) => "plugin",
@@ -82,7 +83,7 @@ fn main() -> anyhow::Result<()> {
 
     let is_mutation = matches!(
         cmd_name,
-        "add" | "start" | "stop" | "done" | "cancel" | "edit" | "delete" | "move" | "tag" | "data"
+        "add" | "start" | "stop" | "done" | "cancel" | "edit" | "delete" | "move" | "tag" | "data" | "archive"
     );
 
     // Pull-before-query: before any command except `sync` (which pulls
@@ -126,6 +127,7 @@ fn main() -> anyhow::Result<()> {
         Command::User(args) => commands::user::run(args, &mut ctx),
         Command::Forecast(args) => commands::forecast::run(args, &ctx),
         Command::Sync(args) => commands::sync::run(args, &mut ctx),
+        Command::Archive(args) => commands::archive::run(args, &mut ctx),
         Command::Tag(args) => commands::tag::run(args, &mut ctx),
         Command::Tree(args) => commands::tree::run(args, &ctx),
         Command::Plugin(args) => commands::plugin::run(args, &mut ctx),

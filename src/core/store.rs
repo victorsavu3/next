@@ -262,6 +262,20 @@ pub trait Store: Send + Sync {
         Ok(HashMap::new())
     }
 
+    /// Mirrors an archive-segment write into any cache: every row stored at
+    /// `rel_path` is replaced by `entries`, marked as the archived tier.
+    ///
+    /// Called by the archive pass right after it writes a segment file, so
+    /// the cache moves rows between tiers without a rebuild. Default: no-op —
+    /// a plain file store has no cache and serves only the active tier.
+    fn note_archived_segment(
+        &mut self,
+        _rel_path: &str,
+        _entries: &[crate::core::storage::archive::ArchivedTask],
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Returns the tasks with the given ids, skipping ids that no longer
     /// resolve (a deleted parent must not fail the whole listing).
     ///

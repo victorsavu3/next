@@ -474,6 +474,14 @@ impl Store for CachedStore {
         })
     }
 
+    fn note_archived_segment(
+        &mut self,
+        rel_path: &str,
+        entries: &[super::archive::ArchivedTask],
+    ) -> Result<()> {
+        self.with_conn(|conn| upsert_segment_rows(conn, rel_path, entries))
+    }
+
     fn task_dates(&self) -> Result<HashMap<Uuid, TaskDates>> {
         self.with_conn(|conn| {
             let mut stmt = conn
