@@ -131,6 +131,15 @@ pub fn paginate<T>(items: Vec<T>, page: u32, page_size: u32) -> Page<T> {
     Page { items, page, page_size, total }
 }
 
+/// Which storage tier holds a task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskLocation {
+    /// An individual file under `tasks/`.
+    Active,
+    /// An entry in the warm-tier segment at this repo-relative path.
+    Archived(String),
+}
+
 /// Result of a `VcsBackend::pull` operation.
 #[derive(Debug, Clone)]
 pub enum PullResult {
@@ -260,6 +269,24 @@ pub trait Store: Send + Sync {
     /// scoring (age factor). Default: empty, for stores without a date index.
     fn task_dates(&self) -> Result<HashMap<Uuid, crate::core::scoring::TaskDates>> {
         Ok(HashMap::new())
+    }
+
+    /// Where a task's bytes currently live.
+    ///
+    /// Default: any task the store can read is `Active` — plain file stores
+    /// serve only the active tier.
+    fn task_location(&self, id: Uuid) -> Result<TaskLocation> {
+        self.get_task(id).map(|_| TaskLocation::Active)
+    }
+
+    /// Moves an archived task's row back to the active tier and writes its
+    /// individual file, preserving the frozen creation date.
+    ///
+    /// Part of resurrection (`archiver::resurrect_if_archived`), which has
+    /// already rewritten the segment file without the task. Default: a plain
+    /// save, for stores without tiers.
+    fn resurrect_task(&mut self, task: &Task) -> Result<()> {
+        self.save_task(task)
     }
 
     /// Mirrors an archive-segment write into any cache: every row stored at

@@ -191,6 +191,43 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
     .map_err(|e| crate::core::error::TaskError::Other(format!("archive pass in {}: {e}", root.display())))
 }
 
+/// Brings an archived task back to the active tier so a mutation can apply
+/// to it normally: removes its entry from the segment (deleting an emptied
+/// segment file), restores `tasks/<file>.toml`, and flips the cache row —
+/// the frozen creation date survives, so age scoring is unaffected.
+///
+/// Returns the absolute segment path to include in the mutation's commit,
+/// or `None` when the task was already active. Must run inside the caller's
+/// repository transaction. A later archive pass re-archives the task if it
+/// becomes eligible again.
+pub fn resurrect_if_archived(
+    store: &mut dyn Store,
+    repo_root: &std::path::Path,
+    id: Uuid,
+) -> Result<Option<std::path::PathBuf>> {
+    use crate::core::store::TaskLocation;
+
+    let TaskLocation::Archived(rel) = store.task_location(id)? else {
+        return Ok(None);
+    };
+    let abs = repo_root.join(&rel);
+    let mut entries = read_segment(&abs)?;
+    let pos = entries.iter().position(|e| e.task.id == id).ok_or_else(|| {
+        crate::core::error::TaskError::Other(format!(
+            "cache row for {id} points at {rel}, but the segment has no such entry"
+        ))
+    })?;
+    let removed = entries.remove(pos);
+
+    // Order matters: flip the row first (so it no longer lives at the
+    // segment path), then re-mirror the remaining entries, which clears
+    // every row still at that path.
+    store.resurrect_task(&removed.task)?;
+    store.note_archived_segment(&rel, &entries)?;
+    write_segment(&abs, entries)?;
+    Ok(Some(abs))
+}
+
 /// Writes one segment to disk, mirrors it into the cache, and records the
 /// path for the commit.
 fn flush_segment(

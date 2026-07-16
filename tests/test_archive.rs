@@ -155,3 +155,129 @@ fn archived_tasks_keep_frozen_dates() {
         .unwrap();
     assert_eq!(entries[0].created_at, Some(before.created_at));
 }
+
+#[test]
+fn editing_archived_task_resurrects_it() {
+    let mut env = common::setup();
+    let today = d(2026, 7, 15);
+
+    let mut old = Task::new("Buried");
+    old.slug = Some("buried".into());
+    old.mark_done(d(2025, 8, 10));
+    let mut old2 = Task::new("Buried too");
+    old2.mark_done(d(2025, 8, 12));
+    add_committed(&mut env, &old);
+    add_committed(&mut env, &old2);
+
+    run_archive_pass(&mut env.ctx.repo, today).unwrap();
+    let root = env.ctx.repo.repo_root.clone();
+    assert!(!root.join("tasks/buried.toml").exists());
+
+    let created_before = env.ctx.repo.store().task_dates().unwrap()[&old.id].created_at;
+
+    // Edit the archived task → it must come back to the active tier.
+    use next::core::service::{apply_edits, EditTaskParams};
+    let edited = apply_edits(
+        old.id,
+        EditTaskParams { title: Some("Buried, revised".into()), ..Default::default() },
+        today,
+        &root,
+        &mut *env.ctx.repo.store,
+        &*env.ctx.repo.vcs,
+    )
+    .unwrap();
+    assert_eq!(edited.title, "Buried, revised");
+
+    // Back on disk as an individual file; segment shrunk but intact.
+    assert!(root.join("tasks/buried.toml").exists());
+    let entries =
+        next::core::storage::archive::read_segment(&root.join("archive/2025/08-001.toml"))
+            .unwrap();
+    assert_eq!(entries.len(), 1, "only the untouched task stays archived");
+    assert_eq!(entries[0].task.id, old2.id);
+
+    // Cache agrees: active again, still done-status, frozen created_at kept.
+    let store = env.ctx.repo.store();
+    assert_eq!(
+        store.query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        1
+    );
+    assert_eq!(store.task_dates().unwrap()[&old.id].created_at, created_before);
+
+    // The working tree is clean for tracked files (the segment change was
+    // committed with the edit); untracked cache artifacts (.next.db etc.)
+    // are gitignored in real repos but the test env writes no .gitignore.
+    let mut status_cmd = std::process::Command::new("git");
+    status_cmd
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .current_dir(&root);
+    // Strip hook-exported repo scoping so this inspects the temp repo even
+    // when the suite runs under the pre-commit hook.
+    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+        status_cmd.env_remove(var);
+    }
+    let dirty = status_cmd.output().unwrap();
+    assert!(
+        String::from_utf8_lossy(&dirty.stdout).trim().is_empty(),
+        "resurrection must leave no uncommitted changes; dirty: {}",
+        String::from_utf8_lossy(&dirty.stdout)
+    );
+
+    // Still closed and old → the next pass re-archives it.
+    let outcome = run_archive_pass(&mut env.ctx.repo, today).unwrap();
+    assert_eq!(outcome.archived, 1);
+    assert!(!root.join("tasks/buried.toml").exists());
+    let entries =
+        next::core::storage::archive::read_segment(&root.join("archive/2025/08-001.toml"))
+            .unwrap();
+    assert_eq!(entries.len(), 2, "re-archived into the same month segment");
+}
+
+#[test]
+fn resurrecting_last_entry_removes_segment_file() {
+    let mut env = common::setup();
+    let today = d(2026, 7, 15);
+
+    let mut only = Task::new("Loner");
+    only.mark_done(d(2025, 7, 1));
+    add_committed(&mut env, &only);
+    run_archive_pass(&mut env.ctx.repo, today).unwrap();
+
+    let root = env.ctx.repo.repo_root.clone();
+    let seg = root.join("archive/2025/07-001.toml");
+    assert!(seg.exists());
+
+    use next::core::service::{apply_edits, EditTaskParams};
+    apply_edits(
+        only.id,
+        EditTaskParams { notes: Some("back".into()), ..Default::default() },
+        today,
+        &root,
+        &mut *env.ctx.repo.store,
+        &*env.ctx.repo.vcs,
+    )
+    .unwrap();
+    assert!(!seg.exists(), "an emptied segment file is removed");
+}
+
+#[test]
+fn direct_save_and_delete_of_archived_task_are_rejected() {
+    let mut env = common::setup();
+    let today = d(2026, 7, 15);
+
+    let mut old = Task::new("Locked away");
+    old.mark_done(d(2025, 6, 15));
+    add_committed(&mut env, &old);
+    run_archive_pass(&mut env.ctx.repo, today).unwrap();
+
+    // A blind save_task must not create a duplicate individual file.
+    let mut edited = old.clone();
+    edited.title = "Sneaky edit".into();
+    let err = env.ctx.repo.store.save_task(&edited).unwrap_err();
+    assert!(err.to_string().contains("archived"), "unexpected error: {err}");
+
+    // A blind delete must not remove the whole segment.
+    let err = env.ctx.repo.store.delete_task(old.id).unwrap_err();
+    assert!(err.to_string().contains("archived"), "unexpected error: {err}");
+    assert!(env.ctx.repo.repo_root.join("archive/2025/06-001.toml").exists());
+}

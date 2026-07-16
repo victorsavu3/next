@@ -4,7 +4,7 @@ use crate::core::{
     domain::{state::GlobalState, tag::TagMeta, task::Task},
     error::{TaskError, Result},
     scoring::TaskDates,
-    store::{Page, Store, TaskQuery, DEFAULT_PAGE_SIZE},
+    store::{Page, Store, TaskLocation, TaskQuery, DEFAULT_PAGE_SIZE},
 };
 use rusqlite::{params, Connection, OptionalExtension as _};
 use uuid::Uuid;
@@ -302,6 +302,18 @@ impl Store for CachedStore {
         // process's write.
         let _lock = self.inner.acquire_repo_lock()?;
 
+        // Writing an individual file for a task whose bytes live in a
+        // segment would duplicate it; mutations must resurrect first
+        // (archiver::resurrect_if_archived), which flips the row before
+        // saving through resurrect_task. A task the cache does not know yet
+        // is simply new.
+        if let Ok(TaskLocation::Archived(seg)) = self.task_location(task.id) {
+            return Err(TaskError::Other(format!(
+                "task {} is archived (in {seg}); resurrect it before editing",
+                task.id
+            )));
+        }
+
         let id_str = task.id.to_string();
         if let Some(ref slug) = task.slug {
             let taken: Option<String> = self.with_conn(|conn| {
@@ -334,6 +346,14 @@ impl Store for CachedStore {
 
     fn delete_task(&mut self, id: Uuid) -> Result<()> {
         let _lock = self.inner.acquire_repo_lock()?;
+        // The path hint below points at the whole segment for an archived
+        // task — deleting it would take every other entry along. (A task
+        // unknown to the cache falls through to the scan-based delete.)
+        if let Ok(TaskLocation::Archived(seg)) = self.task_location(id) {
+            return Err(TaskError::Other(format!(
+                "task {id} is archived (in {seg}); resurrect it before deleting"
+            )));
+        }
         let id_str = id.to_string();
         let path: Option<String> = self.with_conn(|conn| {
             conn.query_row("SELECT path FROM tasks WHERE id = ?1", params![id_str], |r| r.get(0))
@@ -480,6 +500,37 @@ impl Store for CachedStore {
         entries: &[super::archive::ArchivedTask],
     ) -> Result<()> {
         self.with_conn(|conn| upsert_segment_rows(conn, rel_path, entries))
+    }
+
+    fn task_location(&self, id: Uuid) -> Result<TaskLocation> {
+        let id_str = id.to_string();
+        let row: Option<(i64, String)> = self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT archived, path FROM tasks WHERE id = ?1",
+                params![id_str],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| TaskError::Other(format!("sqlite task_location: {e}")))
+        })?;
+        match row {
+            Some((0, _)) => Ok(TaskLocation::Active),
+            Some((_, path)) => Ok(TaskLocation::Archived(path)),
+            None => Err(TaskError::TaskNotFound(id_str)),
+        }
+    }
+
+    fn resurrect_task(&mut self, task: &Task) -> Result<()> {
+        let _lock = self.inner.acquire_repo_lock()?;
+        // Like save_task, but expects (and flips) an archived row: the
+        // ON CONFLICT upsert moves it to the active tier and the tasks/ path
+        // while preserving the frozen created_at; updated_at advances to now.
+        self.inner.save_task_at(task, None)?;
+        let now = chrono::Utc::now();
+        let dates = TaskDates { created_at: now, updated_at: now };
+        self.with_conn(|conn| {
+            upsert_task_row(conn, task, &Self::rel_task_path(task), Some(&dates), 0)
+        })
     }
 
     fn task_dates(&self) -> Result<HashMap<Uuid, TaskDates>> {

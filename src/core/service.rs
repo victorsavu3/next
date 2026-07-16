@@ -308,6 +308,11 @@ pub fn apply_edits(
 ) -> anyhow::Result<Task> {
     let _txn = begin_mutation(repo_root, store, vcs)?;
 
+    // Editing an archived task pulls it back into the active tier first;
+    // the touched segment joins this edit's commit.
+    let resurrected_segment =
+        crate::core::archiver::resurrect_if_archived(store, repo_root, id)?;
+
     let mut task = store.get_task(id)?;
 
     if let Some(title) = edits.title {
@@ -407,9 +412,10 @@ pub fn apply_edits(
 
     let _ = today; // held for future use
 
-    let task_path = storage::task_path(repo_root, &task);
+    let mut paths = vec![storage::task_path(repo_root, &task)];
+    paths.extend(resurrected_segment);
     store.save_task(&task)?;
-    vcs.commit(&[task_path], &format!("next: edit {}", task.title))?;
+    vcs.commit(&paths, &format!("next: edit {}", task.title))?;
 
     end_mutation(store, vcs)?;
     Ok(task)
