@@ -102,3 +102,12 @@ tempfile = "3"
 tokio           = { version = "1", features = ["full", "test-util"] }
 reqwest         = { version = "0.12", features = ["json"] }
 testcontainers  = "0.23"
+
+# Large-repository performance benchmark (no harness — a plain main() using
+# std::time, so no bench-only dependencies enter the build).  Opt-in:
+#   cargo bench --bench large_repo
+# Task count via NEXT_BENCH_TASKS (default 5000); NEXT_BENCH_STRICT=1 turns
+# the design budget checks into hard failures.
+[[bench]]
+name = "large_repo"
+harness = false
