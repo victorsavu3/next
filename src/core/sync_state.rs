@@ -27,6 +27,11 @@ pub struct SyncState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_pull: Option<DateTime<Utc>>,
 
+    /// When the automatic archive pass last ran on this machine. Throttles
+    /// the sync-time pass to at most once per day; `next archive` ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_archive: Option<DateTime<Utc>>,
+
     /// Per-plugin sync state, keyed by plugin name.  Populated by Req B; this
     /// slice only reads/writes `last_pull` and preserves this map untouched.
     #[serde(default)]
@@ -60,6 +65,14 @@ pub fn record_pull(root: &Path, now: DateTime<Utc>) -> Result<()> {
     })
 }
 
+/// Records an automatic archive pass at `now`, preserving the other fields.
+pub fn record_archive(root: &Path, now: DateTime<Utc>) -> Result<()> {
+    update_machine_state(root, |machine| {
+        machine.sync.last_archive = Some(now);
+        Ok(())
+    })
+}
+
 /// Records a successful periodic sync for `name` at `now`, preserving the rest.
 pub fn record_plugin_sync(root: &Path, name: &str, now: DateTime<Utc>) -> Result<()> {
     update_machine_state(root, |machine| {
@@ -77,7 +90,7 @@ mod tests {
         let now = Utc::now();
         let mut state = SyncState {
             last_pull: Some(now),
-            plugins: BTreeMap::new(),
+            ..Default::default()
         };
         state
             .plugins

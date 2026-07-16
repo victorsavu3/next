@@ -42,10 +42,51 @@ pub fn sync(ctx: &mut TaskRepository, push_only: bool, pull_only: bool) -> anyho
             PullResult::Conflicts(paths) => return Ok(SyncOutcome::Conflicts(paths)),
         }
     }
+    // Post-pull, pre-push: the daily automatic archive pass, so any archive
+    // commit rides this sync's push. Never fails the sync.
+    maybe_auto_archive(ctx, Utc::now());
     if !pull_only {
         ctx.vcs.push()?;
     }
     Ok(SyncOutcome::Clean)
+}
+
+/// Runs the archive pass if `config/archive.toml` enables `auto` and no
+/// automatic pass ran in the last day (machine-local `last_archive`).
+///
+/// `next archive` bypasses this throttle by calling the pass directly.
+fn maybe_auto_archive(ctx: &mut TaskRepository, now: DateTime<Utc>) {
+    if !crate::core::storage::archive::load_archive_config(&ctx.repo_root).auto {
+        return;
+    }
+    let due = match sync_state::load(&ctx.repo_root) {
+        Ok(state) => state
+            .last_archive
+            .is_none_or(|last| now - last >= chrono::Duration::days(1)),
+        Err(e) => {
+            tracing::warn!("failed to load sync state for auto-archive: {e}");
+            return;
+        }
+    };
+    if !due {
+        return;
+    }
+    // Record before running: a failing pass must not retry on every sync.
+    if let Err(e) = sync_state::record_archive(&ctx.repo_root, now) {
+        tracing::warn!("failed to record last_archive: {e}");
+        return;
+    }
+    match crate::core::archiver::run_archive_pass(ctx, now.date_naive()) {
+        Ok(outcome) if outcome.archived > 0 => {
+            tracing::info!(
+                "auto-archived {} task(s) into {} segment(s)",
+                outcome.archived,
+                outcome.segments.len()
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("auto-archive pass failed: {e}"),
+    }
 }
 
 // ── Pull-before-query staleness (Req A) ────────────────────────────────────────

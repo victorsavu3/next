@@ -30,7 +30,8 @@ pub fn all_tools() -> Vec<Tool> {
                     "limit": { "type": "integer", "description": "Legacy alias for page_size" },
                     "page_size": { "type": "integer", "description": "Tasks per page (default 1000)" },
                     "page": { "type": "integer", "description": "1-indexed page of results (default 1)" },
-                    "include_all": { "type": "boolean", "description": "Disable implicit filters (blocked, future start, done/cancelled)" }
+                    "include_all": { "type": "boolean", "description": "Disable implicit filters (blocked, future start, done/cancelled)" },
+                    "archived": { "type": "boolean", "description": "List archived tasks instead (most recently completed first; tag filters and pagination apply, scoring does not)" }
                 }
             }),
         },

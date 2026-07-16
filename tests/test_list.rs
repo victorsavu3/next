@@ -272,6 +272,7 @@ fn list_args_with_limit(limit: Option<usize>) -> next::cli::commands::list::Args
         future: false,
         all: false,
         closed: false,
+        archived: false,
         all_users: false,
         json: false,
         limit,

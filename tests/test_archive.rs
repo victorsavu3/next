@@ -281,3 +281,66 @@ fn direct_save_and_delete_of_archived_task_are_rejected() {
     assert!(err.to_string().contains("archived"), "unexpected error: {err}");
     assert!(env.ctx.repo.repo_root.join("archive/2025/06-001.toml").exists());
 }
+
+#[test]
+fn auto_archive_runs_once_per_day_during_sync() {
+    // sync() needs a remote; reuse the pattern from tests/sync.rs with a
+    // bare repo as origin.
+    let remote = tempfile::TempDir::new().unwrap();
+    let mut init_bare = std::process::Command::new("git");
+    init_bare.args(["init", "--bare", "-q"]).current_dir(remote.path());
+    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+        init_bare.env_remove(var);
+    }
+    assert!(init_bare.status().unwrap().success());
+
+    let mut env = common::setup();
+    let root = env.ctx.repo.repo_root.clone();
+    common::git(&root, &["remote", "add", "origin", remote.path().to_str().unwrap()]);
+
+    let mut old = Task::new("Auto-archived");
+    old.mark_done(d(2025, 5, 1));
+    add_committed(&mut env, &old);
+    common::git(&root, &["push", "-q", "-u", "origin", "HEAD"]);
+
+    // First sync runs the pass (auto defaults on, no last_archive yet).
+    next::core::sync(&mut env.ctx.repo, false, false).unwrap();
+    assert!(root.join("archive/2025/05-001.toml").exists());
+    let state = next::core::sync_state::load(&root).unwrap();
+    let first_stamp = state.last_archive.expect("last_archive recorded");
+
+    // Second sync within the day: throttled, stamp unchanged.
+    let mut old2 = Task::new("Waits a day");
+    old2.mark_done(d(2025, 5, 2));
+    add_committed(&mut env, &old2);
+    next::core::sync(&mut env.ctx.repo, false, false).unwrap();
+    let state = next::core::sync_state::load(&root).unwrap();
+    assert_eq!(state.last_archive, Some(first_stamp), "throttled sync must not re-stamp");
+    assert_eq!(
+        env.ctx.repo.store().query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        1,
+        "second task waits for the next day's pass"
+    );
+
+    // Backdate the stamp a day → the pass runs again.
+    next::core::sync_state::record_archive(&root, first_stamp - chrono::Duration::days(2)).unwrap();
+    next::core::sync(&mut env.ctx.repo, false, false).unwrap();
+    assert_eq!(
+        env.ctx.repo.store().query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        2
+    );
+
+    // auto = false disables the pass entirely.
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    std::fs::write(root.join("config/archive.toml"), "auto = false\n").unwrap();
+    let mut old3 = Task::new("Stays put");
+    old3.mark_done(d(2025, 5, 3));
+    add_committed(&mut env, &old3);
+    next::core::sync_state::record_archive(&root, first_stamp - chrono::Duration::days(2)).unwrap();
+    next::core::sync(&mut env.ctx.repo, false, false).unwrap();
+    assert_eq!(
+        env.ctx.repo.store().query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        2,
+        "auto=false must not archive"
+    );
+}

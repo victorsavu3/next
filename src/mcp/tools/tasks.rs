@@ -48,6 +48,20 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
     filter_args.all = include_all;
     let mut filter_set = filter_args.to_filter_set()?;
 
+    // Archived view: tag filters and pagination, no scoring/implicit gate;
+    // most recently completed first.
+    if bool_param(params, "archived") {
+        let result = ctx.store.query_tasks(&crate::core::TaskQuery {
+            archived: true,
+            required_tags: filter_set.required_tags.clone(),
+            excluded_tags: filter_set.excluded_tags.clone(),
+            page,
+            page_size,
+            ..Default::default()
+        })?;
+        return Ok(serde_json::to_value(&result)?);
+    }
+
     // `context` param overrides the active context from state for this call.
     if params.get("context").is_some() {
         filter_set.context_override = Some(strings_param(params, "context"));

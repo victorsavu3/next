@@ -44,6 +44,7 @@ fn main() -> anyhow::Result<()> {
             future: false,
             all: false,
             closed: false,
+            archived: false,
             all_users: false,
             json: false,
             limit: None,

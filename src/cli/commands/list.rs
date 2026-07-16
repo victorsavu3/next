@@ -18,6 +18,11 @@ pub struct Args {
     #[arg(long)]
     pub closed: bool,
 
+    /// Show archived tasks (most recently completed first). Tag filters and
+    /// pagination apply; scoring and the implicit gate do not.
+    #[arg(long, conflicts_with_all = ["all", "closed", "future"])]
+    pub archived: bool,
+
     /// Show tasks for all users, ignoring the active user filter.
     #[arg(long)]
     pub all_users: bool,
@@ -55,6 +60,38 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     filter_args.json = args.json;
 
     let filter_set = filter_args.to_filter_set()?;
+
+    if args.archived {
+        let page = ctx.repo.store().query_tasks(&crate::core::TaskQuery {
+            archived: true,
+            required_tags: filter_set.required_tags.clone(),
+            excluded_tags: filter_set.excluded_tags.clone(),
+            page: args.page,
+            page_size: args
+                .page_size
+                .or(args.limit.map(|n| n as u32))
+                .unwrap_or(crate::core::store::DEFAULT_PAGE_SIZE),
+            ..Default::default()
+        })?;
+        if filter_args.json {
+            println!("{}", serde_json::to_string_pretty(&page)?);
+        } else {
+            if page.items.is_empty() {
+                println!("No archived tasks.");
+            }
+            for task in &page.items {
+                let short = &task.id.to_string().replace('-', "")[..8];
+                let when = task
+                    .completed_at
+                    .map(|d| d.to_string())
+                    .unwrap_or_else(|| "-".into());
+                println!("[{short}] {when}  {}", task.title);
+            }
+            render::render_page_footer(&page);
+        }
+        return Ok(());
+    }
+
     let state = ctx.repo.store().get_state()?;
     let candidates = listing::load_candidates(ctx.repo.store(), &filter_set)?;
     let tag_metas = ctx.repo.store().list_tag_metas()?;
