@@ -549,3 +549,56 @@ fn pruned_segment_numbers_are_never_reused() {
     assert!(store.get_task(first.id).is_ok());
     assert!(store.get_task(straggler.id).is_ok());
 }
+
+#[test]
+fn cold_tasks_recover_inside_a_partial_clone() {
+    // Prune in a source repo, then partial-clone it (blob:none): the pruned
+    // segment's blob is not transferred, and the fresh cache must recover it
+    // through git's on-demand promisor fetch (the cat-file fallback).
+    let mut env = common::setup();
+    let today = d(2026, 7, 15);
+    let src = env.ctx.repo.repo_root.clone();
+
+    std::fs::create_dir_all(src.join("config")).unwrap();
+    std::fs::write(
+        src.join("config/archive.toml"),
+        "archive_after_days = 180\nprune_after_days = 400\n",
+    )
+    .unwrap();
+    common::git(&src, &["config", "uploadpack.allowfilter", "true"]);
+
+    let mut cold = Task::new("Cold in clone");
+    cold.mark_done(d(2025, 1, 10));
+    let open = Task::new("Open in clone");
+    add_committed(&mut env, &cold);
+    add_committed(&mut env, &open);
+    let outcome = run_archive_pass(&mut env.ctx.repo, today).unwrap();
+    assert_eq!(outcome.pruned.len(), 1);
+
+    // Partial clone into a fresh directory.
+    let base = tempfile::TempDir::new().unwrap();
+    let clone = base.path().join("clone");
+    common::git(
+        base.path(),
+        &[
+            "clone",
+            "--filter=blob:none",
+            "--quiet",
+            &format!("file://{}", src.display()),
+            clone.to_str().unwrap(),
+        ],
+    );
+    common::git(&clone, &["config", "user.email", "test@test.com"]);
+    common::git(&clone, &["config", "user.name", "Test"]);
+
+    // Opening the store rebuilds the cache; the cold segment blob is fetched
+    // on demand from the promisor remote.
+    use next::core::store::Store as _;
+    let (store, _vcs) = next::core::storage::open(clone.clone()).unwrap();
+    assert_eq!(store.get_task(cold.id).unwrap().title, "Cold in clone");
+    assert_eq!(
+        store.query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        1
+    );
+    assert_eq!(store.list_tasks().unwrap().len(), 1, "open task is active");
+}

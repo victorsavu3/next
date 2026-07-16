@@ -567,12 +567,25 @@ pub(crate) fn blob_id_at_head(root: &Path, rel_path: &str) -> Option<String> {
 
 /// Content of the blob `sha` in the repository at `root`, as UTF-8.
 ///
-/// One object read — recovering a pruned segment never walks history.
+/// One object read — recovering a pruned segment never walks history. When
+/// the object is not in the local store (a partial clone omits historical
+/// blobs), falls back to `git cat-file`, whose promisor machinery fetches
+/// the blob from the remote on demand; libgit2 cannot do that.
 pub(crate) fn blob_content(root: &Path, sha: &str) -> Option<String> {
-    let repo = Repository::open(root).ok()?;
-    let oid = git2::Oid::from_str(sha).ok()?;
-    let blob = repo.find_blob(oid).ok()?;
-    String::from_utf8(blob.content().to_vec()).ok()
+    let local = (|| {
+        let repo = Repository::open(root).ok()?;
+        let oid = git2::Oid::from_str(sha).ok()?;
+        let blob = repo.find_blob(oid).ok()?;
+        String::from_utf8(blob.content().to_vec()).ok()
+    })();
+    if local.is_some() {
+        return local;
+    }
+    let output = git_cmd(root).args(["cat-file", "blob", sha]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
 }
 
 /// A file change between two commits, as reported by a tree diff.

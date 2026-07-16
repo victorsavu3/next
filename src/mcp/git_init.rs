@@ -31,8 +31,6 @@ pub fn clone_or_open(config: &McpConfig) -> anyhow::Result<PathBuf> {
     // sanitized URL — credentials never leak into error messages.
     let (url_for_auth, user_from_url, token_from_url) = extract_credentials(git_url_raw);
 
-    let mut callbacks = git2::RemoteCallbacks::new();
-
     // Log the credential-free URL only.
     eprintln!("Cloning {} → {}", url_for_auth, repo_path.display());
 
@@ -40,6 +38,32 @@ pub fn clone_or_open(config: &McpConfig) -> anyhow::Result<PathBuf> {
     let git_user: Option<String> = config.git_user.clone().or(user_from_url);
     let git_token: Option<String> = config.git_token.clone().or(token_from_url);
 
+    // Prefer a partial clone (--filter=blob:none): only the blobs of the
+    // current checkout are fetched, so at large task counts the container
+    // bootstrap moves megabytes instead of the full object history. Pruned
+    // cold-tier segment blobs are fetched on demand later (see
+    // storage's blob cat-file fallback). libgit2 has no partial-clone
+    // support, so this shells out; any failure falls back to the git2 full
+    // clone below, keeping the change invisible to the operator.
+    match partial_clone(&url_for_auth, git_user.as_deref(), git_token.as_deref(), repo_path) {
+        Ok(()) => {
+            let repo = git2::Repository::open(repo_path)
+                .with_context(|| format!("open partial clone at {}", repo_path.display()))?;
+            ensure_git_identity(&repo, config.git_author_name.as_deref(), config.git_author_email.as_deref())?;
+            init_repo_structure(repo_path)?;
+            return Ok(repo_path.clone());
+        }
+        Err(e) => {
+            eprintln!("partial clone unavailable ({e}); falling back to a full clone");
+            // A failed clone may leave a partial directory behind, which
+            // would make the fallback clone fail too.
+            if repo_path.exists() && !repo_path.join(".git").exists() {
+                let _ = std::fs::remove_dir_all(repo_path);
+            }
+        }
+    }
+
+    let mut callbacks = git2::RemoteCallbacks::new();
     let mut tried = false;
     callbacks.credentials(move |_url, _username, allowed| {
         if tried {
@@ -65,6 +89,60 @@ pub fn clone_or_open(config: &McpConfig) -> anyhow::Result<PathBuf> {
     ensure_git_identity(&repo, config.git_author_name.as_deref(), config.git_author_email.as_deref())?;
     init_repo_structure(repo_path)?;
     Ok(repo_path.clone())
+}
+
+/// Runs `git clone --filter=blob:none` as a subprocess.
+///
+/// Credentials are embedded in the remote URL and stay in the clone's
+/// `.git/config`: a partial clone must be able to fetch missing blobs on
+/// demand (cold-tier segment recovery goes through git's promisor
+/// machinery, which authenticates with the stored URL). The config lives in
+/// the container's private volume — the same trust domain as the
+/// environment variable the token arrived in. Error output is scrubbed of
+/// the token before it can reach a log. A server that does not support
+/// filters makes git print a warning and complete a full clone — still a
+/// success here.
+fn partial_clone(
+    clean_url: &str,
+    user: Option<&str>,
+    token: Option<&str>,
+    repo_path: &Path,
+) -> anyhow::Result<()> {
+    let auth_url = match (user, token) {
+        (Some(u), Some(t)) => {
+            let rest = clean_url
+                .strip_prefix("https://")
+                .map(|r| format!("https://{u}:{t}@{r}"))
+                .or_else(|| clean_url.strip_prefix("http://").map(|r| format!("http://{u}:{t}@{r}")));
+            match rest {
+                Some(url) => url,
+                // Non-HTTP URL with separate credentials — let git2 handle it.
+                None => anyhow::bail!("credentials require an http(s) URL"),
+            }
+        }
+        _ => clean_url.to_owned(),
+    };
+
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["clone", "--filter=blob:none", "--quiet", &auth_url])
+        .arg(repo_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+        cmd.env_remove(var);
+    }
+    // Never block on an interactive credential prompt inside the container.
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+
+    let output = cmd.output().context("spawn git for partial clone")?;
+    if !output.status.success() {
+        let mut stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        if let Some(t) = token {
+            stderr = stderr.replace(t, "***");
+        }
+        anyhow::bail!("git clone --filter=blob:none failed: {}", stderr.trim());
+    }
+    Ok(())
 }
 
 /// Splits `https://user:token@host/repo.git` into the bare URL and credentials.
@@ -158,6 +236,33 @@ mod tests {
         assert_eq!(url, "https://git.example.com/repo.git");
         assert_eq!(user.as_deref(), Some("alice"));
         assert_eq!(token.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn partial_clone_from_filter_capable_remote() {
+        // A local source with filter support enabled: the subprocess clone
+        // must produce a promisor remote with the blob:none filter.
+        let src = tempfile::TempDir::new().unwrap();
+        crate::core::test_git::init_test_repo(src.path());
+        crate::core::test_git::git(src.path(), &["config", "uploadpack.allowfilter", "true"]);
+        std::fs::write(src.path().join("seed.txt"), "seed").unwrap();
+        crate::core::test_git::git(src.path(), &["add", "seed.txt"]);
+        crate::core::test_git::git(src.path(), &["commit", "-q", "-m", "seed"]);
+
+        let dst = tempfile::TempDir::new().unwrap();
+        let repo_path = dst.path().join("clone");
+        let url = format!("file://{}", src.path().display());
+        partial_clone(&url, None, None, &repo_path).unwrap();
+
+        let repo = git2::Repository::open(&repo_path).unwrap();
+        let config = repo.config().unwrap();
+        assert_eq!(
+            config.get_string("remote.origin.partialclonefilter").as_deref(),
+            Ok("blob:none"),
+            "clone must be a partial clone"
+        );
+        assert!(config.get_bool("remote.origin.promisor").unwrap_or(false));
+        assert!(repo_path.join("seed.txt").exists(), "checkout blobs are present");
     }
 
     #[test]
