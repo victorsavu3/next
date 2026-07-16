@@ -344,3 +344,208 @@ fn auto_archive_runs_once_per_day_during_sync() {
         "auto=false must not archive"
     );
 }
+
+#[test]
+fn prune_moves_segments_to_cold_tier() {
+    let mut env = common::setup();
+    let today = d(2026, 7, 15);
+    let root = env.ctx.repo.repo_root.clone();
+
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    std::fs::write(
+        root.join("config/archive.toml"),
+        "archive_after_days = 180\nprune_after_days = 400\n",
+    )
+    .unwrap();
+
+    // One ancient month (past the prune cutoff) and one recent-old month.
+    let mut ancient = Task::new("Ancient");
+    ancient.slug = Some("ancient".into());
+    ancient.mark_done(d(2025, 3, 1));
+    let mut warm = Task::new("Warm");
+    warm.mark_done(d(2025, 12, 1));
+    add_committed(&mut env, &ancient);
+    add_committed(&mut env, &warm);
+
+    let outcome = run_archive_pass(&mut env.ctx.repo, today).unwrap();
+    assert_eq!(outcome.archived, 2);
+    assert_eq!(outcome.pruned, vec!["archive/2025/03-001.toml"]);
+
+    // The pruned segment left the checkout; the manifest records it.
+    assert!(!root.join("archive/2025/03-001.toml").exists());
+    assert!(root.join("archive/2025/12-001.toml").exists());
+    let manifest = next::core::storage::archive::read_manifest(&root).unwrap();
+    assert_eq!(manifest.len(), 1);
+    assert_eq!(manifest[0].tasks, 1);
+    let attrs = std::fs::read_to_string(root.join(".gitattributes")).unwrap();
+    assert!(attrs.contains("archive/pruned.jsonl merge=union"));
+
+    // Cold tasks stay fully readable: archived query, id and slug lookups.
+    let store = env.ctx.repo.store();
+    let archived = store
+        .query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() })
+        .unwrap();
+    assert_eq!(archived.total, 2, "warm + cold both served");
+    assert_eq!(store.get_task(ancient.id).unwrap().title, "Ancient");
+    assert!(store.get_task_by_slug("ancient").unwrap().is_some());
+
+    // A fresh cache (fresh-clone situation) recovers cold rows from blobs.
+    use next::core::store::Store as _;
+    let inner = next::core::storage::TomlStore::open(root.clone(), root.join("state.toml")).unwrap();
+    let vcs = next::core::storage::GitBackend::open(&root).unwrap();
+    let head = next::core::store::VcsBackend::head_hash(&vcs).unwrap();
+    let store2 =
+        next::core::storage::CachedStore::open(inner, root.join(".next-cold.db"), &head).unwrap();
+    assert_eq!(
+        store2.query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        2
+    );
+    assert_eq!(store2.get_task(ancient.id).unwrap().title, "Ancient");
+
+    // A second pass does nothing further.
+    let outcome2 = run_archive_pass(&mut env.ctx.repo, today).unwrap();
+    assert_eq!(outcome2.archived, 0);
+    assert!(outcome2.pruned.is_empty());
+}
+
+#[test]
+fn editing_cold_task_resurrects_it_and_restores_segment() {
+    let mut env = common::setup();
+    let today = d(2026, 7, 15);
+    let root = env.ctx.repo.repo_root.clone();
+
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    std::fs::write(
+        root.join("config/archive.toml"),
+        "archive_after_days = 180\nprune_after_days = 400\n",
+    )
+    .unwrap();
+
+    let mut frozen = Task::new("Frozen");
+    frozen.mark_done(d(2025, 2, 10));
+    let mut neighbour = Task::new("Neighbour");
+    neighbour.mark_done(d(2025, 2, 20));
+    add_committed(&mut env, &frozen);
+    add_committed(&mut env, &neighbour);
+    let outcome = run_archive_pass(&mut env.ctx.repo, today).unwrap();
+    assert_eq!(outcome.pruned, vec!["archive/2025/02-001.toml"]);
+    assert!(!root.join("archive/2025/02-001.toml").exists());
+
+    use next::core::service::{apply_edits, EditTaskParams};
+    let edited = apply_edits(
+        frozen.id,
+        EditTaskParams { notes: Some("thawed".into()), ..Default::default() },
+        today,
+        &root,
+        &mut *env.ctx.repo.store,
+        &*env.ctx.repo.vcs,
+    )
+    .unwrap();
+    assert_eq!(edited.notes.as_deref(), Some("thawed"));
+
+    // The task is active again; the rest of the segment returned to the
+    // checkout (warm) and re-prunes on the next pass.
+    assert!(env.ctx.repo.store().list_tasks().unwrap().iter().any(|t| t.id == frozen.id));
+    let entries = next::core::storage::archive::read_segment(
+        &root.join("archive/2025/02-001.toml"),
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].task.id, neighbour.id);
+
+    let outcome = run_archive_pass(&mut env.ctx.repo, today).unwrap();
+    assert_eq!(outcome.archived, 1, "the thawed task re-archives");
+    assert_eq!(outcome.pruned, vec!["archive/2025/02-001.toml"], "the restored segment re-prunes");
+    let manifest = next::core::storage::archive::read_manifest(&root).unwrap();
+    assert_eq!(manifest.len(), 1, "last manifest line per path wins");
+}
+
+#[test]
+fn external_prune_reconciles_incrementally() {
+    let mut env = common::setup();
+    let today = d(2026, 7, 15);
+    let root = env.ctx.repo.repo_root.clone();
+
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    std::fs::write(
+        root.join("config/archive.toml"),
+        "archive_after_days = 180\nprune_after_days = 400\n",
+    )
+    .unwrap();
+
+    let mut old = Task::new("Elsewhere-pruned");
+    old.mark_done(d(2025, 1, 5));
+    add_committed(&mut env, &old);
+    // Archive (warm) first, without pruning, on "this" machine's view.
+    std::fs::write(root.join("config/archive.toml"), "archive_after_days = 180\n").unwrap();
+    run_archive_pass(&mut env.ctx.repo, today).unwrap();
+
+    // A second store over the same repo — the "other machine" whose cache
+    // must pick the prune up via the incremental reconcile.
+    use next::core::store::Store as _;
+    let inner = next::core::storage::TomlStore::open(root.clone(), root.join("state.toml")).unwrap();
+    let vcs = next::core::storage::GitBackend::open(&root).unwrap();
+    let head = next::core::store::VcsBackend::head_hash(&vcs).unwrap();
+    let mut other =
+        next::core::storage::CachedStore::open(inner, root.join(".next-other.db"), &head).unwrap();
+    assert_eq!(other.get_task(old.id).unwrap().title, "Elsewhere-pruned");
+
+    // Now prune on the first machine.
+    std::fs::write(
+        root.join("config/archive.toml"),
+        "archive_after_days = 180\nprune_after_days = 400\n",
+    )
+    .unwrap();
+    let outcome = run_archive_pass(&mut env.ctx.repo, today).unwrap();
+    assert_eq!(outcome.pruned.len(), 1);
+
+    // The other machine reconciles from the diff: segment delete + manifest
+    // append → the task survives as a cold row.
+    let new_head = next::core::store::VcsBackend::head_hash(&vcs).unwrap();
+    other.after_pull(&new_head).unwrap();
+    assert_eq!(other.get_task(old.id).unwrap().title, "Elsewhere-pruned");
+    assert_eq!(
+        other.query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        1
+    );
+}
+
+#[test]
+fn pruned_segment_numbers_are_never_reused() {
+    let mut env = common::setup();
+    let today = d(2026, 7, 15);
+    let root = env.ctx.repo.repo_root.clone();
+
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    std::fs::write(
+        root.join("config/archive.toml"),
+        "archive_after_days = 180\nprune_after_days = 400\n",
+    )
+    .unwrap();
+
+    let mut first = Task::new("First of month");
+    first.mark_done(d(2025, 4, 2));
+    add_committed(&mut env, &first);
+    let outcome = run_archive_pass(&mut env.ctx.repo, today).unwrap();
+    assert_eq!(outcome.pruned, vec!["archive/2025/04-001.toml"]);
+
+    // A straggler completed in the same ancient month arrives later
+    // (e.g. via resurrection elsewhere): it must open segment 002, not
+    // shadow the pruned 001.
+    let mut straggler = Task::new("Straggler");
+    straggler.mark_done(d(2025, 4, 20));
+    add_committed(&mut env, &straggler);
+    let outcome = run_archive_pass(&mut env.ctx.repo, today).unwrap();
+    assert_eq!(outcome.archived, 1);
+    assert_eq!(outcome.segments, vec!["archive/2025/04-002.toml"]);
+    assert_eq!(outcome.pruned, vec!["archive/2025/04-002.toml"], "and it prunes in turn");
+
+    let manifest = next::core::storage::archive::read_manifest(&root).unwrap();
+    let paths: Vec<_> = manifest.iter().map(|p| p.path.as_str()).collect();
+    assert_eq!(paths, vec!["archive/2025/04-001.toml", "archive/2025/04-002.toml"]);
+
+    // Both cold segments' tasks remain reachable.
+    let store = env.ctx.repo.store();
+    assert!(store.get_task(first.id).is_ok());
+    assert!(store.get_task(straggler.id).is_ok());
+}

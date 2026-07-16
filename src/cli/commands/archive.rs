@@ -20,17 +20,27 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
             serde_json::json!({
                 "archived": outcome.archived,
                 "segments": outcome.segments,
+                "pruned": outcome.pruned,
             })
         );
-    } else if outcome.archived == 0 {
+        return Ok(());
+    }
+    if outcome.archived == 0 && outcome.pruned.is_empty() {
         println!("Nothing to archive.");
-    } else {
+    }
+    if outcome.archived > 0 {
         println!(
             "Archived {} task(s) into {} segment(s):",
             outcome.archived,
             outcome.segments.len()
         );
         for seg in &outcome.segments {
+            println!("  {seg}");
+        }
+    }
+    if !outcome.pruned.is_empty() {
+        println!("Pruned {} segment(s) to the cold tier:", outcome.pruned.len());
+        for seg in &outcome.pruned {
             println!("  {seg}");
         }
     }

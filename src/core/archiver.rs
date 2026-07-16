@@ -23,8 +23,9 @@ use uuid::Uuid;
 use crate::core::domain::task::{Status, Task};
 use crate::core::error::Result;
 use crate::core::storage::archive::{
-    load_archive_config, read_segment, segment_paths, segment_rel_path, write_segment,
-    ArchiveConfig, ArchivedTask,
+    append_manifest, ensure_manifest_gitattributes, load_archive_config, read_manifest,
+    read_segment, segment_paths, segment_rel_path, write_segment, ArchiveConfig, ArchivedTask,
+    PrunedSegment, MANIFEST_REL_PATH,
 };
 use crate::core::store::Store;
 use crate::core::task_repository::TaskRepository;
@@ -36,6 +37,8 @@ pub struct ArchiveOutcome {
     pub archived: usize,
     /// Repo-relative paths of the segments written.
     pub segments: Vec<String>,
+    /// Repo-relative paths of segments pruned to the cold tier.
+    pub pruned: Vec<String>,
 }
 
 /// Computes the set of archivable task ids among the active tier.
@@ -118,7 +121,9 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
 
         let eligible = eligible_ids(&active, &updated, &config, today);
         if eligible.is_empty() {
-            return Ok(ArchiveOutcome::default());
+            let mut outcome = ArchiveOutcome::default();
+            prune_phase(store, vcs, repo_root, &config, today, &mut outcome)?;
+            return Ok(outcome);
         }
 
         // Deterministic packing order across machines.
@@ -149,16 +154,35 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
         }
 
         let existing = segment_paths(repo_root)?;
+        // Pruned paths that are gone from the checkout must never be
+        // reused: a fresh segment under a recycled name would shadow the
+        // manifest entry. A manifest path *restored* by a resurrection is in
+        // the checkout again and safe to append to (re-pruning appends a
+        // fresh manifest line, and the last line per path wins).
+        let pruned_paths: Vec<String> = read_manifest(repo_root)?
+            .into_iter()
+            .map(|p| p.path)
+            .filter(|p| !repo_root.join(p).exists())
+            .collect();
         for ((year, month), tasks) in by_month {
             let month_prefix = format!("archive/{year:04}/{month:02}-");
-            // Continue the month's highest-numbered segment if it has room.
-            let mut seg_no: u32 = existing
-                .iter()
-                .filter_map(|(rel, _)| {
-                    rel.strip_prefix(&month_prefix)?.strip_suffix(".toml")?.parse().ok()
-                })
-                .max()
-                .unwrap_or(1);
+            let highest = |paths: &mut dyn Iterator<Item = &str>| -> Option<u32> {
+                paths
+                    .filter_map(|rel| {
+                        rel.strip_prefix(&month_prefix)?.strip_suffix(".toml")?.parse().ok()
+                    })
+                    .max()
+            };
+            // Continue the month's highest-numbered checkout segment if it
+            // has room; never step back onto a pruned number.
+            let in_checkout = highest(&mut existing.iter().map(|(rel, _)| rel.as_str()));
+            let in_manifest = highest(&mut pruned_paths.iter().map(String::as_str));
+            let mut seg_no: u32 = match (in_checkout, in_manifest) {
+                (Some(c), Some(p)) if p >= c => p + 1,
+                (Some(c), _) => c,
+                (None, Some(p)) => p + 1,
+                (None, None) => 1,
+            };
             let month_anchor =
                 NaiveDate::from_ymd_opt(year, month, 1).expect("valid month from date");
             let mut entries = read_segment(&repo_root.join(segment_rel_path(month_anchor, seg_no)))?;
@@ -186,9 +210,69 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
             &commit_paths,
             &format!("next: archive {} task(s)", outcome.archived),
         )?;
+        // With the warm commit in HEAD, segment blobs are addressable —
+        // prune whatever crossed the cold threshold.
+        prune_phase(store, vcs, repo_root, &config, today, &mut outcome)?;
         Ok(outcome)
     })
     .map_err(|e| crate::core::error::TaskError::Other(format!("archive pass in {}: {e}", root.display())))
+}
+
+/// The cold-tier prune: checkout segments whose newest completion is older
+/// than `prune_after_days` are recorded in the append-only manifest (path +
+/// blob SHA, union-merged) and removed from the working tree, as one commit.
+/// Their cache rows flip to the cold tier; recovery is a single blob read.
+fn prune_phase(
+    store: &mut dyn Store,
+    vcs: &dyn crate::core::store::VcsBackend,
+    repo_root: &std::path::Path,
+    config: &ArchiveConfig,
+    today: NaiveDate,
+    outcome: &mut ArchiveOutcome,
+) -> Result<()> {
+    let Some(prune_days) = config.prune_after_days else {
+        return Ok(());
+    };
+    let cutoff = today - chrono::Duration::days(prune_days as i64);
+
+    let mut manifest_lines = Vec::new();
+    let mut commit_paths = Vec::new();
+    for (rel, abs) in segment_paths(repo_root)? {
+        let entries = read_segment(&abs)?;
+        let newest = entries.iter().filter_map(|e| e.task.completed_at).max();
+        // A segment with no completion dates at all never prunes — without a
+        // reference date it can not be judged old.
+        if newest.is_none_or(|d| d >= cutoff) {
+            continue;
+        }
+        let Some(blob) = crate::core::storage::git_backend::blob_id_at_head(repo_root, &rel)
+        else {
+            // Not in HEAD (dirty or never committed) — skip; a later pass
+            // prunes it once committed.
+            continue;
+        };
+        manifest_lines.push(PrunedSegment { path: rel.clone(), blob, tasks: entries.len() });
+        std::fs::remove_file(&abs)
+            .map_err(|e| crate::core::error::TaskError::Other(format!("prune {rel}: {e}")))?;
+        store.note_cold_segment(&rel)?;
+        commit_paths.push(abs);
+        outcome.pruned.push(rel);
+    }
+    if manifest_lines.is_empty() {
+        return Ok(());
+    }
+
+    append_manifest(repo_root, &manifest_lines)?;
+    commit_paths.push(repo_root.join(MANIFEST_REL_PATH));
+    if let Some(attrs) = ensure_manifest_gitattributes(repo_root)? {
+        commit_paths.push(attrs);
+    }
+    outcome.pruned.sort();
+    vcs.commit(
+        &commit_paths,
+        &format!("next: prune {} segment(s) to cold tier", outcome.pruned.len()),
+    )?;
+    Ok(())
 }
 
 /// Brings an archived task back to the active tier so a mutation can apply
@@ -211,7 +295,30 @@ pub fn resurrect_if_archived(
         return Ok(None);
     };
     let abs = repo_root.join(&rel);
-    let mut entries = read_segment(&abs)?;
+    // Warm segments are read from the checkout; a pruned (cold) segment is
+    // recovered from its manifest blob — one object read. The remaining
+    // entries are written back as a checkout file, so the whole segment
+    // returns to the warm tier (and re-prunes on a later pass).
+    let mut entries = if abs.exists() {
+        read_segment(&abs)?
+    } else {
+        let blob = read_manifest(repo_root)?
+            .into_iter()
+            .find(|p| p.path == rel)
+            .map(|p| p.blob)
+            .ok_or_else(|| {
+                crate::core::error::TaskError::Other(format!(
+                    "cache row for {id} points at pruned segment {rel}, which the manifest does not list"
+                ))
+            })?;
+        let content = crate::core::storage::git_backend::blob_content(repo_root, &blob)
+            .ok_or_else(|| {
+                crate::core::error::TaskError::Other(format!(
+                    "pruned segment {rel} (blob {blob}) is unreachable in the object store"
+                ))
+            })?;
+        crate::core::storage::archive::parse_segment(&content)?
+    };
     let pos = entries.iter().position(|e| e.task.id == id).ok_or_else(|| {
         crate::core::error::TaskError::Other(format!(
             "cache row for {id} points at {rel}, but the segment has no such entry"

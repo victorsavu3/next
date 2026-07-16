@@ -91,7 +91,26 @@ impl CachedStore {
         })?;
         for (rel, abs) in &segments {
             let entries = super::archive::read_segment(abs)?;
-            self.with_conn(|conn| upsert_segment_rows(conn, rel, &entries))?;
+            self.with_conn(|conn| upsert_segment_rows(conn, rel, &entries, 1))?;
+        }
+        // Cold tier: manifest-listed segments no longer in the checkout are
+        // recovered from their blobs — one object read each.
+        let in_checkout: std::collections::HashSet<&str> =
+            segments.iter().map(|(rel, _)| rel.as_str()).collect();
+        for pruned in super::archive::read_manifest(&self.root)? {
+            if in_checkout.contains(pruned.path.as_str()) {
+                continue;
+            }
+            let Some(content) = super::git_backend::blob_content(&self.root, &pruned.blob) else {
+                tracing::warn!(
+                    "pruned segment {} (blob {}) is unreachable; its tasks are missing from the cache",
+                    pruned.path,
+                    pruned.blob
+                );
+                continue;
+            };
+            let entries = super::archive::parse_segment(&content)?;
+            self.with_conn(|conn| upsert_segment_rows(conn, &pruned.path, &entries, 2))?;
         }
         Ok(())
     }
@@ -175,7 +194,23 @@ impl CachedStore {
             } else if super::archive::is_segment_path(path) {
                 // A changed segment replaces all rows it previously carried.
                 let entries = super::archive::read_segment(&self.root.join(path))?;
-                self.with_conn(|conn| upsert_segment_rows(conn, path, &entries))?;
+                self.with_conn(|conn| upsert_segment_rows(conn, path, &entries, 1))?;
+            } else if path == super::archive::MANIFEST_REL_PATH {
+                // An external prune arrived (segment delete + manifest
+                // append in one commit; deletes ran first above). Re-add
+                // rows for manifest paths absent from the checkout.
+                for pruned in super::archive::read_manifest(&self.root)? {
+                    if self.root.join(&pruned.path).exists() {
+                        continue;
+                    }
+                    let Some(content) =
+                        super::git_backend::blob_content(&self.root, &pruned.blob)
+                    else {
+                        continue;
+                    };
+                    let entries = super::archive::parse_segment(&content)?;
+                    self.with_conn(|conn| upsert_segment_rows(conn, &pruned.path, &entries, 2))?;
+                }
             }
         }
         self.with_conn(|conn| set_meta(conn, "head_hash", new_head))
@@ -183,11 +218,13 @@ impl CachedStore {
 }
 
 /// Replaces every cached row stored at segment `rel_path` with `entries`
-/// (archived tier, frozen dates carried by the entries themselves).
+/// in the given archive tier (1 = warm checkout segment, 2 = cold pruned
+/// segment); frozen dates are carried by the entries themselves.
 fn upsert_segment_rows(
     conn: &Connection,
     rel_path: &str,
     entries: &[super::archive::ArchivedTask],
+    tier: i64,
 ) -> Result<()> {
     while delete_by_path(conn, rel_path)?.is_some() {}
     for entry in entries {
@@ -195,7 +232,7 @@ fn upsert_segment_rows(
             (Some(c), Some(u)) => Some(TaskDates { created_at: c, updated_at: u }),
             _ => None,
         };
-        upsert_task_row(conn, &entry.task, rel_path, dates.as_ref(), 1)?;
+        upsert_task_row(conn, &entry.task, rel_path, dates.as_ref(), tier)?;
     }
     Ok(())
 }
@@ -499,7 +536,18 @@ impl Store for CachedStore {
         rel_path: &str,
         entries: &[super::archive::ArchivedTask],
     ) -> Result<()> {
-        self.with_conn(|conn| upsert_segment_rows(conn, rel_path, entries))
+        self.with_conn(|conn| upsert_segment_rows(conn, rel_path, entries, 1))
+    }
+
+    fn note_cold_segment(&mut self, rel_path: &str) -> Result<()> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE tasks SET archived = 2 WHERE path = ?1",
+                params![rel_path],
+            )
+            .map_err(|e| TaskError::Other(format!("sqlite mark cold: {e}")))?;
+            Ok(())
+        })
     }
 
     fn task_location(&self, id: Uuid) -> Result<TaskLocation> {

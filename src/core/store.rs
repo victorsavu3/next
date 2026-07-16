@@ -303,6 +303,13 @@ pub trait Store: Send + Sync {
         Ok(())
     }
 
+    /// Marks every row at segment `rel_path` as cold — the segment left the
+    /// checkout for the pruned tier. Data and dates stay; only the tier
+    /// flips. Default: no-op.
+    fn note_cold_segment(&mut self, _rel_path: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// Returns the tasks with the given ids, skipping ids that no longer
     /// resolve (a deleted parent must not fail the whole listing).
     ///

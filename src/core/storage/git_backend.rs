@@ -557,6 +557,24 @@ pub(crate) fn commit_time(root: &Path, rev: &str) -> Option<chrono::DateTime<chr
     chrono::DateTime::from_timestamp(commit.time().seconds(), 0)
 }
 
+/// Blob SHA of `rel_path` in the HEAD tree of the repository at `root`.
+pub(crate) fn blob_id_at_head(root: &Path, rel_path: &str) -> Option<String> {
+    let repo = Repository::open(root).ok()?;
+    let tree = repo.head().ok()?.peel_to_commit().ok()?.tree().ok()?;
+    let entry = tree.get_path(Path::new(rel_path)).ok()?;
+    Some(entry.id().to_string())
+}
+
+/// Content of the blob `sha` in the repository at `root`, as UTF-8.
+///
+/// One object read — recovering a pruned segment never walks history.
+pub(crate) fn blob_content(root: &Path, sha: &str) -> Option<String> {
+    let repo = Repository::open(root).ok()?;
+    let oid = git2::Oid::from_str(sha).ok()?;
+    let blob = repo.find_blob(oid).ok()?;
+    String::from_utf8(blob.content().to_vec()).ok()
+}
+
 /// A file change between two commits, as reported by a tree diff.
 ///
 /// Paths are repo-relative with forward slashes, exactly as git reports them.

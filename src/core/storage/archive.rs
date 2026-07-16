@@ -31,11 +31,20 @@ pub struct ArchiveConfig {
     pub segment_max_tasks: usize,
     /// Run the archive pass automatically during sync (at most once a day).
     pub auto: bool,
+    /// Cold tier: segments whose newest completion is older than this are
+    /// pruned from the checkout (recoverable through git blobs via the
+    /// manifest). `None` (the default) disables pruning.
+    pub prune_after_days: Option<u32>,
 }
 
 impl Default for ArchiveConfig {
     fn default() -> Self {
-        Self { archive_after_days: 180, segment_max_tasks: 1000, auto: true }
+        Self {
+            archive_after_days: 180,
+            segment_max_tasks: 1000,
+            auto: true,
+            prune_after_days: None,
+        }
     }
 }
 
@@ -99,9 +108,96 @@ pub fn read_segment(path: &Path) -> Result<Vec<ArchivedTask>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(TaskError::Other(format!("read {}: {e}", path.display()))),
     };
-    let file: SegmentFile = toml::from_str(&content)
-        .map_err(|e| TaskError::Other(format!("parse segment {}: {e}", path.display())))?;
+    parse_segment(&content)
+}
+
+/// Parses segment content (e.g. fetched from a git blob for the cold tier).
+pub fn parse_segment(content: &str) -> Result<Vec<ArchivedTask>> {
+    let file: SegmentFile = toml::from_str(content)
+        .map_err(|e| TaskError::Other(format!("parse segment: {e}")))?;
     Ok(file.task)
+}
+
+// ── Cold tier: the pruned-segment manifest ─────────────────────────────────
+
+/// One pruned segment: enough to recover its bytes from the object store
+/// with a single blob read — never a history walk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrunedSegment {
+    /// Repo-relative path the segment had in the checkout.
+    pub path: String,
+    /// Blob SHA of the segment content at prune time.
+    pub blob: String,
+    /// Number of tasks inside, for reporting.
+    pub tasks: usize,
+}
+
+/// Repo-relative path of the append-only manifest.
+pub const MANIFEST_REL_PATH: &str = "archive/pruned.jsonl";
+
+/// Reads the manifest. Later lines win per path (a segment restored by a
+/// resurrection and pruned again appends a fresh line), so the result holds
+/// one entry per path, in path order. Unparsable lines are skipped — the
+/// file is union-merged and a torn line must not poison the archive.
+pub fn read_manifest(root: &Path) -> Result<Vec<PrunedSegment>> {
+    let path = root.join(MANIFEST_REL_PATH);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(TaskError::Other(format!("read {}: {e}", path.display()))),
+    };
+    let mut by_path = std::collections::BTreeMap::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<PrunedSegment>(line) {
+            by_path.insert(entry.path.clone(), entry);
+        }
+    }
+    Ok(by_path.into_values().collect())
+}
+
+/// Appends `entries` to the manifest (creating it if needed).
+pub fn append_manifest(root: &Path, entries: &[PrunedSegment]) -> Result<()> {
+    use std::io::Write as _;
+    let path = root.join(MANIFEST_REL_PATH);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| TaskError::Other(format!("open {}: {e}", path.display())))?;
+    for entry in entries {
+        let line = serde_json::to_string(entry)
+            .map_err(|e| TaskError::Other(format!("serialize manifest line: {e}")))?;
+        writeln!(file, "{line}")
+            .map_err(|e| TaskError::Other(format!("append {}: {e}", path.display())))?;
+    }
+    Ok(())
+}
+
+/// Ensures `.gitattributes` union-merges the manifest, so two machines
+/// pruning concurrently never conflict on it. Returns the attributes path
+/// when it was created or extended (the caller commits it).
+pub fn ensure_manifest_gitattributes(root: &Path) -> Result<Option<PathBuf>> {
+    let attr_line = format!("{MANIFEST_REL_PATH} merge=union");
+    let path = root.join(".gitattributes");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    if existing.lines().any(|l| l.trim() == attr_line) {
+        return Ok(None);
+    }
+    let mut content = existing;
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(&attr_line);
+    content.push('\n');
+    super::toml_store::atomic_write(&path, &content)?;
+    Ok(Some(path))
 }
 
 /// Writes `entries` to `path` deterministically: sorted by
