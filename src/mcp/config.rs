@@ -13,6 +13,7 @@ struct GitFileConfig {
     token: Option<String>,
     author_name: Option<String>,
     author_email: Option<String>,
+    partial_clone: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -80,6 +81,10 @@ pub struct McpConfig {
     pub git_author_name: Option<String>,
     /// git committer email written to the repo-local config when no identity is set.
     pub git_author_email: Option<String>,
+    /// Whether the first-start clone tries `git clone --filter=blob:none`
+    /// (subprocess; needs a git binary). `false` goes straight to the
+    /// built-in libgit2 full clone, removing the git-binary dependency.
+    pub partial_clone: bool,
     /// Whether to run a staleness pull before a task-touching tool (Req A).
     pub pull_before_query: bool,
     /// How long a local copy stays "fresh" after a pull, before a query triggers one.
@@ -151,6 +156,11 @@ impl McpConfig {
         let git_author_name  = env_or_file_str("NEXT_GIT_AUTHOR_NAME",  file.git.author_name);
         let git_author_email = env_or_file_str("NEXT_GIT_AUTHOR_EMAIL", file.git.author_email);
 
+        let partial_clone = match std::env::var("NEXT_GIT_PARTIAL_CLONE") {
+            Ok(ref s) => parse_bool_default_true(Some(s)),
+            Err(_) => file.git.partial_clone.unwrap_or(true),
+        };
+
         // ── sync_interval ────────────────────────────────────────────────────
         let sync_interval = match std::env::var("NEXT_SYNC_INTERVAL") {
             Ok(s) => {
@@ -202,6 +212,7 @@ impl McpConfig {
             deferred_sync_delay,
             git_author_name,
             git_author_email,
+            partial_clone,
             pull_before_query,
             staleness,
             pull_timeout,

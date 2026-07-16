@@ -45,20 +45,24 @@ pub fn clone_or_open(config: &McpConfig) -> anyhow::Result<PathBuf> {
     // storage's blob cat-file fallback). libgit2 has no partial-clone
     // support, so this shells out; any failure falls back to the git2 full
     // clone below, keeping the change invisible to the operator.
-    match partial_clone(&url_for_auth, git_user.as_deref(), git_token.as_deref(), repo_path) {
-        Ok(()) => {
-            let repo = git2::Repository::open(repo_path)
-                .with_context(|| format!("open partial clone at {}", repo_path.display()))?;
-            ensure_git_identity(&repo, config.git_author_name.as_deref(), config.git_author_email.as_deref())?;
-            init_repo_structure(repo_path)?;
-            return Ok(repo_path.clone());
-        }
-        Err(e) => {
-            eprintln!("partial clone unavailable ({e}); falling back to a full clone");
-            // A failed clone may leave a partial directory behind, which
-            // would make the fallback clone fail too.
-            if repo_path.exists() && !repo_path.join(".git").exists() {
-                let _ = std::fs::remove_dir_all(repo_path);
+    // NEXT_GIT_PARTIAL_CLONE=0 (or git.partial_clone = false) skips the
+    // attempt entirely for deployments without a git binary.
+    if config.partial_clone {
+        match partial_clone(&url_for_auth, git_user.as_deref(), git_token.as_deref(), repo_path) {
+            Ok(()) => {
+                let repo = git2::Repository::open(repo_path)
+                    .with_context(|| format!("open partial clone at {}", repo_path.display()))?;
+                ensure_git_identity(&repo, config.git_author_name.as_deref(), config.git_author_email.as_deref())?;
+                init_repo_structure(repo_path)?;
+                return Ok(repo_path.clone());
+            }
+            Err(e) => {
+                eprintln!("partial clone unavailable ({e}); falling back to a full clone");
+                // A failed clone may leave a partial directory behind, which
+                // would make the fallback clone fail too.
+                if repo_path.exists() && !repo_path.join(".git").exists() {
+                    let _ = std::fs::remove_dir_all(repo_path);
+                }
             }
         }
     }
@@ -311,6 +315,7 @@ mod tests {
             deferred_sync_delay: Duration::from_secs(30),
             git_author_name: None,
             git_author_email: None,
+            partial_clone: true,
             pull_before_query: true,
             staleness: Duration::from_secs(3600),
             pull_timeout: Duration::from_secs(10),
