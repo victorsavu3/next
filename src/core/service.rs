@@ -315,6 +315,11 @@ pub fn apply_edits(
 
     let mut task = store.get_task(id)?;
 
+    // A title or slug edit renames the file on disk; the old path must be
+    // committed as a deletion or it stays tracked in git and resurfaces as a
+    // duplicate task on every other machine's next pull.
+    let path_before_edits = storage::task_path(repo_root, &task);
+
     if let Some(title) = edits.title {
         task.title = title;
     }
@@ -412,7 +417,11 @@ pub fn apply_edits(
 
     let _ = today; // held for future use
 
-    let mut paths = vec![storage::task_path(repo_root, &task)];
+    let new_path = storage::task_path(repo_root, &task);
+    let mut paths = vec![new_path.clone()];
+    if path_before_edits != new_path {
+        paths.push(path_before_edits);
+    }
     paths.extend(resurrected_segment);
     store.save_task(&task)?;
     vcs.commit(&paths, &format!("next: edit {}", task.title))?;

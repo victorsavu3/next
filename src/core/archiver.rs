@@ -115,7 +115,30 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
 
     repo.transaction(|store, vcs, repo_root| {
         let active = store.list_tasks()?;
-        let dates = store.task_dates()?;
+        // Freeze dates from git history, not from the cache: incremental
+        // cache stamps are per-machine approximations (a task's author
+        // stamps its save time; a machine that received it via pull stamps
+        // the pulled head's commit time). Segment bytes must be identical
+        // when two converged machines archive concurrently, and the
+        // history-derived times are the only ones both sides agree on.
+        // One `git log --name-only` walk per pass; the cache stays the
+        // fallback for files history cannot date (never committed).
+        let walk = crate::core::storage::git_backend::task_git_dates(&repo_root.join("tasks"))
+            .unwrap_or_default();
+        let cache_dates = store.task_dates()?;
+        let dates: HashMap<Uuid, crate::core::scoring::TaskDates> = active
+            .iter()
+            .filter_map(|t| {
+                let hex = t.id.simple().to_string();
+                let filename =
+                    crate::core::storage::filenames::generate_filename(t);
+                let filename = filename.as_str();
+                walk.get(&hex[..8])
+                    .or_else(|| walk.get(filename))
+                    .or_else(|| cache_dates.get(&t.id))
+                    .map(|d| (t.id, d.clone()))
+            })
+            .collect();
         let updated: HashMap<Uuid, NaiveDate> =
             dates.iter().map(|(id, d)| (*id, d.updated_at.date_naive())).collect();
 

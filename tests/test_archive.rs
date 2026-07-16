@@ -144,8 +144,10 @@ fn archived_tasks_keep_frozen_dates() {
 
     run_archive_pass(&mut env.ctx.repo, today).unwrap();
 
+    // Frozen dates come from git history (whole seconds); the live cache
+    // stamp has sub-second precision, so compare at second granularity.
     let after = env.ctx.repo.store().task_dates().unwrap()[&old.id].clone();
-    assert_eq!(after.created_at, before.created_at);
+    assert_eq!(after.created_at.timestamp(), before.created_at.timestamp());
 
     // The frozen dates live in the segment file itself.
     let entries =
@@ -153,7 +155,10 @@ fn archived_tasks_keep_frozen_dates() {
             &env.ctx.repo.repo_root.join("archive/2025/09-001.toml"),
         )
         .unwrap();
-    assert_eq!(entries[0].created_at, Some(before.created_at));
+    assert_eq!(
+        entries[0].created_at.unwrap().timestamp(),
+        before.created_at.timestamp()
+    );
 }
 
 #[test]
@@ -202,7 +207,10 @@ fn editing_archived_task_resurrects_it() {
         store.query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
         1
     );
-    assert_eq!(store.task_dates().unwrap()[&old.id].created_at, created_before);
+    assert_eq!(
+        store.task_dates().unwrap()[&old.id].created_at.timestamp(),
+        created_before.timestamp()
+    );
 
     // The working tree is clean for tracked files (the segment change was
     // committed with the edit); untracked cache artifacts (.next.db etc.)

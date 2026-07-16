@@ -218,8 +218,8 @@ fn resurrection_and_rearchive_cycles() {
         assert_eq!(entries[0].task.id, bystander.id, "cycle {cycle}");
         assert!(store.get_task_by_slug("cycler").unwrap().is_some(), "cycle {cycle}");
         assert_eq!(
-            store.task_dates().unwrap()[&cycler.id].created_at,
-            created_at,
+            store.task_dates().unwrap()[&cycler.id].created_at.timestamp(),
+            created_at.timestamp(),
             "cycle {cycle}: creation date survives the round trip"
         );
     }

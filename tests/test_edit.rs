@@ -366,3 +366,40 @@ fn edit_tag_deduplicates() {
     let work_count = task.tags.iter().filter(|t| t.as_str() == "@work").count();
     assert_eq!(work_count, 1);
 }
+
+#[test]
+fn title_edit_commits_the_file_rename() {
+    // Editing the title of a slug-less task renames its file; the old path
+    // must be committed as a deletion, or it stays tracked in git and
+    // resurfaces as a duplicate task on other machines after their next pull.
+    let mut env = common::setup();
+    add::run(add_args("Original name"), &mut env.ctx).unwrap();
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
+    let root = env.ctx.repo.repo_root.clone();
+    let old_file = next::core::storage::task_path(&root, &task);
+    assert!(old_file.exists());
+
+    edit::run(
+        edit::Args {
+            title: Some("Renamed completely".to_string()),
+            ..base_edit(&task.id.to_string())
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    assert!(!old_file.exists(), "old file must be gone from the working tree");
+    // No tracked-file changes may remain: the rename (delete + add) was
+    // committed atomically with the edit.
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["status", "--porcelain", "--untracked-files=no"]).current_dir(&root);
+    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+        cmd.env_remove(var);
+    }
+    let out = cmd.output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "",
+        "the rename must leave no uncommitted tracked changes"
+    );
+}
