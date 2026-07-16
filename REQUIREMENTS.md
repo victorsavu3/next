@@ -107,11 +107,18 @@ share the same descriptions. The `next tag describe` command writes these files.
     water-plants-a1b2c3d4.toml   # filename: <slug>.toml if slug set, else <title-slug>-<first-8-uuid>.toml
     work-infra.toml              # project task with slug "work-infra"
     deploy-db-e5f6a7b8.toml
+  archive/
+    2025/
+      10-001.toml                # warm-tier segment: ≤1000 archived tasks of one completion month
+      10-002.toml
+    pruned.jsonl                 # cold-tier manifest: pruned segments (path + blob SHA), union-merged
   tags/
     __context__work.toml         # tag description for @work  (@ → __context__)
     __context__home/
       kitchen.toml               # tag description for @home/kitchen
     __resource__printer.toml     # tag description for #printer  (# → __resource__)
+  config/
+    archive.toml                 # committed archive policy (thresholds, segment cap, auto)
   .gitignore                     # MUST contain ".next.db"
   .next.db                       # SQLite read cache; MUST NOT be committed to git
 
@@ -119,8 +126,9 @@ $XDG_STATE_HOME/task-manager/<repo-hash>/
   state.toml                     # machine-local state; MUST NOT be committed to git
 ```
 
-All task files MUST reside in the flat `tasks/` directory. There is no `projects/`
-directory; project tasks are stored alongside all other tasks.
+All *active-tier* task files MUST reside in the flat `tasks/` directory. There is no
+`projects/` directory; project tasks are stored alongside all other tasks. Archived
+tasks live in `archive/` segments (see §2.3).
 
 File names MUST follow this rule: if the task has a `slug`, the file is named
 `<slug>.toml`; otherwise `<title-slug>-<first-8-uuid>.toml` where the title slug is
@@ -133,10 +141,62 @@ Example: `"Water plants"` with no slug and UUID `a1b2c3d4-…` → `water-plants
 
 1. `git pull` from the configured remote (fast-forward or merge)
 2. If merge conflicts exist, print an actionable error message and exit with code 2
-3. `git push` local commits to the remote
+3. Run the automatic archive pass if it is due (see §2.3; at most once per day)
+4. `git push` local commits to the remote
 
 All mutations (add, edit, done) MUST produce a git commit automatically. The
 commit message MUST identify the operation and the task title.
+
+### 2.3 Archiving
+
+The design targets one million tasks with these budgets: task edits < 100 ms,
+queries < 1 s, incremental cache reconciliation of ≤ 200 changes < 10 s, and a
+full cache rebuild < 10 min (verified by `cargo bench --bench large_repo`).
+Tasks move through three storage tiers:
+
+* **Active** — one TOML file per task under `tasks/`. Open and recently
+  closed tasks.
+* **Warm** — closed tasks whose reference date (`completed_at`, else the
+  git-derived last-update time) is older than `archive_after_days` move into
+  append-once segment files `archive/<YYYY>/<MM>-<NNN>.toml`, keyed by
+  completion month and sealed at `segment_max_tasks` entries. Each entry is
+  the full task plus its git-derived creation/update timestamps frozen at
+  archive time, so the archive never needs git history. Segment bytes MUST be
+  deterministic (entries sorted by `(completed_at, id)`) so concurrent passes
+  on different machines merge silently.
+* **Cold** (optional) — segments whose newest completion is older than
+  `prune_after_days` leave the checkout entirely. The append-only manifest
+  `archive/pruned.jsonl` records each pruned segment's path and blob SHA
+  (union-merged; the last line per path wins); recovery is a single blob
+  read, never a history walk.
+
+Policy lives in the committed `config/archive.toml`:
+
+```toml
+archive_after_days = 180    # warm threshold (default)
+segment_max_tasks  = 1000   # segment seal size (default)
+auto               = true   # run the pass automatically during sync (default)
+# prune_after_days = 730    # cold threshold; absent = pruning disabled (default)
+```
+
+Eligibility guards: a closed task still carrying a `recurrence` rule MUST NOT
+archive while it is the newest instance of its series, and a parent MUST NOT
+archive while any active-tier child is ineligible (subtrees archive bottom-up).
+
+The automatic pass runs during sync (post-pull, pre-push), at most once per
+day per machine (`last_archive` in the machine-local state); `next archive`
+runs it on demand without the throttle. Archive/prune failures MUST NOT fail
+the sync.
+
+**Resurrection**: reads never resurrect. Any *mutation* that resolves to an
+archived task MUST first move it back to the active tier inside the same
+transaction — out of its segment (fetched from its blob when cold), back to
+`tasks/`, with the frozen creation date preserved — and the touched segment
+is committed together with the mutation. A resurrected task re-archives on a
+later pass if it becomes eligible again. Deleting an archived task is an
+error (resurrect first). Direct lookups (id, slug, UUID prefix) MUST work
+across all tiers; `list` and scored views serve the active tier only, and
+`--archived` serves the archive.
 
 ---
 
@@ -651,6 +711,7 @@ All configuration MUST be read from environment variables (no config file):
 | `NEXT_WEBHOOK_TOKEN` | | — |
 | `NEXT_SYNC_INTERVAL` | | `86400` (s); `0` disables |
 | `NEXT_DEFERRED_SYNC_DELAY_SECS` | | `30` |
+| `NEXT_GIT_PARTIAL_CLONE` | | `1`; `0` forces the built-in full clone (no git binary needed) |
 
 Credentials MAY alternatively be embedded in `NEXT_GIT_URL` as `https://user:token@host/repo.git`.
 
@@ -660,6 +721,13 @@ On startup, `next-mcp` MUST:
 1. If `NEXT_REPO_PATH/.git` exists: open the repository
 2. Otherwise: clone `NEXT_GIT_URL` into `NEXT_REPO_PATH` using HTTPS credentials
 3. Error and exit non-zero if neither condition is satisfied
+
+The clone SHOULD be a partial clone (`--filter=blob:none`, via the `git`
+binary) so only the current checkout's blobs transfer; any partial-clone
+failure MUST fall back to the built-in full clone transparently, and
+`NEXT_GIT_PARTIAL_CLONE=0` disables the attempt for deployments without a
+git binary. Pruned cold-tier segment blobs absent from a partial clone are
+fetched on demand when needed (§2.3).
 
 The clone operation MUST be idempotent — a second start against the same volume MUST NOT re-clone.
 

@@ -28,7 +28,8 @@ This document describes the internal design of `next`. Read `REQUIREMENTS.md` fo
 │  │  Bearer auth     │  │  & VcsBack) │  │ deferred/periodic    ││
 │  └──────────────────┘  └─────────────┘  └──────────────────────┘│
 │  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  git_init: HTTPS clone on first start; credentials stripped │ │
+│  │  git_init: partial clone (blob:none) on first start, full-  │ │
+│  │  clone fallback; credentials stripped                       │ │
 │  │  from logs; default git identity set in local repo config   │ │
 │  └─────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────┘
@@ -68,17 +69,20 @@ next/                             # crate root (also git repo)
       store.rs                    # Store + VcsBackend traits
       resolve.rs                  # resolve_task_id(store, id_str) -> Result<Uuid>
       task_repository.rs          # TaskRepository: store + vcs + repo_root + scoring + transactions + plugin events
-      sync.rs                     # sync(): pull -> cache-reconcile -> push
+      sync.rs                     # sync(): pull -> cache-reconcile -> auto-archive -> push
       value.rs                    # parse_value(): task data value parsing
       filter_args.rs              # FilterArgs -> FilterSet (filter-token parsing)
-      scoring.rs                  # ScoredTask, ScoringConfig, score_and_sort()
+      scoring.rs                  # ScoredTask, ScoringConfig, TaskDates, score_and_sort()
       service.rs                  # create_task/complete_task/apply_edits; begin/end_mutation
       recurrence.rs               # next_occurrence(), apply_snap(), spawn_next(), parse_snap()
+      listing.rs                  # load_candidates() (status pushdown), extend_with_parents()
+      archiver.rs                 # run_archive_pass(), resurrect_if_archived(), prune phase
       domain/                     # pure domain types (no I/O)
         mod.rs  task.rs  state.rs  tag.rs  filter.rs  date_parse.rs
-      storage/                    # local TOML + SQLite + git backend
+      storage/                    # local TOML + SQLite + git backend + archive tiers
         mod.rs                    # open(), task_path(), state_path_for_repo(), load_scoring()
         machine_state.rs          # MachineState (combined state.toml) + load_/update_machine_state
+        archive.rs                # segments, ArchiveConfig, pruned.jsonl manifest (see §6.5)
         filenames.rs  lock.rs (FileLock)  toml_store.rs  cached_store.rs  git_backend.rs
       plugin/                     # export hook (machine-local plugins registry + notify)
         mod.rs  registry.rs  notify.rs
@@ -88,7 +92,7 @@ next/                             # crate root (also git repo)
       mod.rs  render.rs  recurrence_parse.rs
       commands/
         add.rs   cancel.rs  context.rs  data.rs   delete.rs  done.rs  edit.rs
-        forecast.rs  init.rs  list.rs  mod.rs  move_cmd.rs  next_cmd.rs  open.rs
+        archive.rs  forecast.rs  init.rs  list.rs  mod.rs  move_cmd.rs  next_cmd.rs  open.rs
         resource.rs  show.rs  start.rs  stop.rs  sync.rs  tree.rs  tutorial.rs  user.rs
         plugin/mod.rs   tag/{mod,meta,data}.rs
     mcp/                          # feature = "mcp"; `next-mcp` binary
@@ -106,10 +110,14 @@ next/                             # crate root (also git repo)
       tree.rs  forecast.rs        # TreeView / ForecastView state (build on cached tasks)
       state_panel.rs              # StatePanel: contexts/resources/users panel model
       sync.rs                     # background sync worker (worker thread + mpsc channel)
+  benches/
+    large_repo.rs                 # archiving budget benchmark (harness = false; opt-in)
   tests/
-    common/mod.rs                 # shared test helpers (TestEnv, setup())
+    common/mod.rs                 # shared test helpers (TestEnv, setup(), hook-safe git())
     test_add.rs   test_data.rs    test_done.rs   test_edit.rs
     test_init.rs  test_list.rs    test_open.rs   test_tag.rs   test_tree.rs
+    test_archive.rs               # archive pass, prune, resurrection, partial-clone recovery
+    test_archive_scale.rs         # 2100-task lifecycle + multi-cycle resurrection
     cache_sync.rs locking.rs      migration.rs   sync.rs
     test_mcp.rs                   # in-process MCP HTTP integration tests (requires --features mcp)
     test_container.rs             # container integration tests (requires CONTAINER_TESTS=1)
@@ -189,12 +197,27 @@ Key `Task` methods: `is_open()` (Open only), `is_active()` (Open or Started), `m
 
 ```rust
 pub trait Store: Send + Sync {
+    // Tier-transparent reads (active + warm + cold)
     fn get_task(&self, id: Uuid) -> Result<Task>;
     fn get_task_by_slug(&self, slug: &str) -> Result<Option<Task>>;
     fn find_tasks_by_prefix(&self, prefix: &str) -> Result<Vec<Task>>;
-    fn list_tasks(&self) -> Result<Vec<Task>>;
+    fn get_tasks(&self, ids: &[Uuid]) -> Result<Vec<Task>>;       // batch; skips missing
+    fn task_dates(&self) -> Result<HashMap<Uuid, TaskDates>>;     // git-derived created/updated
+    fn task_location(&self, id: Uuid) -> Result<TaskLocation>;    // Active | Archived(segment)
+
+    // Active-tier reads and paginated queries
+    fn list_tasks(&self) -> Result<Vec<Task>>;                    // active tiers only
+    fn query_tasks(&self, q: &TaskQuery) -> Result<Page<Task>>;   // SQL pushdown; see §7
+
+    // Writes (guarded: saving/deleting an archived task is an error)
     fn save_task(&mut self, task: &Task) -> Result<()>;
     fn delete_task(&mut self, id: Uuid) -> Result<()>;
+
+    // Archive-tier hooks used by core::archiver
+    fn note_archived_segment(&mut self, rel_path: &str, entries: &[ArchivedTask]) -> Result<()>;
+    fn note_cold_segment(&mut self, rel_path: &str) -> Result<()>;
+    fn resurrect_task(&mut self, task: &Task) -> Result<()>;
+
     fn get_state(&self) -> Result<GlobalState>;
     fn save_state(&mut self, state: &GlobalState) -> Result<()>;
     // Core tag metadata (stored in tags/<tag>.toml; committed to git)
@@ -202,6 +225,10 @@ pub trait Store: Send + Sync {
     fn set_tag_meta(&mut self, tag: &str, meta: TagMeta) -> Result<()>;
     fn delete_tag_meta(&mut self, tag: &str) -> Result<()>;
     fn list_tag_metas(&self) -> Result<HashMap<String, TagMeta>>;
+
+    // Cache/HEAD reconciliation (after_pull is incremental; see §6)
+    fn after_pull(&mut self, new_head: &str) -> Result<()>;
+    fn note_head(&mut self, new_head: &str) -> Result<()>;
 
     // Convenience wrappers implemented as default trait methods
     fn get_tag_description(&self, tag: &str) -> Result<Option<String>>;
@@ -215,8 +242,17 @@ pub trait VcsBackend: Send + Sync {
     fn pull(&self) -> Result<PullResult>;   // PullResult: Clean | Conflicts(Vec<PathBuf>)
     fn push(&self) -> Result<()>;
     fn head_hash(&self) -> Result<String>;
+    fn diff(&self) -> Result<String>;       // status --short + diff HEAD
+    fn force_pull(&self) -> Result<String>; // fetch + reset --hard FETCH_HEAD
 }
 ```
+
+`TaskQuery` carries the cheap filter gates (statuses, archive tier, parent,
+hierarchical tags) plus 1-indexed `page` / `page_size` (default 1000);
+`Page<T>` returns `items` with `page`/`page_size`/`total` so callers can tell
+a truncated result from a complete one. The trait ships an in-memory default
+implementation as the reference semantics; the SQLite cache overrides it with
+indexed SQL, and an equivalence test pins the two together.
 
 **Configuration** (`next::core::config`) — machine-local `config.toml`, CLI-only:
 
@@ -256,26 +292,58 @@ pub enum TaskError {
 **`CachedStore`** is the `Store` implementation returned by `open()`. It wraps
 `TomlStore` and maintains an SQLite database at `<repo>/.next.db`:
 
-- **Reads** (`list_tasks`, `get_task`, `get_task_by_slug`, prefix lookups) query SQLite
-  directly — no per-task TOML file reads.
+- **Reads** (`list_tasks`, `query_tasks`, `get_task`, `get_task_by_slug`, prefix
+  lookups, `task_dates`) query SQLite directly — no per-task TOML file reads.
+  `query_tasks` compiles `TaskQuery` gates to indexed SQL (`EXISTS`/`NOT EXISTS`
+  on `task_tags` for hierarchical tag matching) with `COUNT(*)` totals and
+  `LIMIT`/`OFFSET` paging.
 - **Writes** (`save_task`, `delete_task`, `save_state`) write to TOML first
-  (authoritative), then update the SQLite cache in-place.
-- **Cache invalidation**: on `open()`, `CachedStore` compares the stored git HEAD hash
-  against the current HEAD (from `GitBackend::head_hash()`). A mismatch triggers a full
-  rebuild: all TOML files are read via `TomlStore::list_tasks()` and the SQLite tables
-  are repopulated. The new HEAD hash is stored in the `meta` table.
+  (authoritative), then update the SQLite cache in-place. The previous file
+  location and slug uniqueness are resolved from the cache's `path` column —
+  no directory scan — so a write costs O(1) in the task count.
+- **Cache reconciliation**: when the stored git HEAD hash differs from the
+  current one (a pull, or another process's commit), the two heads are
+  tree-diffed with git2 and only the changed files are re-parsed — cost
+  proportional to the change, not the corpus. Deletions resolve rows through
+  the `path` column so renames net out and preserve `created_at`. The full
+  rebuild survives only as the fallback when the stored head is missing or
+  unresolvable (fresh clone); it parses task files and archive segments and
+  backfills the date columns from one `git log` walk. A `schema_version` meta
+  key drops and rebuilds the tables on layout changes.
 
-SQLite schema:
+SQLite schema (v3):
 
 ```sql
 CREATE TABLE meta  (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE tasks (
-    id   TEXT PRIMARY KEY,
-    slug TEXT,
-    data TEXT NOT NULL   -- full Task serialised as JSON
+    id           TEXT PRIMARY KEY,
+    slug         TEXT,
+    status       TEXT NOT NULL,          -- open|started|done|cancelled
+    priority     TEXT NOT NULL,
+    due          TEXT,                   -- ISO dates sort lexicographically
+    start        TEXT,
+    completed_at TEXT,
+    parent_id    TEXT,
+    assignee     TEXT,
+    archived     INTEGER NOT NULL,       -- 0 active · 1 warm segment · 2 cold (pruned)
+    path         TEXT NOT NULL,          -- repo-relative file or segment path
+    created_at   TEXT,                   -- git-derived; frozen once archived
+    updated_at   TEXT,
+    data         TEXT NOT NULL           -- full Task serialised as JSON
 );
-CREATE INDEX idx_tasks_slug ON tasks(slug);
+CREATE TABLE task_tags (task_id TEXT NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (task_id, tag));
+CREATE INDEX idx_tasks_slug    ON tasks(slug);
+CREATE INDEX idx_tasks_status  ON tasks(archived, status);
+CREATE INDEX idx_tasks_parent  ON tasks(parent_id);
+CREATE INDEX idx_tasks_path    ON tasks(path);
+CREATE INDEX idx_task_tags_tag ON task_tags(tag);
 ```
+
+The `created_at`/`updated_at` columns hold git-derived timestamps (scoring's
+age factor reads them via `Store::task_dates`): local saves stamp them, the
+incremental reconcile stamps changed files with the new head's commit time
+while preserving `created_at`, and archived entries carry frozen dates inside
+their segments. No listing ever walks git history.
 
 **`TomlStore`** reads and writes one `.toml` file per task in `tasks/`.  Tag metadata
 (`TagMeta`: description, URL, priority, `no_time_urgency`, arbitrary data) is stored as
@@ -299,7 +367,8 @@ sections (see `storage/machine_state.rs`, `MachineState`):
 * the global runtime state — active contexts, excluded contexts, resource availability,
   active users — flattened at the top level (unchanged on-disk format);
 * the plugin registry as a `[[plugin]]` array;
-* the sync state under `[sync]` (`last_pull` plus per-plugin `last_sync`).
+* the sync state under `[sync]` (`last_pull`, `last_archive` for the daily
+  auto-archive throttle, plus per-plugin `last_sync`).
 
 `load_machine_state` / `update_machine_state` are the read / locked-read-modify-write
 primitives all three subsystems (`TomlStore` global state, `plugin::registry`,
@@ -500,6 +569,45 @@ fire-and-forget (event JSON on stdin + `NEXT_PLUGIN_EVENT`/`NEXT_REPO`/`NEXT_PLU
 env). The origin plugin is skipped (loop guard via `NEXT_PLUGIN_ORIGIN`), the long-lived
 server reaps children on a helper thread, and `delete` events prune the subscription. See
 REQUIREMENTS.md §10 for the full contract.
+
+### 6.5 Archive tiers
+
+Requirements are in REQUIREMENTS.md §2.3; the machinery lives in
+`storage::archive` (formats), `core::archiver` (the pass), and `CachedStore`
+(tier-aware rows).
+
+- **Warm segments** (`archive/<YYYY>/<MM>-<NNN>.toml`) are TOML
+  array-of-tables of `ArchivedTask` — the full task flattened, plus
+  `created_at`/`updated_at` frozen from git at archive time. Writes sort by
+  `(completed_at, id)` and are byte-deterministic; an emptied segment removes
+  its file. `config/archive.toml` (committed) holds the policy.
+- **The archive pass** (`archiver::run_archive_pass`) runs as one repository
+  transaction: select eligible tasks (see the eligibility guards in
+  REQUIREMENTS §2.3), delete their files/rows, pack them into each month's
+  open segment (sealing at the cap, mirroring rows via
+  `Store::note_archived_segment`), commit once. It runs automatically from
+  `core::sync` after a clean pull — throttled to one automatic run per day
+  via `[sync] last_archive`, gated by the `auto` flag, stamped *before*
+  running so failures don't retry every sync — or on demand via
+  `next archive`.
+- **The prune phase** follows the warm commit when `prune_after_days` is set:
+  segments past the threshold leave the checkout, each recorded in the
+  append-only `archive/pruned.jsonl` (path, blob SHA at HEAD, task count;
+  `merge=union`, last line per path wins). Cache rows flip to tier 2 in
+  place. Segment numbers listed in the manifest but absent from the checkout
+  are never reused.
+- **Resurrection** (`archiver::resurrect_if_archived`, called by
+  `service::apply_edits` inside the mutation's transaction): the entry leaves
+  its segment (fetched from its blob when cold — `git cat-file` falls back to
+  an on-demand promisor fetch in partial clones), the individual file is
+  restored, the row flips tiers keeping its frozen `created_at`, and the
+  touched segment joins the mutation's commit. `save_task`/`delete_task` on
+  an archived task fail loudly instead of duplicating the task or (via the
+  path hint) deleting a whole segment.
+- **Budgets** are pinned by `cargo bench --bench large_repo` (no bench-only
+  dependencies; `NEXT_BENCH_TASKS`, `NEXT_BENCH_STRICT=1`). Measured at 10⁶
+  tasks: rebuild 53 s, 200-file reconcile 17 ms, edit 17 ms, filtered query
+  9 ms, archived page 0.6 s.
 
 ---
 
@@ -717,6 +825,9 @@ non-zero exit code.
 | `GitBackend` | `src/core/storage/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
 | `CachedStore` | `src/core/storage/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |
 | Cache sync | `tests/cache_sync.rs` | Integration tests: write-through consistency (SQLite ↔ TOML), git pull propagation (HEAD change triggers rebuild), cache-reuse (same HEAD = no rebuild) |
+| Archiving | `tests/test_archive.rs` | Integration tests: archive pass, segment sealing, frozen dates, resurrection (warm + cold), blind-write guards, sync auto-archive throttle, cold pruning, manifest numbering, partial-clone cold recovery |
+| Archiving at scale | `tests/test_archive_scale.rs` | 2100-task corpus through the full lifecycle (tier accounting, gap-free pagination, cross-machine reconcile); three resurrection / re-archive / re-prune cycles with no duplicates |
+| Budgets | `benches/large_repo.rs` | Opt-in benchmark (`cargo bench --bench large_repo`); pins the 1M-task budgets from REQUIREMENTS §2.3 |
 | Migration | `tests/migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next::storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens |
 | File locking | `tests/locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption, including transactional lost-update prevention (N processes each add a distinct tag to one task; all must survive). Re-entrant lock unit tests live in `src/core/storage/lock.rs` |
 | CLI commands | `tests/test_*.rs` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |

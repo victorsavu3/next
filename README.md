@@ -32,13 +32,21 @@ next done a1b2c3d4
 
 ## Storage model
 
-Every task is a `.toml` file inside a `tasks/` directory at the repository root. `git`
-is the transport layer — `next sync` runs pull then push. The TOML files are the single
-source of truth.
+Every active task is a `.toml` file inside a `tasks/` directory at the repository root.
+`git` is the transport layer — `next sync` runs pull then push. The TOML files are the
+single source of truth.
 
-`next` also maintains an SQLite database (`.next.db`) as a read cache. It is rebuilt
-automatically whenever the git HEAD changes (e.g. after a pull), so it is always
+`next` also maintains an SQLite database (`.next.db`) as a read cache. It is reconciled
+incrementally whenever the git HEAD changes (e.g. after a pull), so it is always
 consistent with the TOML files. Add it to `.gitignore`; `next init` does this for you.
+
+Old closed tasks are **archived** automatically (at most once a day, during sync): they
+move out of `tasks/` into month-keyed segment files under `archive/`, keeping the
+working tree and git index small no matter how much history accumulates. Archived
+tasks stay visible via `next list --archived` and still resolve by id or slug; editing
+one brings it back automatically. Thresholds live in the committed
+`config/archive.toml` (defaults: archive after 180 days; optional cold-tier pruning
+off). See REQUIREMENTS.md §2.3 for the full lifecycle.
 
 Machine-local state (active contexts, active users, resource availability) is stored
 outside the repository in `$XDG_STATE_HOME/task-manager/<repo-hash>/state.toml` so it
@@ -51,10 +59,15 @@ my-tasks/
   tasks/
     call-dentist-a1b2c3d4.toml
     water-plants.toml          # task with slug "water-plants"
+  archive/
+    2025/
+      10-001.toml              # archived tasks completed in 2025-10 (≤1000 per segment)
   tags/
     __context__work.toml       # tag description for @work  (@ → __context__)
     __context__home/
       kitchen.toml             # tag description for @home/kitchen
+  config/
+    archive.toml               # committed archive policy
   .next.db                     # SQLite read cache — not committed
 
 ~/.local/state/task-manager/<repo-hash>/
@@ -194,7 +207,8 @@ All list commands accept filter tokens in any order:
 | `next user [set/clear/list]` | Manage user filter |
 | `next plugin [register/watch/unwatch/unregister/list]` | Manage export plugins (see [Plugins](#plugins)) |
 | `next forecast` | Upcoming due dates grouped by time, including projected schedule-recurrence occurrences over the horizon |
-| `next sync` | Pull from remote, push local commits |
+| `next sync` | Pull from remote, auto-archive if due, push local commits |
+| `next archive` | Move old closed tasks into archive segments now |
 Task IDs accept a full UUID, a slug, or any unambiguous 4+ character hex prefix.
 All commands support `--json` for pipe-friendly output.
 

@@ -36,7 +36,8 @@ A full-screen terminal front-end, `next-tui`, is also available — see [`TUI.md
 | `next resource` | List resources and their availability |
 | `next resource set` | Toggle a resource available or unavailable |
 | `next forecast` | Show upcoming recurrence dates |
-| `next sync` | Pull from git remote, rebuild cache, push |
+| `next sync` | Pull from git remote, reconcile cache, auto-archive if due, push |
+| `next archive` | Move old closed tasks into archive segments now |
 | `next user` | Show active user filter |
 | `next user set` | Set the global active user filter |
 | `next user clear` | Clear the user filter |
@@ -152,13 +153,18 @@ next list [filters...]
 |------|------|---------|-------------|
 | `--future` | flag | false | Include tasks with a future `start` date and planned recurrence instances. |
 | `--all` | flag | false | Disable all implicit filtering: contexts, resources, blocked tasks, and future `start` dates. |
+| `--archived` | flag | false | List archived tasks instead, most recently completed first. Tag filters and pagination apply; scoring and the implicit gate do not. |
 | `--all-users` | flag | false | Bypass the user filter; show tasks for all assignees. |
-| `-n` / `--limit` | integer | — | Show at most N tasks. Overrides `list_limit` in config. |
-| `--json` | flag | false | Emit task list as JSON. |
+| `-n` / `--limit` | integer | — | Show at most N tasks. Shorthand for `--page-size`; overrides `list_limit` in config. |
+| `--page-size` | integer | 1000 | Tasks per page. |
+| `--page` | integer | 1 | 1-indexed page of results to show. |
+| `--json` | flag | false | Emit the result as JSON: `{ "items": [...], "page": N, "page_size": N, "total": N }`. |
 
 Filter tokens (see [Filter Syntax](#filter-syntax)) may be placed anywhere in the argument list.
 
-A default limit can be set in config as `list_limit = N`. Without a limit (and with no config default), all matching tasks are shown.
+A default cap can be set in config as `list_limit = N`; without one the page
+size defaults to 1000. When the result is a window on a larger set, text output
+ends with an indication such as `page 2 of 14 · 13402 matching · --page 3 for more`.
 
 **Examples**
 
@@ -174,7 +180,38 @@ next list context:@home --future
 
 # Everything, bypassing all implicit filters
 next list --all
+
+# Archived work-tagged tasks, second page
+next list --archived +@work --page 2
 ```
+
+---
+
+### `next archive`
+
+Move old closed tasks into archive segments now, bypassing the daily automatic
+throttle. Tasks whose completion (or, for cancelled tasks, last update) is older
+than `archive_after_days` — 180 by default, configurable in the committed
+`config/archive.toml` — leave the `tasks/` directory for month-keyed segment
+files under `archive/`. When `prune_after_days` is set, segments past that
+threshold are additionally pruned from the checkout (recoverable via git).
+
+Archived tasks stay visible in `next list --archived` and resolve by id or slug
+everywhere. Editing one brings it back automatically; deleting one is an error
+until it is edited back. The same pass runs automatically during sync at most
+once per day (disable with `auto = false` in `config/archive.toml`).
+
+**Usage**
+
+```
+next archive [--json]
+```
+
+**Options**
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | flag | false | Emit `{ "archived": N, "segments": [...], "pruned": [...] }`. |
 
 ---
 
