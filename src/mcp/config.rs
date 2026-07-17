@@ -118,7 +118,9 @@ impl McpConfig {
     ///
     /// The config file path is resolved as:
     /// 1. `NEXT_CONFIG` env var (explicit override)
-    /// 2. `$XDG_CONFIG_HOME/next-mcp/config.toml` (XDG default)
+    /// 2. `/data/config/config.toml` (container default; a dedicated
+    ///    `next-config` volume is mounted at `/data/config` — XDG paths are
+    ///    deliberately not used)
     pub fn load() -> anyhow::Result<Self> {
         let config_path = std::env::var("NEXT_CONFIG").ok()
             .filter(|s| !s.is_empty())
