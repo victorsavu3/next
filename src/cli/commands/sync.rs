@@ -1,5 +1,24 @@
+use std::path::PathBuf;
+
 use crate::core::{sync, SyncOutcome};
 use crate::AppContext;
+
+/// Error returned by [`run`] when the pull left merge conflicts.
+///
+/// REQUIREMENTS.md §2.2: an explicit `next sync` MUST exit with code 2 on
+/// merge conflicts so scripts can detect them. `main` downcasts to this type
+/// to map it to `std::process::exit(2)`; every other error keeps exit code 1.
+#[derive(Debug)]
+pub struct ConflictsError(pub Vec<PathBuf>);
+
+impl std::fmt::Display for ConflictsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<_> = self.0.iter().map(|p| p.display().to_string()).collect();
+        write!(f, "Merge conflicts — resolve manually: {}", names.join(", "))
+    }
+}
+
+impl std::error::Error for ConflictsError {}
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -25,9 +44,10 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
             );
         }
         SyncOutcome::Conflicts(paths) => {
-            let names: Vec<_> = paths.iter().map(|p| p.display().to_string()).collect();
-            eprintln!("Merge conflicts — resolve manually: {}", names.join(", "));
-            tracing::error!(cmd = "sync", "pull conflicts: {}", names.join(", "));
+            let err = ConflictsError(paths);
+            eprintln!("{err}");
+            tracing::error!(cmd = "sync", "pull conflicts: {err}");
+            return Err(err.into());
         }
     }
     Ok(())

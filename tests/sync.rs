@@ -345,3 +345,56 @@ fn bidirectional_sync_both_machines_converge() {
     assert!(titles.contains(&"Task A extra"));
     assert!(titles.contains(&"Task B"));
 }
+
+// ---------------------------------------------------------------------------
+// CLI `sync` command: conflicts surface as a typed error (exit code 2)
+// ---------------------------------------------------------------------------
+
+/// REQUIREMENTS.md §2.2: `next sync` must exit with code 2 on merge
+/// conflicts. The CLI command's `run` signals this by returning a
+/// `ConflictsError` (which `main` maps to `std::process::exit(2)`); this
+/// test asserts that seam.
+#[test]
+fn sync_command_returns_conflicts_error() {
+    use next::cli::commands::sync as sync_cmd;
+    use next::{AppContext, Config, TaskRepository};
+
+    let remote = bare_remote();
+
+    // A commits initial task with known slug and pushes.
+    let (a_dir, mut a_store, a_vcs) = local_with_remote(remote.path());
+    let mut task = Task::new("Shared task");
+    task.slug = Some("shared".into());
+    a_store.save_task(&task).unwrap();
+    let task_path_a = next::core::storage::task_path(a_dir.path(), &task);
+    a_vcs.commit(std::slice::from_ref(&task_path_a), "next: add \"Shared task\"").unwrap();
+    a_vcs.push().unwrap();
+
+    // B clones; both sides edit the same file with conflicting content.
+    let (_b_base, b_path, b_store, b_vcs) = clone_of(remote.path());
+    let task_path_b = b_path.join("tasks").join("shared.toml");
+
+    fs::write(&task_path_a, "title = \"A version\"\nid = \"00000000-0000-0000-0000-000000000001\"\nstatus = \"open\"\npriority = \"high\"\ncreated_at = \"2026-01-01T00:00:00Z\"\nupdated_at = \"2026-01-01T00:00:00Z\"\n").unwrap();
+    a_vcs.commit(&[task_path_a], "next: edit A").unwrap();
+    a_vcs.push().unwrap();
+
+    fs::write(&task_path_b, "title = \"B version\"\nid = \"00000000-0000-0000-0000-000000000001\"\nstatus = \"open\"\npriority = \"low\"\ncreated_at = \"2026-01-01T00:00:00Z\"\nupdated_at = \"2026-01-01T00:00:00Z\"\n").unwrap();
+    b_vcs.commit(std::slice::from_ref(&task_path_b), "next: edit B").unwrap();
+
+    // Run the CLI sync command on B — the pull conflicts.
+    let mut ctx = AppContext {
+        config: Config::default(),
+        repo: TaskRepository::with_parts(Box::new(b_store), Box::new(b_vcs), b_path.clone()),
+    };
+    let args = sync_cmd::Args { push_only: false, pull_only: false };
+    let err = sync_cmd::run(args, &mut ctx).expect_err("sync over conflicting histories must fail");
+
+    let conflicts = err
+        .downcast_ref::<sync_cmd::ConflictsError>()
+        .expect("error must downcast to ConflictsError so main can exit(2)");
+    assert!(!conflicts.0.is_empty(), "conflict paths should be non-empty");
+    assert!(
+        conflicts.to_string().contains("shared.toml"),
+        "message should name the conflicting file: {conflicts}"
+    );
+}

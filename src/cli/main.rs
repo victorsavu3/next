@@ -137,6 +137,12 @@ fn main() -> anyhow::Result<()> {
     };
 
     if let Err(ref e) = result {
+        // Merge conflicts from an explicit `next sync` exit with code 2
+        // (REQUIREMENTS.md §2.2) so scripts can detect them; the detailed
+        // message was already printed to stderr by the sync command.
+        if e.downcast_ref::<sync_cmd::ConflictsError>().is_some() {
+            std::process::exit(2);
+        }
         tracing::error!(cmd = cmd_name, "{e:#}");
     }
 
@@ -148,8 +154,12 @@ fn main() -> anyhow::Result<()> {
     {
         let sync_args = sync_cmd::Args { push_only: false, pull_only: false };
         if let Err(e) = sync_cmd::run(sync_args, &mut ctx) {
-            eprintln!("autosync failed: {e:#}");
-            tracing::error!(cmd = "sync", "autosync: {e:#}");
+            // Conflicts already printed their message inside `run`; the
+            // mutation itself succeeded, so they never change its exit code.
+            if e.downcast_ref::<sync_cmd::ConflictsError>().is_none() {
+                eprintln!("autosync failed: {e:#}");
+                tracing::error!(cmd = "sync", "autosync: {e:#}");
+            }
         }
     }
 
