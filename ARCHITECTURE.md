@@ -255,7 +255,7 @@ pub trait VcsBackend: Send + Sync {
 ```
 
 `TaskQuery` carries the cheap filter gates (statuses, archive tier, parent,
-hierarchical tags) plus 1-indexed `page` / `page_size` (default 1000);
+hierarchical tags) plus 1-indexed `page` / `page_size` (default 50);
 `Page<T>` returns `items` with `page`/`page_size`/`total` so callers can tell
 a truncated result from a complete one. The trait ships an in-memory default
 implementation as the reference semantics; the SQLite cache overrides it with
@@ -268,7 +268,7 @@ pub struct Config {
     pub sync: SyncConfig,              // see below
     pub forecast_horizon_days: u32,    // default 90
     pub next_count: usize,             // default 10
-    pub list_limit: Option<usize>,     // default `next list` page size; None = 1000
+    pub list_limit: Option<usize>,     // default `next list` page size; None = 50
     pub repository: Option<PathBuf>,   // default repo root (overridden by --repo)
     pub autosync: bool,                // sync after each mutation (overridden by --autosync)
 }
@@ -776,7 +776,7 @@ back to defaults when absent. Editable in place with `next config get/set`.
 ```toml
 repository            = "/home/alice/tasks"  # use next from any directory
 autosync              = false                # sync after each mutation (--autosync to override)
-list_limit            = 20                   # default `next list` page size; absent = 1000
+list_limit            = 20                   # default `next list` page size; absent = 50
 forecast_horizon_days = 90
 next_count            = 10                   # tasks shown by `next next`
 

@@ -466,7 +466,7 @@ prefixed) at the top of the output. Both MUST accept `--all-users` to bypass the
 filter. Running `next` with no subcommand MUST behave as `next list`.
 
 `next list` output is **paginated**: `--page-size` (or its shorthand `-n`/`--limit`,
-or `list_limit` in config) sets the window size — default 1000 — and `--page` selects
+or `list_limit` in config) sets the window size — default 50 — and `--page` selects
 the 1-indexed page. Text output MUST indicate when the result is a window on a larger
 set; `--json` returns `{ items, page, page_size, total }`. Additional list modes:
 `--closed` shows only done/cancelled active-tier tasks, and `--archived` lists archived
@@ -842,7 +842,7 @@ MUST fail fast when a sync is already in progress and cancels any pending deferr
 timer.
 
 **`list_tasks` pagination:** the tool accepts `page` (1-indexed, default 1),
-`page_size` (default 1000; `limit` is a legacy alias), `include_all`, and
+`page_size` (default 50; `limit` is a legacy alias), `include_all`, and
 `archived: true` to list the archive instead (most recently completed first; tag
 filters and pagination apply, scoring does not). The result is
 `{ items, page, page_size, total }`; `total > items.len()` signals truncation.

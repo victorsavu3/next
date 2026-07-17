@@ -8,7 +8,7 @@ use crate::core::{
 };
 
 /// Default number of items per [`Page`] when a query does not set one.
-pub const DEFAULT_PAGE_SIZE: u32 = 1000;
+pub const DEFAULT_PAGE_SIZE: u32 = 50;
 
 /// A storage-level task query, compiled to SQL by the cached store.
 ///
@@ -413,6 +413,15 @@ mod tests {
         assert_eq!((p.page, p.page_size), (1, DEFAULT_PAGE_SIZE));
         assert_eq!(p.page_count(), 1);
         assert!(!p.is_paginated());
+    }
+
+    #[test]
+    fn default_page_size_truncates_but_totals_full_count() {
+        assert_eq!(DEFAULT_PAGE_SIZE, 50, "default page size is 50");
+        let p = paginate((0..120).collect::<Vec<_>>(), 1, 0);
+        assert_eq!(p.items.len(), DEFAULT_PAGE_SIZE as usize);
+        assert_eq!(p.total, 120, "total reflects the full result count");
+        assert!(p.is_paginated(), "truncation is detectable from the envelope");
     }
 
     #[test]

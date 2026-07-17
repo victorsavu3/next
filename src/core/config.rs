@@ -99,7 +99,8 @@ pub struct Config {
 
     /// Optional cap on `next list` output.  When set, `next list` truncates
     /// results to this many tasks (same as passing `--limit N`).  `None`
-    /// (the default) means no cap — all matching tasks are shown.
+    /// (the default) falls back to the default page size of 50
+    /// ([`crate::core::store::DEFAULT_PAGE_SIZE`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list_limit: Option<usize>,
 

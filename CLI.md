@@ -184,14 +184,14 @@ next list [filters...]
 | `--archived` | flag | false | List archived tasks instead, most recently completed first. Tag filters and pagination apply; scoring and the implicit gate do not. Conflicts with `--all`, `--closed`, and `--future`. |
 | `--all-users` | flag | false | Bypass the user filter; show tasks for all assignees. |
 | `-n` / `--limit` | integer | — | Show at most N tasks. Shorthand for `--page-size`; overrides `list_limit` in config. |
-| `--page-size` | integer | 1000 | Tasks per page. |
+| `--page-size` | integer | 50 | Tasks per page. |
 | `--page` | integer | 1 | 1-indexed page of results to show. |
 | `--json` | flag | false | Emit the result as JSON: `{ "items": [...], "page": N, "page_size": N, "total": N }`. |
 
 Filter tokens (see [Filter Syntax](#filter-syntax)) may be placed anywhere in the argument list.
 
 A default cap can be set in config as `list_limit = N`; without one the page
-size defaults to 1000. When the result is a window on a larger set, text output
+size defaults to 50. When the result is a window on a larger set, text output
 ends with an indication such as `page 2 of 14 · 13402 matching · --page 3 for more`.
 
 **Examples**

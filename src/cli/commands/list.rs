@@ -36,7 +36,7 @@ pub struct Args {
     #[arg(short = 'n', long)]
     pub limit: Option<usize>,
 
-    /// Tasks per page (default 1000, or `list_limit` from config).
+    /// Tasks per page (default 50, or `list_limit` from config).
     #[arg(long)]
     pub page_size: Option<u32>,
 
