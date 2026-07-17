@@ -126,6 +126,7 @@ fn describe(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
 
 fn clear_description(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let t = require_tag(params)?;
+    tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
     ctx.transaction(|store, vcs, root| {
         store.delete_tag_description(t)?;
         let tag_path = storage::tag_meta_path(root, t);
@@ -282,6 +283,34 @@ mod tests {
         let (_dir, mut ctx) = make_ctx();
         let (result, _) = manage_tag(&json!({ "action": "list" }), &mut ctx).unwrap();
         assert_eq!(result["contexts"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn clear_description_rejects_traversal_tag() {
+        // Regression test: an unvalidated tag like "../../config/config" would
+        // resolve tags/<tag>.toml outside the repo and delete a foreign file.
+        let outer = tempfile::tempdir().unwrap();
+        let repo_root = outer.path().join("repo");
+        std::fs::create_dir(&repo_root).unwrap();
+        crate::core::test_git::init_test_repo(&repo_root);
+        let (store, vcs) = crate::core::storage::open(repo_root.clone()).unwrap();
+        let mut ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), repo_root);
+
+        // Victim file outside the repo, exactly where the traversal tag points:
+        // <repo>/tags/../../config/config.toml == <outer>/config/config.toml
+        let victim_dir = outer.path().join("config");
+        std::fs::create_dir(&victim_dir).unwrap();
+        let victim = victim_dir.join("config.toml");
+        std::fs::write(&victim, "secret = true\n").unwrap();
+
+        let err = manage_tag(
+            &json!({ "action": "clear_description", "tag": "../../config/config" }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("'..'"), "unexpected error: {err}");
+        assert!(victim.exists(), "file outside the repo was deleted");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "secret = true\n");
     }
 
     #[test]
