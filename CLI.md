@@ -16,6 +16,8 @@ A full-screen terminal front-end, `next-tui`, is also available — see [`TUI.md
 | `next next` | Show the top N highest-scored tasks |
 | `next show` | Show full details of a single task |
 | `next tree` | Show all tasks in a parent-child tree |
+| `next start` | Mark a task as started (in-progress); logs a time entry |
+| `next stop` | Stop a started task (back to open); logs a time entry |
 | `next done` | Mark a task complete (triggers recurrence if applicable) |
 | `next cancel` | Mark a task cancelled |
 | `next edit` | Edit fields on an existing task |
@@ -44,7 +46,31 @@ A full-screen terminal front-end, `next-tui`, is also available — see [`TUI.md
 | `next user list` | List all assignees across all tasks |
 | `next tag set-no-time-urgency` | Disable age+due urgency factors for tasks with a tag |
 | `next tag clear-no-time-urgency` | Re-enable time-based urgency for tasks with a tag |
+| `next plugin` | Manage export plugins and their periodic syncs |
+| `next config` | Read or write a value in the machine-local `config.toml` |
 | `next tutorial` | Print the embedded tutorial |
+
+Running `next` with no subcommand is the same as `next list`.
+
+---
+
+## Global flags
+
+Available on every subcommand:
+
+| Flag | Description |
+|------|-------------|
+| `--config <path>` | Config file to use (default: `$XDG_CONFIG_HOME/task-manager/config.toml`). |
+| `--repo <path>` | Task repository root. Overrides `repository` in the config and the upward `.git` search. |
+| `--autosync` | Run `next sync` after this command if it mutates tasks. Overrides `autosync = false` in config. |
+| `--no-autosync` | Disable autosync for this command even if `autosync = true` in config. Conflicts with `--autosync`. |
+| `--offline` / `--no-sync` | Skip both the pull-before-query and the autosync push for this invocation — no network I/O. The two spellings are aliases; both conflict with `--autosync`. |
+
+Unless disabled (`sync.pull_before_query = false` in config, or `--offline`), every
+command except `next sync` first runs a best-effort **pull-before-query**: if the last
+pull is older than `sync.staleness_secs` (default 1 hour) it pulls from the remote, so
+results reflect other machines' pushes. A failed pull prints a warning and the command
+proceeds on the local data.
 
 ---
 
@@ -64,8 +90,9 @@ What it does:
 
 1. Runs `git init` (skipped if `.git` already exists)
 2. Creates `tasks/` directory
-3. Appends `.next.db` to `.gitignore` (or creates `.gitignore`; never duplicates the entry)
-4. Creates an initial git commit when git user config is available
+3. Writes `config/scoring.toml` with the default scoring weights (skipped if present)
+4. Appends the generated-file entries (`.next.db`, `.next.db-wal`, `.next.db-shm`, `.next.lock`, `state.toml`) to `.gitignore` (or creates `.gitignore`; never duplicates entries)
+5. Creates an initial git commit when git user config is available
 
 ---
 
@@ -116,8 +143,8 @@ next add "Call dentist"
 # Task with deadline and context tag
 next add "Submit tax forms" --due "April 15" --tag @home --priority high
 
-# Project task (just a task with the "project" tag)
-next add "Launch blog" --slug launch-blog --tag project --priority high
+# Project task (a plain task; children attach to it via --parent)
+next add "Launch blog" --slug launch-blog --priority high
 
 # Subtask under an existing project
 next add "Write first post" --parent launch-blog
@@ -153,7 +180,8 @@ next list [filters...]
 |------|------|---------|-------------|
 | `--future` | flag | false | Include tasks with a future `start` date and planned recurrence instances. |
 | `--all` | flag | false | Disable all implicit filtering: contexts, resources, blocked tasks, and future `start` dates. |
-| `--archived` | flag | false | List archived tasks instead, most recently completed first. Tag filters and pagination apply; scoring and the implicit gate do not. |
+| `--closed` | flag | false | Show only closed tasks (done or cancelled). Can be combined with `--all`. |
+| `--archived` | flag | false | List archived tasks instead, most recently completed first. Tag filters and pagination apply; scoring and the implicit gate do not. Conflicts with `--all`, `--closed`, and `--future`. |
 | `--all-users` | flag | false | Bypass the user filter; show tasks for all assignees. |
 | `-n` / `--limit` | integer | — | Show at most N tasks. Shorthand for `--page-size`; overrides `list_limit` in config. |
 | `--page-size` | integer | 1000 | Tasks per page. |
@@ -295,6 +323,35 @@ next tree
 
 # Full tree including completed work
 next tree --all
+```
+
+---
+
+### `next start`
+
+Mark a task as started (in-progress). Started tasks stay visible in `next list` /
+`next next`, receive a flat started bonus in scoring, and count as active for blocking
+and parent-child checks. Appends `{event: "start", at: <timestamp>}` to the task's
+`data["time_log"]` array.
+
+**Usage**
+
+```
+next start <id> [--json]
+```
+
+---
+
+### `next stop`
+
+Stop a started task (status returns to open). Appends `{event: "stop", at: <timestamp>}`
+to `data["time_log"]`. Entries accumulate across start/stop cycles for time-tracking
+analysis.
+
+**Usage**
+
+```
+next stop <id> [--json]
 ```
 
 ---
@@ -447,8 +504,9 @@ next open <id>
 
 ### `next data set`
 
-Set a key in the task's `data` map. Values are interpreted as JSON: numbers and booleans
-are stored as their native types; anything else is stored as a string.
+Set a key in the task's `data` map. Values are interpreted as JSON: numbers, booleans,
+arrays, and objects are stored as their native types; anything that is not valid JSON
+is stored as a string. `null` is rejected.
 
 **Usage**
 
@@ -564,6 +622,24 @@ Re-enable time-based urgency for tasks with this tag.
 
 ```
 next tag clear-no-time-urgency <tag>
+```
+
+---
+
+### Other `next tag` subcommands
+
+All tag kinds (`@context`, `#resource`, freeform) share the same metadata store:
+
+```
+next tag show <tag> [--json]                 # display all metadata for a tag
+next tag set-url <tag> <url>                 # attach a reference URL
+next tag clear-url <tag>
+next tag set-priority <tag> low|medium|high  # default priority offset for tagged tasks
+next tag clear-priority <tag>
+next tag data set <tag> <key> <value>        # arbitrary JSON key-value data on a tag
+next tag data get <tag> <key>
+next tag data unset <tag> <key>
+next tag data list <tag>
 ```
 
 ---
@@ -845,7 +921,10 @@ Slugs are **not** propagated — each instance gets no slug. This prevents slug 
 
 ### `next sync`
 
-Synchronise with the remote git repository: pull, rebuild the local cache, then push local commits. Stops with a detailed error message if a merge conflict is detected.
+Synchronise with the remote git repository: pull, reconcile the local cache, run the
+automatic archive pass if due, then push local commits. Stops with a detailed error
+message if a merge conflict is detected. After a clean sync, any registered plugin
+whose periodic sync is due is run (see `next plugin set-sync`).
 
 **Usage**
 
@@ -859,6 +938,60 @@ next sync [options]
 |------|------|---------|-------------|
 | `--push-only` | flag | false | Only push local commits; skip pulling from the remote. |
 | `--pull-only` | flag | false | Only pull from the remote; skip pushing. |
+
+---
+
+### `next plugin`
+
+Manage export plugins. Registrations are machine-local (stored in the per-repo
+`state.toml` under `$XDG_STATE_HOME`, never committed). A plugin has two optional
+commands: the **export hook** (`register`), spawned fire-and-forget whenever a watched
+task changes, and the **periodic sync** (`set-sync`), run to completion after each
+`next sync` when its interval has elapsed.
+
+**Usage**
+
+```
+next plugin register <name> -- <program> [args…]   # define/replace the export command
+next plugin watch <name> <task>                    # notify <name> on updates to <task>
+next plugin unwatch <name> <task>
+next plugin unregister <name>                      # remove plugin + subscriptions
+next plugin set-sync <name> [--default-interval <secs>] -- <program> [args…]
+next plugin set-interval <name> <secs>             # user override of the sync interval
+next plugin set-interval <name> --clear            # drop the override
+next plugin enable <name> | disable <name>         # toggle the periodic sync
+next plugin list
+```
+
+The sync interval resolves as: `set-interval` override → `--default-interval` →
+`sync.plugin_sync_default_secs` in `config.toml` (default 86400 = daily). Only a
+successful sync run records `last_sync`; failures are retried on the next sync.
+
+---
+
+### `next config`
+
+Read or write a value in the machine-local `config.toml` without opening a repository.
+
+**Usage**
+
+```
+next config get [<key>]          # print one key, or all known keys when omitted
+next config set <key> <value>
+```
+
+Supported keys: `autosync`, `repository`, `list_limit` (`none` clears), `next_count`,
+`forecast_horizon_days`, `sync.git_subprocess`, `sync.pull_before_query`,
+`sync.staleness_secs`, `sync.pull_timeout_secs`.
+
+**Examples**
+
+```sh
+next config get                                # print everything
+next config set autosync true
+next config set sync.pull_before_query false
+next config set list_limit none
+```
 
 ---
 
@@ -883,7 +1016,7 @@ All list commands (`list`, `next`, `forecast`) accept filter tokens that can be 
 
 Unless `--all` is passed, the following tasks are always excluded:
 
-- Tasks with `status` other than `open`
+- Tasks with `status` other than `open` or `started`
 - Tasks whose `start` date is in the future
 - Tasks that are blocked (any open `blocked_by` entry, or the parent of any open subtask)
 - Tasks carrying a `#resource` tag where that resource is currently unavailable
@@ -901,10 +1034,9 @@ hex characters is accepted. Slugs are also accepted wherever an ID is expected.
 
 ### Projects and subtasks
 
-A project is any task tagged `"project"`. There is no separate project entity — projects
-are plain tasks. Give a task the `project` tag when you want it to act as a container.
-Child tasks attach via `--parent`. A parent task is hidden from the default scored list
-while any of its direct children are still open.
+Any task with children is a project — there is no separate project entity and no special
+tag or type is required. Child tasks attach via `--parent`. A parent task is hidden from
+the default scored list while any of its direct children are still open.
 
 Use `next tree` to see all tasks in their parent-child structure. Use `next show <id>`
 to inspect a single task and its direct children.

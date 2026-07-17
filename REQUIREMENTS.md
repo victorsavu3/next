@@ -118,8 +118,9 @@ share the same descriptions. The `next tag describe` command writes these files.
       kitchen.toml               # tag description for @home/kitchen
     __resource__printer.toml     # tag description for #printer  (# → __resource__)
   config/
-    archive.toml                 # committed archive policy (thresholds, segment cap, auto)
-  .gitignore                     # MUST contain ".next.db"
+    scoring.toml                 # committed scoring weights (seeded by `next init`)
+    archive.toml                 # committed archive policy (optional; absent = defaults)
+  .gitignore                     # MUST contain ".next.db" (and the other generated files, §8.0)
   .next.db                       # SQLite read cache; MUST NOT be committed to git
 
 $XDG_STATE_HOME/task-manager/<repo-hash>/
@@ -416,8 +417,11 @@ Initialises a new task repository in the current directory:
 
 1. Runs `git init` if no `.git` directory exists (idempotent on existing repos)
 2. Creates the `tasks/` directory if it does not exist
-3. Appends `.next.db` to `.gitignore` (creates the file if absent; does not duplicate the entry)
-4. Attempts an initial git commit; skips silently if git user is not configured
+3. Writes `config/scoring.toml` with the default scoring weights if absent
+4. Appends the generated-file entries (`.next.db`, its WAL sidecars `.next.db-wal` /
+   `.next.db-shm`, `.next.lock`, `state.toml`) to `.gitignore` (creates the file if
+   absent; does not duplicate entries)
+5. Attempts an initial git commit; skips silently if git user is not configured
 
 MUST be safe to run more than once — subsequent runs MUST NOT corrupt existing data or duplicate `.gitignore` entries.
 
@@ -459,7 +463,15 @@ next next [N] [filters...]  # top N tasks by score (default N=10)
 
 Both commands MUST show overdue and due-today tasks visually distinct (e.g. coloured or
 prefixed) at the top of the output. Both MUST accept `--all-users` to bypass the user
-filter.
+filter. Running `next` with no subcommand MUST behave as `next list`.
+
+`next list` output is **paginated**: `--page-size` (or its shorthand `-n`/`--limit`,
+or `list_limit` in config) sets the window size — default 1000 — and `--page` selects
+the 1-indexed page. Text output MUST indicate when the result is a window on a larger
+set; `--json` returns `{ items, page, page_size, total }`. Additional list modes:
+`--closed` shows only done/cancelled active-tier tasks, and `--archived` lists archived
+tasks (most recently completed first; tag filters and pagination apply, scoring and the
+implicit gate do not). `--archived` conflicts with `--all`, `--closed`, and `--future`.
 
 ### 8.3 Task actions
 
@@ -566,13 +578,14 @@ tasks you are currently responsible for.
 Manage arbitrary key-value pairs on a task. Values may be any JSON type except null.
 
 ```
-next data set <id-or-slug> <key> <value>     # set one key (string, number, or bool)
+next data set <id-or-slug> <key> <value>     # set one key
 next data unset <id-or-slug> <key>           # remove one key (errors if absent)
 next data get <id-or-slug> <key>             # print value for one key
 ```
 
-String values that are valid JSON numbers or booleans are coerced automatically
-(e.g. `"42"` becomes the number `42`, `"true"` becomes boolean `true`).
+The value is parsed as JSON (number, boolean, array, object); anything that is not
+valid JSON is stored as a plain string (e.g. `"42"` becomes the number `42`, `"true"`
+becomes boolean `true`, `"hello"` stays a string). `null` is rejected.
 
 **Key validation**: keys MUST be non-empty, at most 256 characters, and contain only
 ASCII letters (`a-z`, `A-Z`), digits (`0-9`), hyphens (`-`), and underscores (`_`).
@@ -584,7 +597,8 @@ Dots, slashes, and spaces are not permitted.
 next sync [--push-only] [--pull-only]
 ```
 
-See §2.2.
+See §2.2. After a clean sync, any registered plugin whose periodic sync is due is run
+(see §10.4).
 
 ### 8.10 Forecasting
 
@@ -593,6 +607,18 @@ next forecast [filters...] [--days N]
 ```
 
 See §7.4.
+
+### 8.11 Config
+
+```
+next config get [<key>]          # print one key, or all known keys when omitted
+next config set <key> <value>    # set a key and save config.toml
+```
+
+Reads and writes the machine-local `config.toml` (see §9) without opening a repository.
+Supported keys: `autosync`, `repository`, `list_limit` (`none` clears), `next_count`,
+`forecast_horizon_days`, `sync.git_subprocess`, `sync.pull_before_query`,
+`sync.staleness_secs`, `sync.pull_timeout_secs`. Unknown keys MUST be rejected.
 
 ---
 
@@ -609,7 +635,12 @@ The `[sync]` section of `config.toml` controls how `next sync` (and autosync) pe
 
 ```toml
 [sync]
-git_subprocess = true   # default: false
+git_subprocess           = true    # default: false
+pull_before_query        = true    # default: true
+staleness_secs           = 3600    # default: 3600 (1 hour)
+pull_timeout_secs        = 10      # default: 10; stored only, not yet enforced
+offline                  = false   # default: false
+plugin_sync_default_secs = 86400   # default: 86400 (see §10.4)
 ```
 
 When `git_subprocess = true`, `next sync` runs `git pull` and `git push` as
@@ -618,6 +649,18 @@ useful when the system `git` handles authentication (SSH agents, credential
 managers, 1Password, etc.) better than the embedded library. All other git
 operations (commit, HEAD resolution) continue to use libgit2 regardless of
 this setting.
+
+### 9.2 Pull-before-query and offline mode
+
+When `pull_before_query = true` (the default), every command except `next sync`
+(and the repo-less `init`/`tutorial`/`config`) MUST first pull from the remote if
+the machine-local `last_pull` timestamp is older than `staleness_secs`. The pull is
+best-effort: a failure produces a warning and the command proceeds on possibly
+stale data. A clean pull updates the cache and `last_pull`.
+
+The `--offline` global flag (alias `--no-sync`), or `offline = true` in `[sync]`,
+MUST skip both the pull-before-query and the autosync push for that invocation.
+`--offline`/`--no-sync` conflict with `--autosync`.
 
 ---
 
@@ -632,8 +675,11 @@ default, like `mcp`) and link the `next` library directly.
 ### 10.1 Registration
 
 - Registration is performed via `next plugin …` CLI commands: `register <name> -- <argv>`
-  (define/replace a plugin's command, preserving subscriptions), `watch`/`unwatch <name>
-  <task>`, `unregister <name>`, and `list`.
+  (define/replace a plugin's export command, preserving subscriptions), `watch`/`unwatch
+  <name> <task>`, `unregister <name>`, `set-sync <name> [--default-interval <secs>] --
+  <argv>` (define/replace the periodic-sync command, upserting the plugin),
+  `set-interval <name> <secs>|--clear` (user override of the sync interval),
+  `enable`/`disable <name>` (toggle the periodic sync), and `list`.
 - The registry MUST be machine-local — stored in the `[[plugin]]` section of the combined
   `state.toml` in the per-repo state directory (`$XDG_STATE_HOME/task-manager/<hash>/`),
   never committed to git, guarded by the single machine-local state lock
@@ -673,6 +719,25 @@ links the `next` library directly and maps Forgejo repositories to contexts.
 - `hook` reads `next` and mutates only Forgejo (never `next`), so it cannot loop.
 - `sync` self-registers the export hook (idempotent) so per-task `watch` succeeds.
 
+### 10.4 Periodic plugin sync
+
+A plugin MAY declare a `sync_command` (via `next plugin set-sync`) — the import
+direction, run on a schedule rather than per-event:
+
+- After every successful `next sync`, each **enabled** plugin with a non-empty
+  `sync_command` whose last successful sync is older than its resolved interval MUST be
+  run to completion (cwd = repo root; `NEXT_REPO` and the `NEXT_PLUGIN_ORIGIN` loop
+  guard set). This runs after the repository lock is released.
+- The interval resolves with USER → PLUGIN → SYSTEM precedence: the user override
+  (`set-interval`) wins, else the plugin's advertised default
+  (`set-sync --default-interval`), else `plugin_sync_default_secs` from `config.toml`
+  (default 86400).
+- Unlike the fire-and-forget export hook, the run is synchronous and its exit status is
+  checked: only a successful exit records `last_sync` (in the machine-local sync
+  state), so a failure is retried on the next sync rather than suppressed for a whole
+  interval.
+- Failures MUST be isolated per plugin and MUST NOT fail the triggering sync.
+
 ---
 
 ## 11. Output
@@ -699,19 +764,30 @@ binary. It implements the MCP Streamable HTTP transport (JSON-RPC 2.0 over HTTP 
 
 ### 12.2 Configuration
 
-All configuration MUST be read from environment variables (no config file):
+Configuration MUST be resolved as **env var > TOML config file > built-in default**.
+The config file is read from `NEXT_CONFIG` if set, else `/data/config/config.toml`;
+an absent or unparsable file falls back to defaults (with a warning when unparsable).
+The file schema mirrors the variables: top-level `bearer_token`, `webhook_token`,
+`repo_path`, `bind_addr`; `[git]` `url`/`user`/`token`/`author_name`/`author_email`/
+`partial_clone`; `[sync]` `interval_secs`/`deferred_delay_secs`/`pull_before_query`/
+`staleness_secs`/`pull_timeout_secs`.
 
 | Variable | Required | Default |
 |----------|----------|---------|
-| `NEXT_BEARER_TOKEN` | ✓ | — |
+| `NEXT_BEARER_TOKEN` | ✓ (env or file) | — |
+| `NEXT_CONFIG` | | `/data/config/config.toml` |
 | `NEXT_GIT_URL` | on first start | — |
 | `NEXT_GIT_USER` / `NEXT_GIT_TOKEN` | | — |
+| `NEXT_GIT_AUTHOR_NAME` / `NEXT_GIT_AUTHOR_EMAIL` | | `next-mcp` / `next-mcp@unknown` |
 | `NEXT_REPO_PATH` | | `/data/tasks` |
 | `NEXT_BIND_ADDR` | | `0.0.0.0:3000` |
 | `NEXT_WEBHOOK_TOKEN` | | — |
 | `NEXT_SYNC_INTERVAL` | | `86400` (s); `0` disables |
-| `NEXT_DEFERRED_SYNC_DELAY_SECS` | | `30` |
+| `NEXT_DEFERRED_SYNC_DELAY_SECS` | | `30` (clamped to ≥ 1) |
 | `NEXT_GIT_PARTIAL_CLONE` | | `1`; `0` forces the built-in full clone (no git binary needed) |
+| `NEXT_PULL_BEFORE_QUERY` | | `true`; `0`/`false`/`no` disables |
+| `NEXT_STALENESS_SECS` | | `3600` |
+| `NEXT_PULL_TIMEOUT_SECS` | | `10` (stored; not yet enforced) |
 
 Credentials MAY alternatively be embedded in `NEXT_GIT_URL` as `https://user:token@host/repo.git`.
 
@@ -733,7 +809,9 @@ The clone operation MUST be idempotent — a second start against the same volum
 
 After clone, `next-mcp` MUST set `user.name` and `user.email` in the local git config
 if they are not already provided by global or system config, so that commits succeed
-inside containers without a pre-configured git identity.
+inside containers without a pre-configured git identity. The identity comes from
+`NEXT_GIT_AUTHOR_NAME` / `NEXT_GIT_AUTHOR_EMAIL` (or `[git] author_name`/`author_email`
+in the config file), defaulting to `next-mcp` / `next-mcp@unknown`.
 
 ### 12.4 Authentication
 
@@ -744,14 +822,30 @@ inside containers without a pre-configured git identity.
   length through response-time differences (always process all bytes of the expected token)
 - Request bodies MUST be limited to a small maximum size (≤ 64 KB) to resist memory-exhaustion attacks
 
-### 12.5 MCP tools (13 total)
+### 12.5 MCP tools (15 total)
 
-All existing CLI operations MUST be exposed as MCP tools. Mutation tools MUST accept an
+All existing CLI operations MUST be exposed as MCP tools: `list_tasks`, `get_task`,
+`add_task`, `update_task`, `delete_task`, `sync`, `get_diff`, `force_sync`,
+`get_state`, `set_context`, `set_resource`, `set_user_filter`, `manage_tag`,
+`manage_task_data`, `get_forecast`. Mutation tools MUST accept an
 `autosync: bool` parameter (default `true`):
 - `autosync = true`: sync runs inline before the response is returned; sync errors are logged but MUST NOT fail the tool call
 - `autosync = false`: a deferred sync is scheduled to fire after `NEXT_DEFERRED_SYNC_DELAY_SECS`; successive mutations MUST reset (not stack) the timer
 
-The `sync` tool MUST cancel any pending deferred timer and run sync immediately, surfacing errors to the caller. It MUST return an error immediately if a sync is already in progress rather than queuing.
+The `sync` tool (optional `push_only`/`pull_only` booleans) MUST cancel any pending deferred timer and run sync immediately, surfacing errors to the caller. It MUST return an error immediately if a sync is already in progress rather than queuing.
+
+**Conflict recovery tools:** `get_diff` MUST return the working-tree diff (git status
+plus diff against HEAD) without mutating anything. `force_sync` MUST fetch from the
+remote and hard-reset the working tree to `FETCH_HEAD`, discarding local changes and
+merge conflicts; it does not push (the remote is the source of truth). Like `sync`, it
+MUST fail fast when a sync is already in progress and cancels any pending deferred
+timer.
+
+**`list_tasks` pagination:** the tool accepts `page` (1-indexed, default 1),
+`page_size` (default 1000; `limit` is a legacy alias), `include_all`, and
+`archived: true` to list the archive instead (most recently completed first; tag
+filters and pagination apply, scoring does not). The result is
+`{ items, page, page_size, total }`; `total > items.len()` signals truncation.
 
 **Input validation (slug):** The `slug` field accepted by `add_task` and `update_task` MUST be validated using an allowlist: letters (`a-z`, `A-Z`), digits (`0-9`), hyphen (`-`), and underscore (`_`). No other characters are permitted. This prevents path traversal when the slug is used as the task's TOML filename (`tasks/<slug>.toml`).
 
@@ -763,12 +857,15 @@ The `sync` tool MUST cancel any pending deferred timer and run sync immediately,
 
 ### 12.6 Sync mechanisms
 
-Four independent sync triggers MUST coexist:
+Five independent sync triggers MUST coexist:
 
 1. **Per-mutation autosync** — see §12.5
 2. **Deferred timer** — fires `NEXT_DEFERRED_SYNC_DELAY_SECS` after the last `autosync=false` mutation; MUST be reset each time a new mutation arrives before the timer fires
 3. **Periodic sync** — background task fires every `NEXT_SYNC_INTERVAL` seconds (0 = disabled)
 4. **Webhook** (`POST /webhook/sync`) — protected by `NEXT_WEBHOOK_TOKEN`; fires sync immediately and cancels any pending deferred timer; returns `200 {"status": "synced" | "error", ...}`
+5. **Pull-before-query** — a best-effort staleness pull (same `pull_if_stale` core as
+   the CLI, §9.2) before each task-touching tool call except `sync`, controlled by
+   `NEXT_PULL_BEFORE_QUERY` / `NEXT_STALENESS_SECS`; it never fails the tool call
 
 At most one sync MUST run at a time. When an explicit sync (tool call or webhook) is already in progress, any concurrent explicit sync request MUST fail immediately with an error. Background syncs (deferred timer, periodic) MUST skip rather than queue when a sync is already running.
 
@@ -777,6 +874,6 @@ At most one sync MUST run at a time. When an explicit sync (tool call or webhook
 - A `Containerfile` MUST be provided for building the image
 - A Podman Quadlet unit file (`quadlets/next-mcp.container`) MUST be provided
 - The container MUST run as an unprivileged non-root user (UID 1000)
-- Two named volumes MUST be used: `next-tasks` at `/data/tasks` (tasks repository) and `next-state` at `/data/state` (XDG machine-local state via `XDG_STATE_HOME=/data/state`)
-- Secrets MUST be passed via an `EnvironmentFile`, not baked into the image
+- Three named volumes MUST be used: `next-tasks` at `/data/tasks` (tasks repository), `next-state` at `/data/state` (XDG machine-local state via `XDG_STATE_HOME=/data/state`), and `next-config` at `/data/config` (optional TOML config file)
+- Secrets MUST be passed via an `EnvironmentFile` or the config file (chmod 600), not baked into the image
 - Credentials embedded in `NEXT_GIT_URL` MUST be stripped before any log output; only the credential-free URL MAY be logged

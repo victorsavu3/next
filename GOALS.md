@@ -96,7 +96,7 @@ All list commands accept filters that can be combined freely:
 |--------|---------|---------|
 | `+tag` | `+@home`, `+python` | Task must have this tag |
 | `-tag` | `-@work` | Task must not have this tag |
-| `project:<slug>` | `project:work-infra` | Task is in this project or any descendant |
+| `parent:<slug>` | `parent:work-infra` | Task is in this project or any descendant |
 | `context:<name>` | `context:@home` | Override active context for this query |
 | `user:<name>` | `user:alice` | Override user filter for this query |
 | `--future` | | Include tasks with a future `start` date |
@@ -125,7 +125,7 @@ stable enough to pipe to Claude Code or other tools.
 ## Out of scope (for now)
 
 - Built-in AI; AI is invoked externally via piped output
-- GUI or TUI
+- GUI (a terminal UI, `next-tui`, has since been implemented — see TUI.md)
 - Multi-user / shared task lists
 - OS desktop notifications or background reminder daemon
 

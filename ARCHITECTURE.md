@@ -61,22 +61,28 @@ next/                             # crate root (also git repo)
   Containerfile                   # multi-stage build for next-mcp container image
   quadlets/
     next-mcp.container            # Podman Quadlet systemd unit file
+    next-mcp.env.example          # environment-file template
+    next-mcp.config.toml.example  # TOML config-file template (next-config volume)
   src/
-    lib.rs                        # `pub mod core` + feature-gated cli/mcp/forgejo; small type prelude
+    lib.rs                        # `pub mod core` + feature-gated cli/mcp/forgejo/tui; small type prelude
     core/                         # THE CORE LIBRARY — compiled with no features
       error.rs                    # TaskError, Result
       config.rs                   # Config + SyncConfig (config.toml schema; machine-local, no scoring)
-      store.rs                    # Store + VcsBackend traits
+      store.rs                    # Store + VcsBackend traits; TaskQuery, Page, paginate()
       resolve.rs                  # resolve_task_id(store, id_str) -> Result<Uuid>
       task_repository.rs          # TaskRepository: store + vcs + repo_root + scoring + transactions + plugin events
-      sync.rs                     # sync(): pull -> cache-reconcile -> auto-archive -> push
+      bootstrap.rs                # config-file parsing + repo resolution + opening (shared by cli/tui)
+      sync.rs                     # sync(): pull -> cache-reconcile -> auto-archive -> push; pull_if_stale()
+      sync_state.rs               # machine-local [sync] state: last_pull, last_archive, per-plugin last_sync
       value.rs                    # parse_value(): task data value parsing
       filter_args.rs              # FilterArgs -> FilterSet (filter-token parsing)
       scoring.rs                  # ScoredTask, ScoringConfig, TaskDates, score_and_sort()
       service.rs                  # create_task/complete_task/apply_edits; begin/end_mutation
       recurrence.rs               # next_occurrence(), apply_snap(), spawn_next(), parse_snap()
+      forecast.rs                 # forecast projection shared by cli/mcp/tui
       listing.rs                  # load_candidates() (status pushdown), extend_with_parents()
       archiver.rs                 # run_archive_pass(), resurrect_if_archived(), prune phase
+      test_git.rs                 # init_test_repo() helper for unit tests
       domain/                     # pure domain types (no I/O)
         mod.rs  task.rs  state.rs  tag.rs  filter.rs  date_parse.rs
       storage/                    # local TOML + SQLite + git backend + archive tiers
@@ -84,14 +90,14 @@ next/                             # crate root (also git repo)
         machine_state.rs          # MachineState (combined state.toml) + load_/update_machine_state
         archive.rs                # segments, ArchiveConfig, pruned.jsonl manifest (see §6.5)
         filenames.rs  lock.rs (FileLock)  toml_store.rs  cached_store.rs  git_backend.rs
-      plugin/                     # export hook (machine-local plugins registry + notify)
-        mod.rs  registry.rs  notify.rs
+      plugin/                     # export hook + periodic sync (machine-local registry)
+        mod.rs  registry.rs  notify.rs  run.rs (run_due_syncs, resolve_sync_interval)
     cli/                          # feature = "cli" (default); the `next` binary + clap
       main.rs                     # `next` binary entry point
       app_context.rs              # AppContext: Config + TaskRepository (field `repo`); config.toml loading
       mod.rs  render.rs  recurrence_parse.rs
       commands/
-        add.rs   cancel.rs  context.rs  data.rs   delete.rs  done.rs  edit.rs
+        add.rs   cancel.rs  config.rs  context.rs  data.rs   delete.rs  done.rs  edit.rs
         archive.rs  forecast.rs  init.rs  list.rs  mod.rs  move_cmd.rs  next_cmd.rs  open.rs
         resource.rs  show.rs  start.rs  stop.rs  sync.rs  tree.rs  tutorial.rs  user.rs
         plugin/mod.rs   tag/{mod,meta,data}.rs
@@ -114,11 +120,12 @@ next/                             # crate root (also git repo)
     large_repo.rs                 # archiving budget benchmark (harness = false; opt-in)
   tests/
     common/mod.rs                 # shared test helpers (TestEnv, setup(), hook-safe git())
-    test_add.rs   test_data.rs    test_done.rs   test_edit.rs
-    test_init.rs  test_list.rs    test_open.rs   test_tag.rs   test_tree.rs
+    test_*.rs                     # one integration file per command (add, list, edit, done, …)
     test_archive.rs               # archive pass, prune, resurrection, partial-clone recovery
     test_archive_scale.rs         # 2100-task lifecycle + multi-cycle resurrection
+    test_multi_instance.rs        # several clones of one remote converging without loss
     cache_sync.rs locking.rs      migration.rs   sync.rs
+    test_plugin.rs                # export hook + periodic plugin sync
     test_mcp.rs                   # in-process MCP HTTP integration tests (requires --features mcp)
     test_container.rs             # container integration tests (requires CONTAINER_TESTS=1)
 ```
@@ -147,7 +154,7 @@ With **no features** (`--no-default-features`) the crate is just the core librar
 `domain`, `storage`, `store`, `plugin`, `config`, `resolve`, `error`, `scoring`, `service`,
 `task_repository` — with no `clap`/CLI dependencies, so other crates can link it.
 `AppContext` (the CLI's `Config` + `TaskRepository` wrapper) is **not** part of core; it
-lives at `src/cli/app_context.rs`, compiled only with the `cli` feature. The three feature
+lives at `src/cli/app_context.rs`, compiled only with the `cli` feature. The four feature
 modules depend only on this core (the cross-cutting helpers they share — filter-token
 parsing, data-value parsing, repo sync — live in `core`, never in `cli`). The presubmit
 (`prek.toml`) runs clippy+test with `--all-features` and a `--no-default-features` clippy to
@@ -156,7 +163,7 @@ keep the core build clean.
 Every **non-optional** dependency is required by `core`, so it is present even in the
 featureless build; there are no CLI-exclusive always-on dependencies. The CLI-only crate
 `clap` is `optional` and pulled in by the `cli` feature (and also by `forgejo`, whose binary
-uses clap too); `tracing-subscriber` is shared by all three binaries. The `dep:` syntax in
+uses clap too); `tracing-subscriber` is shared by all four binaries. The `dep:` syntax in
 `[features]` keeps these optional crates out of the dependency graph unless their feature is
 enabled.
 
@@ -258,14 +265,26 @@ indexed SQL, and an equivalence test pins the two together.
 
 ```rust
 pub struct Config {
-    pub sync: SyncConfig,              // git_subprocess: use shell git for push/pull
+    pub sync: SyncConfig,              // see below
     pub forecast_horizon_days: u32,    // default 90
     pub next_count: usize,             // default 10
-    pub list_limit: Option<usize>,     // cap `next list` output; None = unlimited
+    pub list_limit: Option<usize>,     // default `next list` page size; None = 1000
     pub repository: Option<PathBuf>,   // default repo root (overridden by --repo)
     pub autosync: bool,                // sync after each mutation (overridden by --autosync)
 }
+
+pub struct SyncConfig {
+    pub git_subprocess: bool,          // use shell git for push/pull (default false)
+    pub pull_before_query: bool,       // staleness pull before commands (default true)
+    pub staleness_secs: u64,           // freshness window (default 3600)
+    pub pull_timeout_secs: u64,        // stored only — not yet enforced (default 10)
+    pub plugin_sync_default_secs: u64, // system-default plugin sync interval (default 86400)
+    pub offline: bool,                 // behave as --offline on every invocation (default false)
+}
 ```
+
+`next config get/set` (`src/cli/commands/config.rs`) reads and writes this file from
+the command line; it runs before `AppContext` because it needs no repository.
 
 Scoring weights are **not** in `config.toml`. They live in the repository at
 `config/scoring.toml` (committed, synced) and are loaded by
@@ -390,10 +409,10 @@ messages follow the pattern `next: <verb> "<task title>"`.
 
 See the §2 tree for the full file list. Key entry points:
 
-- `src/cli/main.rs` — the `next` binary entry point. `Init`/`Tutorial` are handled before
-  `AppContext`; all other commands build an `AppContext` and dispatch.
+- `src/cli/main.rs` — the `next` binary entry point. `Init`/`Tutorial`/`Config` are handled
+  before `AppContext`; all other commands build an `AppContext` and dispatch.
 - `src/cli/mod.rs` — top-level `Cli` + `Command` enum (clap derive), including the global
-  `--repo`, `--autosync`, and `--no-autosync` flags.
+  `--repo`, `--autosync`, `--no-autosync`, `--offline`, and `--no-sync` flags.
 - `src/cli/render.rs` — task list and detail rendering (text and `--json`).
 - `src/cli/recurrence_parse.rs` — `parse_recurrence()`, shared by `add.rs` and `edit.rs`.
 - `src/cli/commands/` — one module per subcommand (`add`, `done`, `edit`, …), plus the
@@ -442,22 +461,26 @@ Remote access is provided via MCP — connect with `claude mcp add --transport h
 
 ## 5. Command execution lifecycle
 
-`next init` and `next tutorial` run before `AppContext` is constructed:
+`next init`, `next tutorial`, and `next config` run before `AppContext` is constructed:
 
 ```
-1. Parse CLI args (clap)
+1. Parse CLI args (clap); no subcommand defaults to `list`
 2. If command is Init → run init::run(args, cwd); exit
    If command is Tutorial → print embedded TUTORIAL.md; exit
+   If command is Config → read/write config.toml; exit
 3. AppContext::new(): locate repository root, open CachedStore + GitBackend into TaskRepository
-4. Execute command logic (reads from ctx.repo.store; writes via ctx.repo.transaction)
-5. Task mutations (add/edit/start/stop/done/cancel/delete/move/tag/data): vcs.commit(changed_paths, message)
+4. Pull-before-query (all commands except `sync`): core::sync::pull_if_stale() pulls when
+   the local copy is older than `staleness_secs`; best-effort, skipped by --offline/--no-sync
+5. Execute command logic (reads from ctx.repo.store; writes via ctx.repo.transaction)
+6. Task mutations (add/edit/start/stop/done/cancel/delete/move/tag/data): vcs.commit(changed_paths, message)
    State mutations (context/resource/user): write to XDG state file only; no commit
-6. Render output (text or JSON to stdout)
-7. If autosync enabled and command succeeded and is a mutation (`add`/`start`/`stop`/`done`/`cancel`/`edit`/`delete`/`move`/`tag`/`data`): run sync (pull + push)
-8. On error: print the message to stderr and propagate to main for a non-zero exit code
+7. Render output (text or JSON to stdout)
+8. If autosync enabled and command succeeded and is a mutation (`add`/`start`/`stop`/`done`/`cancel`/`edit`/`delete`/`move`/`tag`/`data`/`archive`): run sync (pull + push)
+9. Notify subscribed plugins of recorded task events (after the repo lock is released)
+10. On error: print the message to stderr and propagate to main for a non-zero exit code
 ```
 
-Read-only commands (list, show, forecast, tree) skip steps 5 and 7 and take `&AppContext` rather than `&mut AppContext`.
+Read-only commands (list, show, forecast, tree) skip steps 6 and 8 and take `&AppContext` rather than `&mut AppContext`.
 
 ---
 
@@ -567,8 +590,14 @@ transaction returns. The CLI (`main.rs`) and MCP (`tools::dispatch`) chokepoints
 buffer and call `plugin::notify`, which spawns every subscribed plugin's command
 fire-and-forget (event JSON on stdin + `NEXT_PLUGIN_EVENT`/`NEXT_REPO`/`NEXT_PLUGIN_ORIGIN`
 env). The origin plugin is skipped (loop guard via `NEXT_PLUGIN_ORIGIN`), the long-lived
-server reaps children on a helper thread, and `delete` events prune the subscription. See
-REQUIREMENTS.md §10 for the full contract.
+server reaps children on a helper thread, and `delete` events prune the subscription.
+
+**Periodic plugin sync** (`plugin::run`): a plugin may also carry a `sync_command`
+(import direction, e.g. `next-forgejo sync`). After a clean `next sync`, `run_due_syncs`
+runs each enabled, due plugin's sync command synchronously (interval resolved
+USER override → PLUGIN default → `config.sync.plugin_sync_default_secs`); only a
+successful exit records `last_sync` in the machine-local sync state, so failures retry
+on the next sync. See REQUIREMENTS.md §10 for the full contract.
 
 ### 6.5 Archive tiers
 
@@ -739,20 +768,28 @@ Accepted by `--due` and `--start` in `next add` and `next edit`.
 
 Two layers: machine-local CLI settings, and repo-stored scoring weights.
 
-### 12.1 Machine-local — `$XDG_CONFIG_HOME/task-manager/config.toml`
+### 11.1 Machine-local — `$XDG_CONFIG_HOME/task-manager/config.toml`
 
 CLI-only (the MCP server and plugins do not read it); loaded once at startup, falls
-back to defaults when absent:
+back to defaults when absent. Editable in place with `next config get/set`.
 
 ```toml
 repository            = "/home/alice/tasks"  # use next from any directory
 autosync              = false                # sync after each mutation (--autosync to override)
-list_limit            = 20                   # cap `next list` output; absent = unlimited
+list_limit            = 20                   # default `next list` page size; absent = 1000
 forecast_horizon_days = 90
 next_count            = 10                   # tasks shown by `next next`
+
+[sync]
+git_subprocess           = false   # shell git instead of libgit2 for push/pull
+pull_before_query        = true    # staleness pull before commands (--offline to skip)
+staleness_secs           = 3600    # freshness window for pull-before-query
+pull_timeout_secs        = 10      # stored only — not yet enforced
+offline                  = false   # behave as if --offline on every invocation
+plugin_sync_default_secs = 86400   # system-default periodic plugin sync interval
 ```
 
-### 12.2 Repo-stored scoring — `<repo>/config/scoring.toml`
+### 11.2 Repo-stored scoring — `<repo>/config/scoring.toml`
 
 Committed to the repository and synced, so the CLI, the MCP server, and plugins all
 score tasks identically. Loaded by `storage::load_scoring()` into
@@ -832,7 +869,9 @@ non-zero exit code.
 | File locking | `tests/locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption, including transactional lost-update prevention (N processes each add a distinct tag to one task; all must survive). Re-entrant lock unit tests live in `src/core/storage/lock.rs` |
 | CLI commands | `tests/test_*.rs` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |
 | MCP unit tests | `src/mcp/tools/*.rs` | Unit tests per tool module using a real `TaskRepository` in a `tempdir` git repo (requires `--features mcp`) |
-| MCP integration tests | `tests/test_mcp.rs` | Start a real HTTP server on `127.0.0.1:0` in `#[tokio::test]`; test all 13 tools, auth, webhook, and autosync (requires `--features mcp`) |
+| Plugins | `tests/test_plugin.rs`, `src/core/plugin/run.rs` | End-to-end export-hook notification; unit tests for periodic sync (interval precedence, due/skip, failure-retry) |
+| Multi-instance | `tests/test_multi_instance.rs` | Several clones of one shared remote mutating in parallel (adds, edits, archive passes, resurrections); all instances must converge with no loss |
+| MCP integration tests | `tests/test_mcp.rs` | Start a real HTTP server on `127.0.0.1:0` in `#[tokio::test]`; test all 15 tools, auth, webhook, and autosync (requires `--features mcp`) |
 | Container tests | `tests/test_container.rs` | Start the real container image via `testcontainers` (Podman); opt-in with `CONTAINER_TESTS=1 DOCKER_HOST=unix:///…/podman.sock`; covers git clone, auth, sync push, deferred timer, webhook, and idempotent restart |
 
 ---

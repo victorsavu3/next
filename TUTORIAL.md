@@ -238,7 +238,12 @@ next sync                  # git pull + git push
 next sync --pull-only
 next sync --push-only
 next --autosync add "Task"  # sync automatically after this command
+next --offline list         # skip all network I/O for one command
 ```
+
+Before most commands `next` also pulls automatically when the local copy is more than
+an hour old (pull-before-query), so lists reflect other machines' changes. `--offline`
+(alias `--no-sync`) skips it for one invocation.
 
 To always sync after every mutation:
 
@@ -246,6 +251,12 @@ To always sync after every mutation:
 # config.toml
 autosync = true
 ```
+
+(or `next config set autosync true`)
+
+During sync, closed tasks older than 180 days are archived automatically (at most once
+a day) into segment files under `archive/`. They stay visible via
+`next list --archived` and still resolve by id or slug; editing one restores it.
 
 If your SSH key is managed by a keychain or 1Password and the built-in git
 bindings fail, use subprocess mode:
@@ -269,10 +280,12 @@ The score shown in `next list` drives ordering. It combines:
 - **Started bonus** — +4.0 when status is `started`; moves active tasks above idle peers
 - **Manual adjustment** — `next edit <id> --adjust +2.0`
 
-Tune any weight in the config:
+Tune any weight in `config/scoring.toml` **inside the task repository** (committed and
+synced, so every machine and the MCP server score identically; omitted keys keep their
+defaults):
 
 ```toml
-[scoring]
+# <repo>/config/scoring.toml
 priority_high  = 3.0
 started_bonus  = 5.0
 tag_high       = 2.0
@@ -285,8 +298,8 @@ age_per_day    = 0.02
 
 ```
 next add <title> [--priority low|medium|high] [--due DATE] [--tag TAG]...
-next list [FILTERS]
-next next [-n N]
+next list [FILTERS] [--archived] [--page N]
+next next [N]
 next show <id>
 next start <id>
 next stop <id>
@@ -299,7 +312,8 @@ next tree [--all]
 next forecast [--days N]
 next sync [--pull-only | --push-only]
 next tag [describe | set-url | set-priority | data | show | clear-description | clear-url | clear-priority]
-next context [set <@tag>... | clear]
+next context [set <@tag>... | clear | exclude <@tag>... | clear-excluded]
 next resource [set <#tag> on|off]
 next user [set <name>... | clear | list]
+next config [get <key> | set <key> <value>]
 ```

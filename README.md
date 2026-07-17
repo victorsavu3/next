@@ -67,7 +67,8 @@ my-tasks/
     __context__home/
       kitchen.toml             # tag description for @home/kitchen
   config/
-    archive.toml               # committed archive policy
+    scoring.toml               # committed scoring weights (seeded by `next init`)
+    archive.toml               # committed archive policy (optional; absent = defaults)
   .next.db                     # SQLite read cache — not committed
 
 ~/.local/state/task-manager/<repo-hash>/
@@ -125,10 +126,15 @@ reading the repository.
 
 ```sh
 next tag describe @work "Tasks at the standing desk — laptop required"
-next context describe @home "Home tasks: kitchen, garden, errands"
-next resource describe #printer "Office laser printer, 2nd floor"
+next tag describe @home "Home tasks: kitchen, garden, errands"
+next tag describe #printer "Office laser printer, 2nd floor"
 next tag                        # list all tags with their descriptions
 ```
+
+`next tag` is the single command for all tag metadata (`describe`, `set-url`,
+`set-priority`, `set-no-time-urgency`, `data`, `show`, and the matching `clear-*`
+subcommands) — there are no separate describe commands on `next context` or
+`next resource`.
 
 ---
 
@@ -188,7 +194,7 @@ All list commands accept filter tokens in any order:
 |---------|-------------|
 | `next init` | Initialise a task repository in the current directory |
 | `next add` | Add a task |
-| `next list [-n N]` | List tasks sorted by urgency score; `-n`/`--limit` caps output |
+| `next list [-n N] [--page N] [--archived]` | List tasks sorted by urgency score; paginated (`--page`/`--page-size`, `-n`/`--limit` caps output); `--closed` shows done/cancelled, `--archived` lists the archive |
 | `next next [N]` | Show top N highest-scored tasks (default 10) |
 | `next show <id>` | Full details of a single task |
 | `next tree` | Show all tasks in a parent-child tree |
@@ -205,16 +211,24 @@ All list commands accept filter tokens in any order:
 | `next context [set/clear/exclude/clear-excluded]` | Manage global context filter (include and exclude lists) |
 | `next resource [set]` | Manage resource availability |
 | `next user [set/clear/list]` | Manage user filter |
-| `next plugin [register/watch/unwatch/unregister/list]` | Manage export plugins (see [Plugins](#plugins)) |
+| `next plugin [register/watch/unwatch/unregister/set-sync/set-interval/enable/disable/list]` | Manage export plugins and their periodic syncs (see [Plugins](#plugins)) |
 | `next forecast` | Upcoming due dates grouped by time, including projected schedule-recurrence occurrences over the horizon |
-| `next sync` | Pull from remote, auto-archive if due, push local commits |
+| `next sync` | Pull from remote, auto-archive if due, push local commits, run due plugin syncs |
 | `next archive` | Move old closed tasks into archive segments now |
+| `next config [get/set]` | Read or write a value in the machine-local `config.toml` |
 Task IDs accept a full UUID, a slug, or any unambiguous 4+ character hex prefix.
-All commands support `--json` for pipe-friendly output.
+All commands support `--json` for pipe-friendly output. Running `next` with no
+subcommand is the same as `next list`.
 
 The `--autosync` global flag (or `autosync = true` in the config file) automatically
 runs `next sync` after every mutation command. The `--no-autosync` global flag disables it
 for a single invocation even when `autosync = true` in the config (the two flags conflict).
+
+By default every command (except `next sync` itself) first does a best-effort
+**pull-before-query**: if the last pull is older than `staleness_secs` (default 1 hour),
+it pulls from the remote so results reflect other machines' changes. The `--offline`
+global flag (alias `--no-sync`, or `offline = true` under `[sync]` in the config) skips
+both this pull and the autosync push for one invocation — no network I/O at all.
 
 ---
 
@@ -236,7 +250,14 @@ next_count            = 10                   # tasks shown by `next next`
 git_subprocess        = true                 # use `git` subprocess instead of libgit2
 pull_before_query     = true                 # pull before reads (default); use --offline to bypass
 staleness_secs        = 3600                 # re-pull after this many seconds (default: 1 hour)
+pull_timeout_secs     = 10                   # pre-query pull timeout (stored; not yet enforced)
+offline               = false                # true = behave as if --offline on every invocation
+plugin_sync_default_secs = 86400             # system-default plugin sync interval (see Plugins)
 ```
+
+Values can also be read and written from the command line with
+`next config get [<key>]` / `next config set <key> <value>`
+(e.g. `next config set sync.pull_before_query false`).
 
 **Scoring weights** live *in the repository* at `config/scoring.toml`, committed to git
 and synced. `next init` seeds it with the defaults. Because it is part of the repo, the
@@ -290,19 +311,31 @@ podman build -f Containerfile -t localhost/next-mcp:latest .
 
 ### Configuration
 
-All configuration is passed via environment variables — no config file.
+Configuration comes from environment variables and an optional TOML config file, with
+env vars taking precedence: **env var > config file > built-in default**. The config
+file lives at `/data/config/config.toml` inside the container (override the path with
+`NEXT_CONFIG`); see `quadlets/next-mcp.config.toml.example` for the full schema
+(`bearer_token`, `webhook_token`, `repo_path`, `bind_addr`, plus `[git]` and `[sync]`
+tables mirroring the variables below).
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `NEXT_BEARER_TOKEN` | ✓ | — | MCP client auth token |
+| `NEXT_BEARER_TOKEN` | ✓ (or file) | — | MCP client auth token |
+| `NEXT_CONFIG` | | `/data/config/config.toml` | Path of the TOML config file |
 | `NEXT_GIT_URL` | first start | — | HTTPS URL to clone the tasks repo |
 | `NEXT_GIT_USER` | | — | Git username (or embed in URL as `https://user:token@…`) |
 | `NEXT_GIT_TOKEN` | | — | Git password/token |
+| `NEXT_GIT_AUTHOR_NAME` | | `next-mcp` | Committer name when no git identity is configured |
+| `NEXT_GIT_AUTHOR_EMAIL` | | `next-mcp@unknown` | Committer email when no git identity is configured |
+| `NEXT_GIT_PARTIAL_CLONE` | | `1` | First-start clone tries `--filter=blob:none`; `0` forces the built-in full clone (no git binary needed) |
 | `NEXT_REPO_PATH` | | `/data/tasks` | Local path for the tasks repository |
 | `NEXT_BIND_ADDR` | | `0.0.0.0:3000` | Listen address |
 | `NEXT_WEBHOOK_TOKEN` | | — | If set, enables `POST /webhook/sync` with this token |
 | `NEXT_SYNC_INTERVAL` | | `86400` | Periodic pull+push interval in seconds; `0` disables |
 | `NEXT_DEFERRED_SYNC_DELAY_SECS` | | `30` | Seconds before deferred sync fires after `autosync=false` |
+| `NEXT_PULL_BEFORE_QUERY` | | `true` | Staleness pull before task-touching tools; `false`/`0`/`no` disables |
+| `NEXT_STALENESS_SECS` | | `3600` | How long the local copy stays fresh after a pull |
+| `NEXT_PULL_TIMEOUT_SECS` | | `10` | Pre-query pull timeout (stored; not yet enforced) |
 
 Credentials embedded in `NEXT_GIT_URL` are stripped before logging.
 
@@ -328,12 +361,17 @@ NEXT_GIT_TOKEN=…
 NEXT_SYNC_INTERVAL=86400
 ```
 
-Two named volumes are used — Podman creates them automatically on first start:
+Alternatively (or additionally), place a `config.toml` in the `next-config` volume —
+see `quadlets/next-mcp.config.toml.example`. Env vars win over the file for any key
+set in both places.
+
+Three named volumes are used — Podman creates them automatically on first start:
 
 | Volume | Mount | Contents |
 |--------|-------|----------|
 | `next-tasks` | `/data/tasks` | Cloned tasks git repository |
 | `next-state` | `/data/state` | Machine-local state (active context, user filter, resources) |
+| `next-config` | `/data/config` | Optional `config.toml` (see above) |
 
 Then:
 
@@ -342,16 +380,18 @@ systemctl --user daemon-reload
 systemctl --user start next-mcp
 ```
 
-### MCP tools (13)
+### MCP tools (15)
 
 | Tool | R/M | Description |
 |------|-----|-------------|
-| `list_tasks` | R | List scored tasks; accepts filter tokens + `context` override |
+| `list_tasks` | R | List scored tasks; accepts filter tokens + `context` override, `page`/`page_size` pagination, and `archived: true` for the archive |
 | `get_task` | R | Full details of one task + direct children + score breakdown |
 | `add_task` | M | Create a task (auto-applies active context if task has none) |
 | `update_task` | M | Edit fields or transition state (start/stop/done/cancel/move); `done` accepts `completed_at` |
 | `delete_task` | M | Permanently remove a task |
-| `sync` | M | Pull then push; fails fast if sync already in progress |
+| `sync` | M | Pull then push (`push_only`/`pull_only` optional); fails fast if sync already in progress |
+| `get_diff` | R | Working-tree diff (git status + diff HEAD) for inspecting conflicts/uncommitted changes |
+| `force_sync` | M | Fetch + hard-reset to FETCH_HEAD, discarding local changes; recovery from stuck conflicts |
 | `get_state` | R | Active contexts, excluded contexts, users, resource availability |
 | `set_context` | M | Replace active and/or excluded context filters |
 | `set_resource` | M | Toggle resource availability |
@@ -366,6 +406,10 @@ All mutation tools (M) accept an `autosync: bool` parameter (default `true`):
 - **`autosync: false`** — mutation returns immediately; a deferred sync fires `NEXT_DEFERRED_SYNC_DELAY_SECS` seconds after the last mutation in a batch. Useful when making many changes and calling `sync` explicitly at the end.
 
 At most one sync runs at a time — the `sync` tool and webhook return an error immediately if a sync is already in progress rather than queuing.
+
+Before each task-touching tool call the server also runs a best-effort staleness pull
+(the same pull-before-query as the CLI), controlled by `NEXT_PULL_BEFORE_QUERY` /
+`NEXT_STALENESS_SECS`, so responses reflect other machines' pushes.
 
 **Slug format**: letters, digits, `-` and `_` only (e.g. `water-plants`, `work_infra`).
 
@@ -406,6 +450,10 @@ next plugin register <name> -- <program> [args…]   # define/replace a plugin's
 next plugin watch   <name> <task>                  # notify <name> on any update to <task>
 next plugin unwatch <name> <task>
 next plugin unregister <name>
+next plugin set-sync <name> [--default-interval S] -- <program> [args…]
+                                                   # define the periodic-sync (import) command
+next plugin set-interval <name> <secs>|--clear     # user override of the sync interval
+next plugin enable <name> / disable <name>         # toggle the periodic sync
 next plugin list
 ```
 
@@ -433,6 +481,18 @@ Delivery is best-effort (a missed event is reconciled on the plugin's next run);
 should be idempotent. **Loop guard:** a plugin is never notified of changes it caused
 itself — `next` sets `NEXT_PLUGIN_ORIGIN` when spawning the plugin, and any `next`
 mutations the plugin makes (which inherit that env) skip notifying that same plugin.
+
+### Periodic plugin sync
+
+Besides the per-task export hook, a plugin can register a **periodic sync** (import)
+command with `next plugin set-sync`. After every successful `next sync`, each enabled
+plugin whose sync is *due* has its command run to completion (cwd = repo root, with
+`NEXT_REPO` and the `NEXT_PLUGIN_ORIGIN` loop guard set). Only a successful exit
+records `last_sync`, so failures retry on the next sync. The interval resolves as
+**user override → plugin default → system default** — i.e. `set-interval`, then
+`set-sync --default-interval`, then `plugin_sync_default_secs` in `config.toml`
+(default 86400 = daily). This replaces a cron entry for `next-forgejo sync` and
+similar importers.
 
 ### Forgejo plugin
 
@@ -477,7 +537,12 @@ Link data attributes on each task (`__forgejo-` prefix): `__forgejo-repo` (`owne
 `__forgejo-issue` (number), `__forgejo-url`, and `__forgejo-labels` (the issue's labels, as
 a JSON array — kept as data rather than local tags for now). Reopening is manual in v1.
 
-Run `sync` periodically (cron / systemd timer) to keep imports current.
+Run `sync` periodically to keep imports current — either via cron / systemd timer, or
+by registering it as a periodic plugin sync so it runs after each `next sync`:
+
+```sh
+next plugin set-sync next-forgejo -- next-forgejo sync
+```
 
 ---
 
