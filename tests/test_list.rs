@@ -507,6 +507,19 @@ fn parent_filter_only_returns_active_descendants_by_default() {
 }
 
 #[test]
+fn list_renders_long_multibyte_title_without_panic() {
+    // Regression: render_task_list used byte-index truncation (&s[..45]);
+    // a title whose 45th byte fell inside a multibyte char panicked with
+    // "byte index 45 is not a char boundary".
+    let mut env = common::setup();
+    add::run(add_args(&"é".repeat(60)), &mut env.ctx).unwrap();
+    add::run(add_args(&format!("Fête préparée {}", "🎉".repeat(30))), &mut env.ctx).unwrap();
+
+    // Goes through render::render_task_list, which previously panicked.
+    next::cli::commands::list::run(list_args_with_limit(None), &env.ctx).unwrap();
+}
+
+#[test]
 fn list_flag_overrides_config_limit() {
     let mut env = common::setup();
     for i in 1..=5 {

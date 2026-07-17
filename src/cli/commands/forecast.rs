@@ -121,14 +121,7 @@ fn print_section(label: &str, entries: &[&ForecastEntry], today: NaiveDate) {
         println!(
             "  [{}] {:<45}  {due_label}{marker}",
             e.id,
-            truncate(&e.title, 45)
+            crate::cli::render::truncate(&e.title, 45)
         );
-    }
-}
-
-fn truncate(s: &str, max: usize) -> &str {
-    match s.char_indices().nth(max) {
-        Some((byte_pos, _)) => &s[..byte_pos],
-        None => s,
     }
 }
