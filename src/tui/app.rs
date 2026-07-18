@@ -119,6 +119,9 @@ pub enum Action {
     CancelFilter,
     /// Toggle the `--all` filter flag and reload.
     ToggleAll,
+    /// Toggle the `--closed` filter flag (show only done/cancelled) and reload.
+    /// The List-view analogue of the tree's [`Action::TreeToggleAll`].
+    ToggleClosed,
     /// Toggle the `--future` filter flag and reload.
     ToggleFuture,
     /// Toggle the `--all-users` filter flag and reload.
@@ -323,6 +326,9 @@ pub struct App {
     forecast_auto_future: bool,
     /// `--all`: bypass implicit filtering (show done/blocked/etc.).
     filter_all: bool,
+    /// `--closed`: show only closed (done/cancelled) tasks in the List view.
+    /// Respects the active context and user filters, mirroring `next list --closed`.
+    filter_closed: bool,
     /// `--all-users`: ignore the active user filter.
     filter_all_users: bool,
 
@@ -383,6 +389,7 @@ impl App {
             filter_future: false,
             forecast_auto_future: false,
             filter_all: false,
+            filter_closed: false,
             filter_all_users: false,
             filter_input: Input::default(),
             mode: Mode::Normal,
@@ -448,6 +455,7 @@ impl App {
         let mut fa = FilterArgs::parse(self.filter_tokens.clone());
         fa.future = self.filter_future;
         fa.all = self.filter_all;
+        fa.closed = self.filter_closed;
         fa.all_users = self.filter_all_users;
         let mut filter_set = fa.to_filter_set()?;
         filter_set.include_blocked_parents = true;
@@ -550,6 +558,11 @@ impl App {
     /// Whether the `--all` toggle is active.
     pub fn filter_all(&self) -> bool {
         self.filter_all
+    }
+
+    /// Whether the `--closed` (show only done/cancelled) toggle is active.
+    pub fn filter_closed(&self) -> bool {
+        self.filter_closed
     }
 
     /// Whether the `--future` toggle is active.
@@ -836,6 +849,15 @@ impl App {
         }
     }
 
+    /// List-view closed-tasks toggle: `.` shows only done/cancelled tasks,
+    /// reusing the tree's include-done/cancelled key for consistency.
+    fn list_closed_key(key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Char('.') => Some(Action::ToggleClosed),
+            _ => None,
+        }
+    }
+
     /// Tree-view navigation keys: `j`/↓ → TreeNext, `k`/↑ → TreePrev,
     /// `←`/`→` collapse/expand, Space/Enter toggle, `.` toggles include-all,
     /// `b` → JumpToBlocker.
@@ -869,6 +891,7 @@ impl App {
             Self::flag_key,
             Self::jump_key_list,
             Self::detail_scroll_key,
+            Self::list_closed_key,
             Self::list_nav_key,
             Self::task_action_key,
         ])
@@ -1018,6 +1041,15 @@ impl App {
             Action::ToggleAll => {
                 self.filter_all = !self.filter_all;
                 self.reload_with_status("reloaded");
+            }
+            Action::ToggleClosed => {
+                self.filter_closed = !self.filter_closed;
+                let msg = if self.filter_closed {
+                    "showing closed tasks"
+                } else {
+                    "showing active tasks"
+                };
+                self.reload_with_status(msg);
             }
             Action::ToggleFuture => {
                 self.filter_future = !self.filter_future;
@@ -2215,6 +2247,68 @@ mod tests {
         app.update(Action::ToggleAll);
         assert!(!app.filter_all());
         assert_eq!(visible_titles(&app), vec!["open task".to_owned()]);
+    }
+
+    #[test]
+    fn list_hides_closed_by_default_and_toggle_reveals_them() {
+        let open = Task::new("open task");
+        let mut done = Task::new("done task");
+        done.mark_done(chrono::Local::now().date_naive());
+        let mut cancelled = Task::new("cancelled task");
+        cancelled.mark_cancelled();
+        let mut app = app_with_repo_tasks(vec![open, done, cancelled]);
+
+        // Default List view hides done and cancelled tasks.
+        assert_eq!(visible_titles(&app), vec!["open task".to_owned()]);
+        assert!(!app.filter_closed());
+
+        // `.` (ToggleClosed) shows ONLY the closed tasks, respecting the CLI
+        // `--closed` semantics.
+        app.update(Action::ToggleClosed);
+        assert!(app.filter_closed());
+        let titles = visible_titles(&app);
+        assert_eq!(titles.len(), 2, "{titles:?}");
+        assert!(titles.contains(&"done task".to_owned()));
+        assert!(titles.contains(&"cancelled task".to_owned()));
+        assert!(!titles.contains(&"open task".to_owned()));
+        assert_eq!(app.status(), Some("showing closed tasks"));
+
+        // Toggling back restores the active-only list.
+        app.update(Action::ToggleClosed);
+        assert!(!app.filter_closed());
+        assert_eq!(visible_titles(&app), vec!["open task".to_owned()]);
+        assert_eq!(app.status(), Some("showing active tasks"));
+    }
+
+    #[test]
+    fn dot_key_toggles_closed_in_list_view() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+        let app = app_with_repo_tasks(Vec::new());
+        // The List view binds `.` to the closed toggle.
+        assert_eq!(
+            app.handle_key(KeyEvent::from(KeyCode::Char('.'))),
+            Some(Action::ToggleClosed)
+        );
+    }
+
+    #[test]
+    fn closed_toggle_respects_active_context() {
+        let mut done_work = Task::new("done work");
+        done_work.mark_done(chrono::Local::now().date_naive());
+        done_work.tags = vec!["@work".to_owned()];
+        let mut done_home = Task::new("done home");
+        done_home.mark_done(chrono::Local::now().date_naive());
+        done_home.tags = vec!["@home".to_owned()];
+        let mut app = app_with_repo_tasks(vec![done_work, done_home]);
+
+        // Pin the active context to @work, then reveal closed tasks.
+        let mut state = app.repo.store().get_state().unwrap();
+        state.active_contexts = vec!["@work".to_owned()];
+        app.repo.store_mut().save_state(&state).unwrap();
+        app.update(Action::ToggleClosed);
+
+        // Only the closed @work task is visible; @home is filtered out.
+        assert_eq!(visible_titles(&app), vec!["done work".to_owned()]);
     }
 
     #[test]

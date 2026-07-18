@@ -122,6 +122,9 @@ fn active_toggles(app: &App) -> Vec<String> {
     if app.filter_all() {
         out.push("[all]".to_owned());
     }
+    if app.filter_closed() {
+        out.push("[closed]".to_owned());
+    }
     if app.filter_future() {
         out.push("[future]".to_owned());
     }
@@ -549,7 +552,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let hint = match app.mode() {
         Mode::Normal => match app.view() {
             View::List => {
-                "q quit  1/2/3 view  j/k/g/G nav  e edit  d done  s start/stop  c cancel  m move  o open  x del  b blocker  / filter  A/F/U flags  S state  y sync"
+                "q quit  1/2/3 view  j/k/g/G nav  e edit  d done  s start/stop  c cancel  m move  o open  x del  b blocker  . closed  / filter  A/F/U flags  S state  y sync"
             }
             View::Tree => {
                 "q quit  1/2/3 view  j/k/g/G nav  ←/→ fold  Space toggle  . tree-all  A/F/U flags  e edit  d done  s start  m move  x del  b blocker  / filter  S state  y sync"
