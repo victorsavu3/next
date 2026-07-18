@@ -316,7 +316,7 @@ mod tests {
             git_author_name: None,
             git_author_email: None,
             partial_clone: true,
-            pull_before_query: true,
+            autopull: true,
             staleness: Duration::from_secs(3600),
             pull_timeout: Duration::from_secs(10),
         };

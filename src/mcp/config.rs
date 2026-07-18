@@ -21,7 +21,10 @@ struct SyncFileConfig {
     /// Periodic pull+push interval in seconds; 0 = disabled.
     interval_secs: Option<u64>,
     deferred_delay_secs: Option<u64>,
-    pull_before_query: Option<bool>,
+    /// Staleness pull before a task-touching tool. Accepts the old key name
+    /// `pull_before_query` as an alias.
+    #[serde(alias = "pull_before_query")]
+    autopull: Option<bool>,
     staleness_secs: Option<u64>,
     pull_timeout_secs: Option<u64>,
 }
@@ -86,7 +89,7 @@ pub struct McpConfig {
     /// built-in libgit2 full clone, removing the git-binary dependency.
     pub partial_clone: bool,
     /// Whether to run a staleness pull before a task-touching tool (Req A).
-    pub pull_before_query: bool,
+    pub autopull: bool,
     /// How long a local copy stays "fresh" after a pull, before a query triggers one.
     pub staleness: Duration,
     /// Timeout for the pre-query pull. Stored only; not yet enforced by the core.
@@ -187,10 +190,16 @@ impl McpConfig {
             Err(_) => Duration::from_secs(file.sync.deferred_delay_secs.unwrap_or(30).max(1)),
         };
 
-        // ── pull-before-query ────────────────────────────────────────────────
-        let pull_before_query = match std::env::var("NEXT_PULL_BEFORE_QUERY") {
-            Ok(ref s) => parse_bool_default_true(Some(s)),
-            Err(_) => file.sync.pull_before_query.unwrap_or(true),
+        // ── autopull (staleness pull before a query) ─────────────────────────
+        // `NEXT_AUTOPULL` is the current env var; `NEXT_PULL_BEFORE_QUERY` is
+        // still read as a fallback alias for older deployments.
+        let autopull = match std::env::var("NEXT_AUTOPULL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("NEXT_PULL_BEFORE_QUERY").ok().filter(|s| !s.is_empty()))
+        {
+            Some(ref s) => parse_bool_default_true(Some(s)),
+            None => file.sync.autopull.unwrap_or(true),
         };
 
         let staleness = Duration::from_secs(parse_secs_or(
@@ -215,7 +224,7 @@ impl McpConfig {
             git_author_name,
             git_author_email,
             partial_clone,
-            pull_before_query,
+            autopull,
             staleness,
             pull_timeout,
         })
@@ -233,19 +242,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pull_before_query_defaults_to_true_when_unset() {
+    fn autopull_defaults_to_true_when_unset() {
         assert!(parse_bool_default_true(None));
     }
 
     #[test]
-    fn pull_before_query_falsey_values() {
+    fn autopull_falsey_values() {
         for v in ["0", "false", "no", "False", "NO", " false "] {
             assert!(!parse_bool_default_true(Some(v)), "expected false for {v:?}");
         }
     }
 
     #[test]
-    fn pull_before_query_truthy_values() {
+    fn autopull_truthy_values() {
         for v in ["1", "true", "yes", "on", "anything"] {
             assert!(parse_bool_default_true(Some(v)), "expected true for {v:?}");
         }
@@ -285,7 +294,7 @@ mod tests {
             [sync]
             interval_secs       = 1800
             deferred_delay_secs = 60
-            pull_before_query   = false
+            autopull            = false
             staleness_secs      = 7200
             pull_timeout_secs   = 20
         "#;
@@ -301,7 +310,7 @@ mod tests {
         assert_eq!(cfg.git.author_email.as_deref(), Some("bot@example.com"));
         assert_eq!(cfg.sync.interval_secs, Some(1800));
         assert_eq!(cfg.sync.deferred_delay_secs, Some(60));
-        assert_eq!(cfg.sync.pull_before_query, Some(false));
+        assert_eq!(cfg.sync.autopull, Some(false));
         assert_eq!(cfg.sync.staleness_secs, Some(7200));
         assert_eq!(cfg.sync.pull_timeout_secs, Some(20));
     }
@@ -312,7 +321,14 @@ mod tests {
         assert!(cfg.bearer_token.is_none());
         assert!(cfg.git.url.is_none());
         assert!(cfg.sync.interval_secs.is_none());
-        assert!(cfg.sync.pull_before_query.is_none());
+        assert!(cfg.sync.autopull.is_none());
+    }
+
+    #[test]
+    fn autopull_accepts_old_pull_before_query_alias() {
+        let cfg: McpFileConfig =
+            toml::from_str("[sync]\npull_before_query = false").unwrap();
+        assert_eq!(cfg.sync.autopull, Some(false), "old key name must still parse");
     }
 
     #[test]

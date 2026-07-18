@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
         bearer_token: config.bearer_token,
         webhook_token: config.webhook_token,
         scheduler,
-        pull_before_query: config.pull_before_query,
+        pull_before_query: config.autopull,
         staleness: config.staleness,
     };
 
