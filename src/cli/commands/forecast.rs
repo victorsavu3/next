@@ -38,6 +38,7 @@ pub fn build_entries(args: &Args, ctx: &AppContext) -> anyhow::Result<(Vec<Forec
     let today = Local::now().date_naive();
     let horizon = args.days.unwrap_or(ctx.config.forecast_horizon_days);
 
+    crate::core::reject_flag_like_tokens(&args.tokens, "next forecast --help")?;
     let mut filter_args = FilterArgs::parse(args.tokens.clone());
     filter_args.future = true; // forecast always shows future-start tasks
     filter_args.all = args.all;

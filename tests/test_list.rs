@@ -530,3 +530,21 @@ fn list_flag_overrides_config_limit() {
     next::cli::commands::list::run(list_args_with_limit(Some(4)), &env.ctx).unwrap();
     assert_eq!(env.ctx.repo.store.list_tasks().unwrap().len(), 5);
 }
+
+#[test]
+fn list_typoed_flag_in_filter_tokens_rejected() {
+    // An unknown `--flag` swallowed into the trailing filter tokens must
+    // error clearly instead of being misread as a tag exclusion.
+    let env = common::setup();
+    let err = next::cli::commands::list::run(
+        next::cli::commands::list::Args {
+            tokens: vec!["--futur".to_string()],
+            ..list_args_with_limit(None)
+        },
+        &env.ctx,
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("unrecognised flag"), "unexpected error: {msg}");
+    assert!(msg.contains("--futur"), "error must name the token: {msg}");
+}

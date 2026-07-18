@@ -105,3 +105,18 @@ fn next_empty_list_does_not_error() {
     let env = common::setup();
     next_cmd::run(next_args(None), &env.ctx).unwrap();
 }
+
+#[test]
+fn next_typoed_flag_in_filter_tokens_rejected() {
+    // An unknown `--flag` swallowed into the trailing filter tokens must
+    // error clearly instead of being misread as a tag exclusion.
+    let env = common::setup();
+    let err = next_cmd::run(
+        next_cmd::Args { tokens: vec!["--al".to_string()], ..next_args(None) },
+        &env.ctx,
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("unrecognised flag"), "unexpected error: {msg}");
+    assert!(msg.contains("--al"), "error must name the token: {msg}");
+}

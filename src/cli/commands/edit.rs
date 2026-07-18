@@ -148,12 +148,17 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         }
     }
 
-    // Validate tags from --tag.
-    for t in &args.tags {
+    // Validate tags from --tag and --remove-tag. Removals are validated too:
+    // an invalid tag can never be on a task, so a misspelt removal would
+    // otherwise no-op silently.
+    for t in args.tags.iter().chain(args.remove_tags.iter()) {
         tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
     }
 
-    // Process trailing +tag / -tag tokens.
+    // Process trailing +tag / -tag tokens. An unknown `--flag` (typically a
+    // typo of a real flag) would land here because of allow_hyphen_values;
+    // reject it up front instead of misreading it as a `-tag` removal.
+    crate::core::reject_flag_like_tokens(&args.tag_tokens, "next edit --help")?;
     let mut add_tags = args.tags.clone();
     let mut remove_tags = args.remove_tags.clone();
     for token in &args.tag_tokens {
@@ -161,6 +166,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
             tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
             add_tags.push(t.to_owned());
         } else if let Some(t) = token.strip_prefix('-') {
+            tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
             remove_tags.push(t.to_owned());
         } else {
             anyhow::bail!("unrecognised trailing argument {token:?} — use +tag to add or -tag to remove");

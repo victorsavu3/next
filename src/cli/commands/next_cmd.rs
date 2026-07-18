@@ -35,6 +35,7 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
     let count = args.count.unwrap_or(ctx.config.next_count);
 
+    crate::core::reject_flag_like_tokens(&args.tokens, "next next --help")?;
     let mut filter_args = FilterArgs::parse(args.tokens);
     filter_args.future = args.future;
     filter_args.all = args.all;

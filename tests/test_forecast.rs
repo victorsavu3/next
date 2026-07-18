@@ -336,3 +336,18 @@ fn projection_respects_snap() {
     assert!(!projected.is_empty());
     assert!(projected.iter().all(|d| d.weekday() == Weekday::Mon), "all snapped to Monday");
 }
+
+#[test]
+fn forecast_typoed_flag_in_filter_tokens_rejected() {
+    // An unknown `--flag` swallowed into the trailing filter tokens must
+    // error clearly instead of being misread as a tag exclusion.
+    let env = common::setup();
+    let err = forecast::run(
+        forecast::Args { tokens: vec!["--jsn".to_string()], ..forecast_args(None) },
+        &env.ctx,
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("unrecognised flag"), "unexpected error: {msg}");
+    assert!(msg.contains("--jsn"), "error must name the token: {msg}");
+}

@@ -52,6 +52,7 @@ pub struct Args {
 pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
 
+    crate::core::reject_flag_like_tokens(&args.tokens, "next list --help")?;
     let mut filter_args = FilterArgs::parse(args.tokens);
     filter_args.future = args.future;
     filter_args.all = args.all;

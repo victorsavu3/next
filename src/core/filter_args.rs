@@ -21,6 +21,25 @@ pub struct FilterArgs {
     pub json: bool,
 }
 
+/// Reject trailing tokens that begin with `--`.
+///
+/// Commands that capture trailing tokens use `trailing_var_arg` +
+/// `allow_hyphen_values` so that `-tag` removal/exclusion tokens parse; a side
+/// effect is that clap hands us unknown `--flags` (usually typos of real
+/// flags, e.g. `--clear-du` for `--clear-due`) as ordinary tokens. Tags and
+/// filter tokens never legitimately start with `--`, so fail loudly instead
+/// of silently misinterpreting the token.
+pub fn reject_flag_like_tokens(tokens: &[String], help_cmd: &str) -> anyhow::Result<()> {
+    for token in tokens {
+        if token.starts_with("--") {
+            anyhow::bail!(
+                "unrecognised flag '{token}' — run `{help_cmd}` to see the available flags"
+            );
+        }
+    }
+    Ok(())
+}
+
 impl FilterArgs {
     /// Parse a flat list of positional token strings into a [`FilterArgs`].
     ///

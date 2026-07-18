@@ -226,6 +226,85 @@ fn edit_invalid_trailing_token_rejected() {
 }
 
 #[test]
+fn edit_typoed_flag_in_trailing_tokens_rejected() {
+    // `--clear-du` (a typo of `--clear-due`) is swallowed into the trailing
+    // var-arg by clap; it must error loudly instead of silently no-oping.
+    let mut env = common::setup();
+    let a = add::Args {
+        slug: Some("typo-flag-task".to_string()),
+        due: Some("2026-12-31".to_string()),
+        ..add_args("Typo flag task")
+    };
+    add::run(a, &mut env.ctx).unwrap();
+
+    let err = edit::run(
+        edit::Args {
+            tag_tokens: vec!["--clear-du".to_string()],
+            ..base_edit("typo-flag-task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap_err();
+
+    let msg = err.to_string();
+    assert!(msg.contains("unrecognised flag"), "unexpected error: {msg}");
+    assert!(msg.contains("--clear-du"), "error must name the token: {msg}");
+    assert!(msg.contains("--help"), "error must point at --help: {msg}");
+
+    // The task is untouched.
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
+    assert!(task.due.is_some(), "due date must survive the failed edit");
+}
+
+#[test]
+fn edit_invalid_trailing_remove_token_rejected() {
+    // Removal tokens go through the same tag validation as add tokens, so a
+    // malformed `-tag` errors instead of no-oping.
+    let mut env = common::setup();
+    let a = add::Args {
+        slug: Some("bad-remove-task".to_string()),
+        tags: vec!["@work".to_string()],
+        ..add_args("Bad remove task")
+    };
+    add::run(a, &mut env.ctx).unwrap();
+
+    let err = edit::run(
+        edit::Args {
+            tag_tokens: vec!["-bad!tag".to_string()],
+            ..base_edit("bad-remove-task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("bad!tag"), "unexpected error: {err}");
+
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
+    assert!(task.tags.contains(&"@work".to_string()));
+}
+
+#[test]
+fn edit_invalid_remove_tag_flag_rejected() {
+    // --remove-tag values are validated too: an invalid tag can never be on a
+    // task, so removing one would otherwise silently do nothing.
+    let mut env = common::setup();
+    add::run(
+        add::Args { slug: Some("bad-flag-remove".to_string()), ..add_args("Bad flag remove") },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let err = edit::run(
+        edit::Args {
+            remove_tags: vec!["bad!tag".to_string()],
+            ..base_edit("bad-flag-remove")
+        },
+        &mut env.ctx,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("bad!tag"), "unexpected error: {err}");
+}
+
+#[test]
 fn edit_sets_description() {
     let mut env = common::setup();
     add::run(
