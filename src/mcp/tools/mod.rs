@@ -82,7 +82,7 @@ pub fn all_tools() -> Vec<Tool> {
                 "required": ["id"],
                 "properties": {
                     "id": { "type": "string", "description": "UUID, UUID prefix, or slug" },
-                    "action": { "type": "string", "enum": ["start", "stop", "done", "cancel", "move"], "description": "State transition or move. Omit to only edit fields." },
+                    "action": { "type": "string", "enum": ["start", "stop", "done", "cancel", "move"], "description": "State transition or move. Omit to only edit fields. Any field edits in the same call are applied first, then the transition — e.g. {action:\"done\", notes:\"…\"} sets the notes and completes the task." },
                     "completed_at": { "type": "string", "description": "Completion date for recurrence scheduling (action=done only). ISO 8601 or natural language. Defaults to today." },
                     "title": { "type": "string" },
                     "due": { "type": "string" },
@@ -106,9 +106,9 @@ pub fn all_tools() -> Vec<Tool> {
                     "notes": { "type": "string" },
                     "recur_schedule": { "type": "string" },
                     "recur_completion": { "type": "integer" },
-                    "recur_snap": { "type": "string" },
+                    "recur_snap": { "type": "string", "description": "Snap next date: next-workday, monday…sunday, dom:N. May be sent alone to change the snap on an existing recurrence." },
                     "clear_recurrence": { "type": "boolean" },
-                    "long_term": { "type": "boolean" },
+                    "long_term": { "type": "boolean", "description": "Suppress age-based scoring. false clears it (both values take effect)." },
                     "score_adjustment": { "type": "number" },
                     "autosync": { "type": "boolean", "default": true }
                 }
