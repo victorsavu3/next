@@ -1,5 +1,5 @@
 use chrono::Local;
-use crate::cli::recurrence_parse::parse_recurrence;
+use crate::core::recurrence::parse_recurrence;
 use crate::core::domain::date_parse::parse_date;
 use crate::core::service::{create_task, CreateTaskParams};
 

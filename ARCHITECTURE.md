@@ -95,7 +95,7 @@ next/                             # crate root (also git repo)
     cli/                          # feature = "cli" (default); the `next` binary + clap
       main.rs                     # `next` binary entry point
       app_context.rs              # AppContext: Config + TaskRepository (field `repo`); config.toml loading
-      mod.rs  render.rs  recurrence_parse.rs
+      mod.rs  render.rs
       commands/
         add.rs   cancel.rs  config.rs  context.rs  data.rs   delete.rs  done.rs  edit.rs
         archive.rs  forecast.rs  init.rs  list.rs  maintenance.rs  mod.rs  move_cmd.rs  next_cmd.rs  open.rs
@@ -124,7 +124,7 @@ next/                             # crate root (also git repo)
     test_archive.rs               # archive pass, prune, resurrection, partial-clone recovery
     test_archive_scale.rs         # 2100-task lifecycle + multi-cycle resurrection
     test_multi_instance.rs        # several clones of one remote converging without loss
-    cache_sync.rs locking.rs      migration.rs   sync.rs
+    test_cache_sync.rs  test_locking.rs  test_migration.rs  test_sync.rs
     test_plugin.rs                # export hook + periodic plugin sync
     test_mcp.rs                   # in-process MCP HTTP integration tests (requires --features mcp)
     test_container.rs             # container integration tests (requires CONTAINER_TESTS=1)
@@ -414,7 +414,6 @@ See the §2 tree for the full file list. Key entry points:
 - `src/cli/mod.rs` — top-level `Cli` + `Command` enum (clap derive), including the global
   `--repo`, `--autosync`, `--no-autosync`, `--offline`, and `--no-sync` flags.
 - `src/cli/render.rs` — task list and detail rendering (text and `--json`).
-- `src/cli/recurrence_parse.rs` — `parse_recurrence()`, shared by `add.rs` and `edit.rs`.
 - `src/cli/commands/` — one module per subcommand (`add`, `done`, `edit`, …), plus the
   `tag/` (`mod`/`meta`/`data`) and `plugin/` submodules.
 
@@ -571,7 +570,7 @@ mechanisms keep this safe:
 
 The two locks are independent files and never block one another. When a path takes both,
 the ordering is always repo-lock-before-state-lock, never the reverse, so they cannot
-deadlock. `tests/locking.rs` covers lost-update prevention for task, state, and
+deadlock. `tests/test_locking.rs` covers lost-update prevention for task, state, and
 plugin-subscription edits, the cross-section non-clobbering of the shared `state.toml`,
 slug-conflict races, and pull/commit coordination; re-entrant lock unit tests live in
 `src/core/storage/lock.rs`.
@@ -861,12 +860,12 @@ non-zero exit code.
 | `TomlStore` | `src/core/storage/toml_store.rs` | Round-trip tests: write task to `tempdir`, read back, assert equal fields; migration unit tests: write legacy `state.toml`, call `TomlStore::open()`, assert per-tag files created and `state.toml` cleaned |
 | `GitBackend` | `src/core/storage/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
 | `CachedStore` | `src/core/storage/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |
-| Cache sync | `tests/cache_sync.rs` | Integration tests: write-through consistency (SQLite ↔ TOML), git pull propagation (HEAD change triggers rebuild), cache-reuse (same HEAD = no rebuild) |
+| Cache sync | `tests/test_cache_sync.rs` | Integration tests: write-through consistency (SQLite ↔ TOML), git pull propagation (HEAD change triggers rebuild), cache-reuse (same HEAD = no rebuild) |
 | Archiving | `tests/test_archive.rs` | Integration tests: archive pass, segment sealing, frozen dates, resurrection (warm + cold), blind-write guards, sync auto-archive throttle, cold pruning, manifest numbering, partial-clone cold recovery |
 | Archiving at scale | `tests/test_archive_scale.rs` | 2100-task corpus through the full lifecycle (tier accounting, gap-free pagination, cross-machine reconcile); three resurrection / re-archive / re-prune cycles with no duplicates |
 | Budgets | `benches/large_repo.rs` | Opt-in benchmark (`cargo bench --bench large_repo`); pins the 1M-task budgets from REQUIREMENTS §2.3 |
-| Migration | `tests/migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next::storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens |
-| File locking | `tests/locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption, including transactional lost-update prevention (N processes each add a distinct tag to one task; all must survive). Re-entrant lock unit tests live in `src/core/storage/lock.rs` |
+| Migration | `tests/test_migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next::storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens |
+| File locking | `tests/test_locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption, including transactional lost-update prevention (N processes each add a distinct tag to one task; all must survive). Re-entrant lock unit tests live in `src/core/storage/lock.rs` |
 | CLI commands | `tests/test_*.rs` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |
 | MCP unit tests | `src/mcp/tools/*.rs` | Unit tests per tool module using a real `TaskRepository` in a `tempdir` git repo (requires `--features mcp`) |
 | Plugins | `tests/test_plugin.rs`, `src/core/plugin/run.rs` | End-to-end export-hook notification; unit tests for periodic sync (interval precedence, due/skip, failure-retry) |

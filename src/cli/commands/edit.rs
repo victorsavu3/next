@@ -1,5 +1,5 @@
 use chrono::Local;
-use crate::cli::recurrence_parse::parse_recurrence;
+use crate::core::recurrence::parse_recurrence;
 use crate::core::domain::{date_parse::parse_date, tag, task::Recurrence};
 use crate::core::recurrence::parse_snap;
 use crate::core::service::{apply_edits, validate_url, EditTaskParams};
