@@ -849,7 +849,6 @@ next forecast [filters...] [--days <N>]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--days <N>` | positive integer | 90 | Forecast horizon in days. |
-| `--future` | flag | false | Include tasks with a future `start` date. |
 | `--all` | flag | false | Disable all implicit filtering. |
 | `--all-users` | flag | false | Bypass the user filter. |
 | `--json` | flag | false | Emit forecast as JSON. |

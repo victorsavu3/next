@@ -30,7 +30,6 @@ fn add_args(title: &str) -> add::Args {
 fn forecast_args(days: Option<u32>) -> forecast::Args {
     forecast::Args {
         days,
-        future: false,
         all: false,
         all_users: false,
         json: false,

@@ -10,10 +10,6 @@ pub struct Args {
     #[arg(long)]
     pub days: Option<u32>,
 
-    /// Include tasks scheduled in the future.
-    #[arg(long)]
-    pub future: bool,
-
     /// Show all tasks regardless of implicit filtering.
     #[arg(long)]
     pub all: bool,
