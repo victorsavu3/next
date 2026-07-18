@@ -2283,7 +2283,8 @@ mod tests {
     #[test]
     fn dot_key_toggles_closed_in_list_view() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent};
-        let app = app_with_repo_tasks(Vec::new());
+        let mut app = app_with_repo_tasks(Vec::new());
+        app.update(Action::SwitchView(View::List));
         // The List view binds `.` to the closed toggle.
         assert_eq!(
             app.handle_key(KeyEvent::from(KeyCode::Char('.'))),
@@ -3045,6 +3046,7 @@ mod tests {
     #[test]
     fn list_delete_middle_keeps_cursor_on_next_row() {
         let (mut app, _ids) = app_with_committed_roots(&["alpha", "bravo", "charlie"]);
+        app.update(Action::SwitchView(View::List));
         assert_eq!(app.view(), View::List);
         assert_eq!(app.tasks().len(), 3);
 
@@ -3063,6 +3065,7 @@ mod tests {
     #[test]
     fn list_delete_last_row_falls_back_to_previous() {
         let (mut app, _ids) = app_with_committed_roots(&["alpha", "bravo", "charlie"]);
+        app.update(Action::SwitchView(View::List));
         app.selected = 2;
         let prev_id = app.tasks()[1].task.id;
 
