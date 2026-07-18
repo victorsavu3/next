@@ -221,15 +221,20 @@ Task IDs accept a full UUID, a slug, or any unambiguous 4+ character hex prefix.
 All commands support `--json` for pipe-friendly output. Running `next` with no
 subcommand is the same as `next list`.
 
-The `--autosync` global flag (or `autosync = true` in the config file) automatically
-runs `next sync` after every mutation command. The `--no-autosync` global flag disables it
-for a single invocation even when `autosync = true` in the config (the two flags conflict).
+Sync has two orthogonal capabilities, each with a config key and a paired override flag
+pair:
 
-By default every command (except `next sync` itself) first does a best-effort
-**pull-before-query**: if the last pull is older than `staleness_secs` (default 1 hour),
-it pulls from the remote so results reflect other machines' changes. The `--offline`
-global flag (alias `--no-sync`, or `offline = true` under `[sync]` in the config) skips
-both this pull and the autosync push for one invocation — no network I/O at all.
+- **autopull** (`sync.autopull`, default on; `--autopull` / `--no-autopull`) — before every
+  command except `next sync`, a best-effort staleness pull: if the last pull is older than
+  `staleness_secs` (default 1 hour), it pulls from the remote so results reflect other
+  machines' changes.
+- **autopush** (`sync.autopush`, default off; `--autopush` / `--no-autopush`) — a push after
+  every successful mutation command.
+
+The master flags `--autosync` / `--no-autosync` toggle **both** at once for one invocation;
+`--offline` is an alias for `--no-autosync` (no network I/O at all). The master and granular
+flags are mutually exclusive. `next sync` always pulls and pushes and refuses to run with any
+disabling flag.
 
 ---
 
@@ -242,23 +247,27 @@ both this pull and the autosync push for one invocation — no network I/O at al
 ```toml
 repository            = "/home/alice/tasks"  # use next from any directory
 
-autosync              = true                 # sync automatically after each mutation
 list_limit            = 20                   # cap `next list` output (same as -n 20)
 forecast_horizon_days = 90                   # days ahead shown by `next forecast`
 next_count            = 10                   # tasks shown by `next next`
 
 [sync]
 git_subprocess        = true                 # use `git` subprocess instead of libgit2
-pull_before_query     = true                 # pull before reads (default); use --offline to bypass
+autopull              = true                 # staleness pull before commands (default); --no-autopull to bypass
+autopush              = false                # push after each mutation (default off); --autopush to enable
 staleness_secs        = 3600                 # re-pull after this many seconds (default: 1 hour)
-pull_timeout_secs     = 10                   # pre-query pull timeout (stored; not yet enforced)
-offline               = false                # true = behave as if --offline on every invocation
+pull_timeout_secs     = 10                   # autopull timeout (stored; not yet enforced)
 plugin_sync_default_secs = 86400             # system-default plugin sync interval (see Plugins)
 ```
 
 Values can also be read and written from the command line with
 `next config get [<key>]` / `next config set <key> <value>`
-(e.g. `next config set sync.pull_before_query false`).
+(e.g. `next config set sync.autopull false`).
+
+> **Migration:** the old top-level `autosync` key is now `[sync] autopush`; `[sync]
+> pull_before_query` is renamed to `[sync] autopull` (the old name is still accepted as
+> an alias); `[sync] offline` is removed (use `--offline` or set `autopull`/`autopush` to
+> `false`). The `--no-sync` flag is gone — use `--offline`.
 
 **Scoring weights** live *in the repository* at `config/scoring.toml`, committed to git
 and synced. `next init` seeds it with the defaults. Because it is part of the repo, the
@@ -334,7 +343,7 @@ tables mirroring the variables below).
 | `NEXT_WEBHOOK_TOKEN` | | — | If set, enables `POST /webhook/sync` with this token |
 | `NEXT_SYNC_INTERVAL` | | `86400` | Periodic pull+push interval in seconds; `0` disables |
 | `NEXT_DEFERRED_SYNC_DELAY_SECS` | | `30` | Seconds before deferred sync fires after `autosync=false` |
-| `NEXT_PULL_BEFORE_QUERY` | | `true` | Staleness pull before task-touching tools; `false`/`0`/`no` disables |
+| `NEXT_AUTOPULL` | | `true` | Staleness pull before task-touching tools; `false`/`0`/`no` disables (old name `NEXT_PULL_BEFORE_QUERY` still read as a fallback) |
 | `NEXT_STALENESS_SECS` | | `3600` | How long the local copy stays fresh after a pull |
 | `NEXT_PULL_TIMEOUT_SECS` | | `10` | Pre-query pull timeout (stored; not yet enforced) |
 
@@ -409,8 +418,9 @@ All mutation tools (M) accept an `autosync: bool` parameter (default `true`):
 At most one sync runs at a time — the `sync` tool and webhook return an error immediately if a sync is already in progress rather than queuing.
 
 Before each task-touching tool call the server also runs a best-effort staleness pull
-(the same pull-before-query as the CLI), controlled by `NEXT_PULL_BEFORE_QUERY` /
-`NEXT_STALENESS_SECS`, so responses reflect other machines' pushes.
+(the same autopull as the CLI), controlled by `NEXT_AUTOPULL` (old name
+`NEXT_PULL_BEFORE_QUERY` still read as a fallback) / `NEXT_STALENESS_SECS`, so responses
+reflect other machines' pushes.
 
 **Slug format**: letters, digits, `-` and `_` only (e.g. `water-plants`, `work_infra`).
 

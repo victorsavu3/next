@@ -237,22 +237,24 @@ next forecast --days 30    # shorter window
 next sync                  # git pull + git push
 next sync --pull-only
 next sync --push-only
-next --autosync add "Task"  # sync automatically after this command
+next --autosync add "Task"  # pull before + push after this command
+next --autopush add "Task"  # push after this command (no forced pull)
 next --offline list         # skip all network I/O for one command
 ```
 
 Before most commands `next` also pulls automatically when the local copy is more than
-an hour old (pull-before-query), so lists reflect other machines' changes. `--offline`
-(alias `--no-sync`) skips it for one invocation.
+an hour old (**autopull**), so lists reflect other machines' changes. `--no-autopull`
+(or `--offline`) skips it for one invocation.
 
-To always sync after every mutation:
+To always push after every mutation:
 
 ```toml
 # config.toml
-autosync = true
+[sync]
+autopush = true
 ```
 
-(or `next config set autosync true`)
+(or `next config set sync.autopush true`)
 
 During sync, closed tasks older than 180 days are archived automatically (at most once
 a day) into segment files under `archive/`. They stay visible via

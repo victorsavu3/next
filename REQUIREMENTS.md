@@ -616,8 +616,8 @@ next config set <key> <value>    # set a key and save config.toml
 ```
 
 Reads and writes the machine-local `config.toml` (see §9) without opening a repository.
-Supported keys: `autosync`, `repository`, `list_limit` (`none` clears), `next_count`,
-`forecast_horizon_days`, `sync.git_subprocess`, `sync.pull_before_query`,
+Supported keys: `repository`, `list_limit` (`none` clears), `next_count`,
+`forecast_horizon_days`, `sync.git_subprocess`, `sync.autopull`, `sync.autopush`,
 `sync.staleness_secs`, `sync.pull_timeout_secs`. Unknown keys MUST be rejected.
 
 ### 8.12 Maintenance
@@ -633,10 +633,10 @@ everyday command list stays small (room for future integrity/cleanup operations)
 - `rebuild-cache` MUST drop and rebuild the local SQLite read cache from the
   source-of-truth data (committed TOML files, git history, archive segments). It
   MUST NOT change any committed data and MUST NOT be treated as a mutation (no
-  autosync, no push).
+  autopush, no push).
 - `archive` MUST run the archive pass on demand, bypassing the once-per-day
   throttle (see §2.3). It is a mutation (it commits) and follows the normal
-  autosync rules. The archive pass is exposed *only* here — there is no
+  autopush rules. The archive pass is exposed *only* here — there is no
   top-level `next archive` command.
 
 ---
@@ -650,17 +650,33 @@ no pluggable-backend selection — the local git store is the only backend.
 
 ### 9.1 Sync configuration
 
-The `[sync]` section of `config.toml` controls how `next sync` (and autosync) performs push/pull:
+Sync has two orthogonal capabilities, each a config key in the `[sync]` section
+with a paired pair of CLI override flags:
+
+- **autopull** (`sync.autopull`, default `true`; flags `--autopull` / `--no-autopull`) —
+  the staleness pull before every command except `next sync`.
+- **autopush** (`sync.autopush`, default `false`; flags `--autopush` / `--no-autopush`) —
+  the push after a successful mutation.
+
+The master flags `--autosync` / `--no-autosync` (and the alias `--offline`) toggle
+both capabilities at once for a single invocation. Master and granular flags are
+mutually exclusive (clap `conflicts_with`), so at most one determinant applies to each
+capability. Resolution precedence per capability: granular flag → master flag → config.
 
 ```toml
 [sync]
 git_subprocess           = true    # default: false
-pull_before_query        = true    # default: true
+autopull                 = true    # default: true
+autopush                 = false   # default: false
 staleness_secs           = 3600    # default: 3600 (1 hour)
 pull_timeout_secs        = 10      # default: 10; stored only, not yet enforced
-offline                  = false   # default: false
 plugin_sync_default_secs = 86400   # default: 86400 (see §10.4)
 ```
+
+Migration from the previous scheme: the old top-level `autosync` key is replaced by
+`[sync] autopush`; `[sync] pull_before_query` is renamed to `[sync] autopull` (still
+accepted as a serde alias); `[sync] offline` is removed (use `--offline` per invocation
+or set `autopull`/`autopush` to `false`). The `--no-sync` flag is removed (use `--offline`).
 
 When `git_subprocess = true`, `next sync` runs `git pull` and `git push` as
 shell subprocesses instead of using the built-in libgit2 bindings. This is
@@ -669,17 +685,22 @@ managers, 1Password, etc.) better than the embedded library. All other git
 operations (commit, HEAD resolution) continue to use libgit2 regardless of
 this setting.
 
-### 9.2 Pull-before-query and offline mode
+### 9.2 Autopull and offline mode
 
-When `pull_before_query = true` (the default), every command except `next sync`
+When `autopull = true` (the default), every command except `next sync`
 (and the repo-less `init`/`tutorial`/`config`) MUST first pull from the remote if
 the machine-local `last_pull` timestamp is older than `staleness_secs`. The pull is
 best-effort: a failure produces a warning and the command proceeds on possibly
 stale data. A clean pull updates the cache and `last_pull`.
 
-The `--offline` global flag (alias `--no-sync`), or `offline = true` in `[sync]`,
-MUST skip both the pull-before-query and the autosync push for that invocation.
-`--offline`/`--no-sync` conflict with `--autosync`.
+The `--no-autopull` flag, `--offline`, or `--no-autosync` MUST skip the autopull
+for that invocation; `--autopull` / `--autosync` force it on. Symmetrically,
+`--no-autopush` / `--offline` / `--no-autosync` suppress the post-mutation push and
+`--autopush` / `--autosync` force it on.
+
+`next sync` always pulls and pushes; it MUST fail with an actionable error when
+invoked with any flag that disables either half (`--no-autopull`, `--no-autopush`,
+`--no-autosync`, or `--offline`).
 
 ---
 
@@ -788,8 +809,8 @@ The config file is read from `NEXT_CONFIG` if set, else `/data/config/config.tom
 an absent or unparsable file falls back to defaults (with a warning when unparsable).
 The file schema mirrors the variables: top-level `bearer_token`, `webhook_token`,
 `repo_path`, `bind_addr`; `[git]` `url`/`user`/`token`/`author_name`/`author_email`/
-`partial_clone`; `[sync]` `interval_secs`/`deferred_delay_secs`/`pull_before_query`/
-`staleness_secs`/`pull_timeout_secs`.
+`partial_clone`; `[sync]` `interval_secs`/`deferred_delay_secs`/`autopull` (accepts the
+old name `pull_before_query` as an alias)/`staleness_secs`/`pull_timeout_secs`.
 
 | Variable | Required | Default |
 |----------|----------|---------|
@@ -804,7 +825,7 @@ The file schema mirrors the variables: top-level `bearer_token`, `webhook_token`
 | `NEXT_SYNC_INTERVAL` | | `86400` (s); `0` disables |
 | `NEXT_DEFERRED_SYNC_DELAY_SECS` | | `30` (clamped to ≥ 1) |
 | `NEXT_GIT_PARTIAL_CLONE` | | `1`; `0` forces the built-in full clone (no git binary needed) |
-| `NEXT_PULL_BEFORE_QUERY` | | `true`; `0`/`false`/`no` disables |
+| `NEXT_AUTOPULL` | | `true`; `0`/`false`/`no` disables (old name `NEXT_PULL_BEFORE_QUERY` still read as a fallback) |
 | `NEXT_STALENESS_SECS` | | `3600` |
 | `NEXT_PULL_TIMEOUT_SECS` | | `10` (stored; not yet enforced) |
 
@@ -882,9 +903,10 @@ Five independent sync triggers MUST coexist:
 2. **Deferred timer** — fires `NEXT_DEFERRED_SYNC_DELAY_SECS` after the last `autosync=false` mutation; MUST be reset each time a new mutation arrives before the timer fires
 3. **Periodic sync** — background task fires every `NEXT_SYNC_INTERVAL` seconds (0 = disabled)
 4. **Webhook** (`POST /webhook/sync`) — protected by `NEXT_WEBHOOK_TOKEN`; fires sync immediately and cancels any pending deferred timer; returns `200 {"status": "synced" | "error", ...}`
-5. **Pull-before-query** — a best-effort staleness pull (same `pull_if_stale` core as
+5. **Autopull** — a best-effort staleness pull (same `pull_if_stale` core as
    the CLI, §9.2) before each task-touching tool call except `sync`, controlled by
-   `NEXT_PULL_BEFORE_QUERY` / `NEXT_STALENESS_SECS`; it never fails the tool call
+   `NEXT_AUTOPULL` (old name `NEXT_PULL_BEFORE_QUERY` still read as a fallback) /
+   `NEXT_STALENESS_SECS`; it never fails the tool call
 
 At most one sync MUST run at a time. When an explicit sync (tool call or webhook) is already in progress, any concurrent explicit sync request MUST fail immediately with an error. Background syncs (deferred timer, periodic) MUST skip rather than queue when a sync is already running.
 

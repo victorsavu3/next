@@ -63,15 +63,27 @@ Available on every subcommand:
 |------|-------------|
 | `--config <path>` | Config file to use (default: `$XDG_CONFIG_HOME/task-manager/config.toml`). |
 | `--repo <path>` | Task repository root. Overrides `repository` in the config and the upward `.git` search. |
-| `--autosync` | Run `next sync` after this command if it mutates tasks. Overrides `autosync = false` in config. |
-| `--no-autosync` | Disable autosync for this command even if `autosync = true` in config. Conflicts with `--autosync`. |
-| `--offline` / `--no-sync` | Skip both the pull-before-query and the autosync push for this invocation — no network I/O. The two spellings are aliases; both conflict with `--autosync`. |
+| `--autopull` / `--no-autopull` | Force the pre-command staleness pull on or off for this invocation. Overrides `sync.autopull` in config. |
+| `--autopush` / `--no-autopush` | Force the post-mutation push on or off for this invocation. Overrides `sync.autopush` in config. |
+| `--autosync` | Master switch: enable **both** autopull and autopush for this invocation. |
+| `--no-autosync` | Master switch: disable **both** autopull and autopush for this invocation. |
+| `--offline` | Alias for `--no-autosync`: disable both — no network I/O. |
 
-Unless disabled (`sync.pull_before_query = false` in config, or `--offline`), every
-command except `next sync` first runs a best-effort **pull-before-query**: if the last
+Sync has two orthogonal capabilities: **autopull** (the pre-command staleness pull) and
+**autopush** (the push after a successful mutation). Each has a config key
+(`sync.autopull`, default true; `sync.autopush`, default false) and a paired override flag
+pair. The master flags (`--autosync` / `--no-autosync` / `--offline`) toggle both at once
+and are mutually exclusive with each other and with the granular flags.
+
+Unless disabled (`sync.autopull = false` in config, or `--no-autopull` / `--offline`), every
+command except `next sync` first runs a best-effort **autopull**: if the last
 pull is older than `sync.staleness_secs` (default 1 hour) it pulls from the remote, so
 results reflect other machines' pushes. A failed pull prints a warning and the command
 proceeds on the local data.
+
+`next sync` always pulls **and** pushes; it refuses to run (with an error) if invoked with
+any flag that would disable either half (`--no-autopull`, `--no-autopush`, `--no-autosync`,
+or `--offline`).
 
 ---
 
@@ -995,16 +1007,16 @@ next config get [<key>]          # print one key, or all known keys when omitted
 next config set <key> <value>
 ```
 
-Supported keys: `autosync`, `repository`, `list_limit` (`none` clears), `next_count`,
-`forecast_horizon_days`, `sync.git_subprocess`, `sync.pull_before_query`,
+Supported keys: `repository`, `list_limit` (`none` clears), `next_count`,
+`forecast_horizon_days`, `sync.git_subprocess`, `sync.autopull`, `sync.autopush`,
 `sync.staleness_secs`, `sync.pull_timeout_secs`.
 
 **Examples**
 
 ```sh
 next config get                                # print everything
-next config set autosync true
-next config set sync.pull_before_query false
+next config set sync.autopush true
+next config set sync.autopull false
 next config set list_limit none
 ```
 

@@ -270,16 +270,15 @@ pub struct Config {
     pub next_count: usize,             // default 10
     pub list_limit: Option<usize>,     // default `next list` page size; None = 50
     pub repository: Option<PathBuf>,   // default repo root (overridden by --repo)
-    pub autosync: bool,                // sync after each mutation (overridden by --autosync)
 }
 
 pub struct SyncConfig {
     pub git_subprocess: bool,          // use shell git for push/pull (default false)
-    pub pull_before_query: bool,       // staleness pull before commands (default true)
+    pub autopull: bool,                // staleness pull before commands (default true; --autopull/--no-autopull)
+    pub autopush: bool,                // push after each mutation (default false; --autopush/--no-autopush)
     pub staleness_secs: u64,           // freshness window (default 3600)
     pub pull_timeout_secs: u64,        // stored only — not yet enforced (default 10)
     pub plugin_sync_default_secs: u64, // system-default plugin sync interval (default 86400)
-    pub offline: bool,                 // behave as --offline on every invocation (default false)
 }
 ```
 
@@ -412,7 +411,9 @@ See the §2 tree for the full file list. Key entry points:
 - `src/cli/main.rs` — the `next` binary entry point. `Init`/`Tutorial`/`Config` are handled
   before `AppContext`; all other commands build an `AppContext` and dispatch.
 - `src/cli/mod.rs` — top-level `Cli` + `Command` enum (clap derive), including the global
-  `--repo`, `--autosync`, `--no-autosync`, `--offline`, and `--no-sync` flags.
+  sync flags: the master `--autosync` / `--no-autosync` / `--offline` (both capabilities
+  on/off) and the granular `--autopull` / `--no-autopull` / `--autopush` / `--no-autopush`.
+  The master and granular flags are mutually exclusive (clap `conflicts_with`).
 - `src/cli/render.rs` — task list and detail rendering (text and `--json`).
 - `src/cli/commands/` — one module per subcommand (`add`, `done`, `edit`, …), plus the
   `tag/` (`mod`/`meta`/`data`) and `plugin/` submodules.
@@ -468,18 +469,21 @@ Remote access is provided via MCP — connect with `claude mcp add --transport h
    If command is Tutorial → print embedded TUTORIAL.md; exit
    If command is Config → read/write config.toml; exit
 3. AppContext::new(): locate repository root, open CachedStore + GitBackend into TaskRepository
-4. Pull-before-query (all commands except `sync`): core::sync::pull_if_stale() pulls when
-   the local copy is older than `staleness_secs`; best-effort, skipped by --offline/--no-sync
-5. Execute command logic (reads from ctx.repo.store; writes via ctx.repo.transaction)
-6. Task mutations (add/edit/start/stop/done/cancel/delete/move/tag/data): vcs.commit(changed_paths, message)
+4. Resolve `effective_autopull` / `effective_autopush` from the flags and config
+   (precedence: granular flag → master flag → `config.sync.autopull`/`autopush`)
+5. Autopull (all commands except `sync`): when `effective_autopull`, core::sync::pull_if_stale()
+   pulls if the local copy is older than `staleness_secs`; best-effort. `next sync` refuses to
+   run with any disabling flag (`--no-autopull`/`--no-autopush`/`--no-autosync`/`--offline`)
+6. Execute command logic (reads from ctx.repo.store; writes via ctx.repo.transaction)
+7. Task mutations (add/edit/start/stop/done/cancel/delete/move/tag/data): vcs.commit(changed_paths, message)
    State mutations (context/resource/user): write to XDG state file only; no commit
-7. Render output (text or JSON to stdout)
-8. If autosync enabled and command succeeded and is a mutation (`add`/`start`/`stop`/`done`/`cancel`/`edit`/`delete`/`move`/`tag`/`data`/`archive`): run sync (pull + push)
-9. Notify subscribed plugins of recorded task events (after the repo lock is released)
-10. On error: print the message to stderr and propagate to main for a non-zero exit code
+8. Render output (text or JSON to stdout)
+9. Autopush: if `effective_autopush` and command succeeded and is a mutation (`add`/`start`/`stop`/`done`/`cancel`/`edit`/`delete`/`move`/`tag`/`data`/`archive`): run sync (pull + push)
+10. Notify subscribed plugins of recorded task events (after the repo lock is released)
+11. On error: print the message to stderr and propagate to main for a non-zero exit code
 ```
 
-Read-only commands (list, show, forecast, tree) skip steps 6 and 8 and take `&AppContext` rather than `&mut AppContext`.
+Read-only commands (list, show, forecast, tree) skip steps 7 and 9 and take `&AppContext` rather than `&mut AppContext`.
 
 ---
 
@@ -562,7 +566,7 @@ mechanisms keep this safe:
    (`.next.db-wal` / `.next.db-shm`) are git-ignored.
 
 5. **Plugin notification** (`plugin::notify`, see §6.4). Subscribed plugins are spawned
-   only at the post-mutation chokepoints (`main.rs` after autosync; MCP `tools::dispatch`
+   only at the post-mutation chokepoints (`main.rs` after autopush; MCP `tools::dispatch`
    after the tool runs), i.e. **after the repo lock is released** — a plugin typically
    calls back into `next` and would otherwise deadlock. The plugin registry now lives in
    `state.toml`, so registry reads/writes (during notification and `next plugin` edits)
@@ -774,17 +778,16 @@ back to defaults when absent. Editable in place with `next config get/set`.
 
 ```toml
 repository            = "/home/alice/tasks"  # use next from any directory
-autosync              = false                # sync after each mutation (--autosync to override)
 list_limit            = 20                   # default `next list` page size; absent = 50
 forecast_horizon_days = 90
 next_count            = 10                   # tasks shown by `next next`
 
 [sync]
 git_subprocess           = false   # shell git instead of libgit2 for push/pull
-pull_before_query        = true    # staleness pull before commands (--offline to skip)
-staleness_secs           = 3600    # freshness window for pull-before-query
+autopull                 = true    # staleness pull before commands (--no-autopull/--offline to skip)
+autopush                 = false   # push after each mutation (--autopush/--autosync to enable)
+staleness_secs           = 3600    # freshness window for autopull
 pull_timeout_secs        = 10      # stored only — not yet enforced
-offline                  = false   # behave as if --offline on every invocation
 plugin_sync_default_secs = 86400   # system-default periodic plugin sync interval
 ```
 
