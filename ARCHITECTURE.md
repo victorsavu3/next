@@ -98,7 +98,7 @@ next/                             # crate root (also git repo)
       mod.rs  render.rs  recurrence_parse.rs
       commands/
         add.rs   cancel.rs  config.rs  context.rs  data.rs   delete.rs  done.rs  edit.rs
-        archive.rs  forecast.rs  init.rs  list.rs  mod.rs  move_cmd.rs  next_cmd.rs  open.rs
+        archive.rs  forecast.rs  init.rs  list.rs  maintenance.rs  mod.rs  move_cmd.rs  next_cmd.rs  open.rs
         resource.rs  show.rs  start.rs  stop.rs  sync.rs  tree.rs  tutorial.rs  user.rs
         plugin/mod.rs   tag/{mod,meta,data}.rs
     mcp/                          # feature = "mcp"; `next-mcp` binary
@@ -618,7 +618,7 @@ Requirements are in REQUIREMENTS.md §2.3; the machinery lives in
   `core::sync` after a clean pull — throttled to one automatic run per day
   via `[sync] last_archive`, gated by the `auto` flag, stamped *before*
   running so failures don't retry every sync — or on demand via
-  `next archive`.
+  `next maintenance archive`.
 - **The prune phase** follows the warm commit when `prune_after_days` is set:
   segments past the threshold leave the checkout, each recorded in the
   append-only `archive/pruned.jsonl` (path, blob SHA at HEAD, task count;

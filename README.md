@@ -214,7 +214,8 @@ All list commands accept filter tokens in any order:
 | `next plugin [register/watch/unwatch/unregister/set-sync/set-interval/enable/disable/list]` | Manage export plugins and their periodic syncs (see [Plugins](#plugins)) |
 | `next forecast` | Upcoming due dates grouped by time, including projected schedule-recurrence occurrences over the horizon |
 | `next sync` | Pull from remote, auto-archive if due, push local commits, run due plugin syncs |
-| `next archive` | Move old closed tasks into archive segments now |
+| `next maintenance archive` | Move old closed tasks into archive segments now |
+| `next maintenance rebuild-cache` | Drop and rebuild the local `.next.db` read cache |
 | `next config [get/set]` | Read or write a value in the machine-local `config.toml` |
 Task IDs accept a full UUID, a slug, or any unambiguous 4+ character hex prefix.
 All commands support `--json` for pipe-friendly output. Running `next` with no

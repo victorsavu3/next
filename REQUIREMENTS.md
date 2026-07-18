@@ -185,9 +185,9 @@ archive while it is the newest instance of its series, and a parent MUST NOT
 archive while any active-tier child is ineligible (subtrees archive bottom-up).
 
 The automatic pass runs during sync (post-pull, pre-push), at most once per
-day per machine (`last_archive` in the machine-local state); `next archive`
-runs it on demand without the throttle. Archive/prune failures MUST NOT fail
-the sync.
+day per machine (`last_archive` in the machine-local state); `next maintenance
+archive` runs it on demand without the throttle. Archive/prune failures MUST NOT
+fail the sync.
 
 **Resurrection**: reads never resurrect. Any *mutation* that resolves to an
 archived task MUST first move it back to the active tier inside the same
@@ -619,6 +619,25 @@ Reads and writes the machine-local `config.toml` (see §9) without opening a rep
 Supported keys: `autosync`, `repository`, `list_limit` (`none` clears), `next_count`,
 `forecast_horizon_days`, `sync.git_subprocess`, `sync.pull_before_query`,
 `sync.staleness_secs`, `sync.pull_timeout_secs`. Unknown keys MUST be rejected.
+
+### 8.12 Maintenance
+
+```
+next maintenance rebuild-cache   # drop & rebuild the local .next.db read cache
+next maintenance archive         # run the archive pass now (see §2.3)
+```
+
+Repository maintenance operations, grouped under a `maintenance` namespace so the
+everyday command list stays small (room for future integrity/cleanup operations).
+
+- `rebuild-cache` MUST drop and rebuild the local SQLite read cache from the
+  source-of-truth data (committed TOML files, git history, archive segments). It
+  MUST NOT change any committed data and MUST NOT be treated as a mutation (no
+  autosync, no push).
+- `archive` MUST run the archive pass on demand, bypassing the once-per-day
+  throttle (see §2.3). It is a mutation (it commits) and follows the normal
+  autosync rules. The archive pass is exposed *only* here — there is no
+  top-level `next archive` command.
 
 ---
 

@@ -275,6 +275,10 @@ fn delete_by_path(conn: &Connection, path: &str) -> Result<Option<(String, Optio
 // ---------------------------------------------------------------------------
 
 impl Store for CachedStore {
+    fn rebuild_cache(&self, head_hash: &str) -> Result<()> {
+        self.rebuild(head_hash)
+    }
+
     fn get_task(&self, id: Uuid) -> Result<Task> {
         let id_str = id.to_string();
         self.with_conn(|conn| {

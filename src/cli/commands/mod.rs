@@ -10,6 +10,7 @@ pub mod edit;
 pub mod forecast;
 pub mod init;
 pub mod list;
+pub mod maintenance;
 pub mod move_cmd;
 pub mod next_cmd;
 pub mod plugin;

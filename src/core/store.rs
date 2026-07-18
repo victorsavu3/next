@@ -253,6 +253,15 @@ pub trait Store: Send + Sync {
         Ok(())
     }
 
+    /// Drops and rebuilds any local read cache from the source-of-truth data
+    /// (committed TOML files, git history, and archive segments), keying it to
+    /// `head_hash`. Used by `next maintenance rebuild-cache` to recover from a
+    /// corrupt or stale cache. The default implementation is a no-op for stores
+    /// that keep no cache.
+    fn rebuild_cache(&self, _head_hash: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// Records `new_head` as the cache's current HEAD *without* rebuilding.
     ///
     /// Called at the end of a mutation transaction: the writes were already

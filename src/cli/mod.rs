@@ -151,8 +151,8 @@ pub enum Command {
     /// Sync with the remote VCS backend.
     Sync(commands::sync::Args),
 
-    /// Move old closed tasks into archive segments now.
-    Archive(commands::archive::Args),
+    /// Repository maintenance: rebuild the local cache, run the archive pass.
+    Maintenance(commands::maintenance::Args),
 
     /// Manage tag descriptions.
     Tag(commands::tag::Args),

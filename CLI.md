@@ -39,7 +39,8 @@ A full-screen terminal front-end, `next-tui`, is also available — see [`TUI.md
 | `next resource set` | Toggle a resource available or unavailable |
 | `next forecast` | Show upcoming recurrence dates |
 | `next sync` | Pull from git remote, reconcile cache, auto-archive if due, push |
-| `next archive` | Move old closed tasks into archive segments now |
+| `next maintenance archive` | Move old closed tasks into archive segments now |
+| `next maintenance rebuild-cache` | Drop and rebuild the local `.next.db` read cache |
 | `next user` | Show active user filter |
 | `next user set` | Set the global active user filter |
 | `next user clear` | Clear the user filter |
@@ -215,7 +216,27 @@ next list --archived +@work --page 2
 
 ---
 
-### `next archive`
+### `next maintenance`
+
+Repository maintenance operations. These are grouped under `maintenance` to keep
+them out of the everyday command list; the namespace has room for future
+operations (e.g. integrity checks, lock cleanup).
+
+```
+next maintenance rebuild-cache [--json]
+next maintenance archive [--json]
+```
+
+#### `next maintenance rebuild-cache`
+
+Drop and rebuild the local SQLite read cache (`.next.db`) from the committed
+TOML files, git history, and archive segments. The cache is normally maintained
+automatically; use this only to recover from a corrupt or stale cache. It changes
+no committed data and makes no network calls, so it is not a mutation and never
+triggers a sync. Prints the number of active tasks in the rebuilt cache
+(`{ "rebuilt": true, "active_tasks": N }` with `--json`).
+
+#### `next maintenance archive`
 
 Move old closed tasks into archive segments now, bypassing the daily automatic
 throttle. Tasks whose completion (or, for cancelled tasks, last update) is older
@@ -228,12 +249,6 @@ Archived tasks stay visible in `next list --archived` and resolve by id or slug
 everywhere. Editing one brings it back automatically; deleting one is an error
 until it is edited back. The same pass runs automatically during sync at most
 once per day (disable with `auto = false` in `config/archive.toml`).
-
-**Usage**
-
-```
-next archive [--json]
-```
 
 **Options**
 
