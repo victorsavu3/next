@@ -288,6 +288,48 @@ pub fn build_items(
     TreeBuild { items, section_ids, task_section }
 }
 
+/// Given the visible tree `items` and the id of the node about to be deleted,
+/// returns the full selection path (root → node) the highlight should move to
+/// afterwards, following the rule: next sibling, else previous sibling, else
+/// the parent. Returns `None` when `target` isn't in the tree, or when it is a
+/// top-level node with no siblings and no parent.
+///
+/// Deleting a node never removes its ancestors, so the returned path stays
+/// valid across the post-delete rebuild and can be handed straight to
+/// `TreeState::select`.
+pub fn neighbor_after_delete(items: &[TreeItem<'_, Uuid>], target: Uuid) -> Option<Vec<Uuid>> {
+    /// `ancestors` is the path down to (and including) the parent of `siblings`;
+    /// it is empty at the top level, where `has_parent` is false.
+    fn walk(
+        siblings: &[TreeItem<'_, Uuid>],
+        ancestors: &[Uuid],
+        has_parent: bool,
+        target: Uuid,
+    ) -> Option<Vec<Uuid>> {
+        for (i, item) in siblings.iter().enumerate() {
+            if *item.identifier() == target {
+                // Next sibling, else previous sibling.
+                if let Some(sib) =
+                    siblings.get(i + 1).or_else(|| i.checked_sub(1).map(|p| &siblings[p]))
+                {
+                    let mut path = ancestors.to_vec();
+                    path.push(*sib.identifier());
+                    return Some(path);
+                }
+                // Only child: fall back to the parent (its full path is `ancestors`).
+                return has_parent.then(|| ancestors.to_vec());
+            }
+            let mut child_ancestors = ancestors.to_vec();
+            child_ancestors.push(*item.identifier());
+            if let Some(found) = walk(item.children(), &child_ancestors, true, target) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(items, &[], false, target)
+}
+
 /// Recursively builds one [`TreeItem`] (and its visible subtree).
 fn build_node(task: &Task, children: &HashMap<Uuid, Vec<&Task>>) -> TreeItem<'static, Uuid> {
     let kids = children.get(&task.id);
@@ -653,6 +695,63 @@ mod tests {
 
         assert_eq!(build.task_section.get(&work_task.id), Some(&section_uuid("@work")));
         assert_eq!(build.task_section.get(&plain.id), Some(&section_uuid("No context")));
+    }
+
+    // ── neighbor_after_delete ─────────────────────────────────────────────────
+
+    #[test]
+    fn neighbor_prefers_next_sibling() {
+        // Three roots sort to a, b, c inside "No context".
+        let a = Task::new("a".to_owned());
+        let b = Task::new("b".to_owned());
+        let c = Task::new("c".to_owned());
+        let build = build_items(
+            &[a.clone(), b.clone(), c.clone()],
+            &all_filter(),
+            &no_state(),
+            today(),
+            false,
+        );
+        let path = neighbor_after_delete(&build.items, b.id).unwrap();
+        assert_eq!(path.last(), Some(&c.id), "deleting b should target next sibling c");
+    }
+
+    #[test]
+    fn neighbor_falls_back_to_previous_sibling_when_last() {
+        let a = Task::new("a".to_owned());
+        let b = Task::new("b".to_owned());
+        let c = Task::new("c".to_owned());
+        let build = build_items(
+            &[a.clone(), b.clone(), c.clone()],
+            &all_filter(),
+            &no_state(),
+            today(),
+            false,
+        );
+        let path = neighbor_after_delete(&build.items, c.id).unwrap();
+        assert_eq!(path.last(), Some(&b.id), "deleting last sibling targets previous");
+    }
+
+    #[test]
+    fn neighbor_of_only_child_is_parent() {
+        let parent = Task::new("parent".to_owned());
+        let child = child_of("child", parent.id);
+        let build = build_items(
+            &[parent.clone(), child.clone()],
+            &all_filter(),
+            &no_state(),
+            today(),
+            false,
+        );
+        let path = neighbor_after_delete(&build.items, child.id).unwrap();
+        assert_eq!(path.last(), Some(&parent.id), "only child targets its parent");
+    }
+
+    #[test]
+    fn neighbor_of_missing_target_is_none() {
+        let a = Task::new("a".to_owned());
+        let build = build_items(&[a], &all_filter(), &no_state(), today(), false);
+        assert!(neighbor_after_delete(&build.items, Uuid::new_v4()).is_none());
     }
 
     #[test]

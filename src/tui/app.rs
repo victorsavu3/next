@@ -1435,8 +1435,15 @@ impl App {
         self.status = Some("delete cancelled".to_owned());
     }
 
-    /// Deletes the selected task (after confirmation), then reloads. The deleted
-    /// task is gone, so the selection clamps to the nearest remaining row.
+    /// Deletes the selected task (after confirmation), then reloads.
+    ///
+    /// The deleted task is gone from both views. In [`View::List`] the selection
+    /// is a numeric index, so keeping it and clamping already lands on the next
+    /// row (or the previous one when the last row was deleted). In [`View::Tree`]
+    /// the selection is keyed by id, which no longer resolves after the rebuild
+    /// and would otherwise snap to the top — so we remember the neighbour to land
+    /// on (next sibling, else previous sibling, else parent) before deleting and
+    /// restore it afterwards.
     fn do_delete(&mut self) {
         self.mode = Mode::Normal;
         let Some(task) = self.selected_task().cloned() else {
@@ -1444,6 +1451,15 @@ impl App {
             return;
         };
         let id = task.id;
+        // Compute the tree neighbour to land on *before* the task is gone. Its
+        // ancestor path is unaffected by the deletion, so it stays valid across
+        // the rebuild below.
+        let tree_neighbor = if self.view == View::Tree {
+            let items = self.tree_items();
+            super::tree::neighbor_after_delete(&items, id)
+        } else {
+            None
+        };
         let result = self.repo.transaction(|store, vcs, root| {
             let path = crate::core::storage::task_path(root, &task);
             store.delete_task(id)?;
@@ -1456,6 +1472,9 @@ impl App {
                 match self.reload() {
                     Ok(()) => {
                         self.clamp_selection();
+                        if self.view == View::Tree {
+                            self.reselect_tree_after_delete(tree_neighbor);
+                        }
                         self.status = Some("deleted".to_owned());
                     }
                     Err(e) => self.status = Some(format!("deleted; reload failed: {e}")),
@@ -1463,6 +1482,31 @@ impl App {
             }
             Err(e) => self.status = Some(format!("delete error: {e}")),
         }
+    }
+
+    /// Restores the tree highlight after a delete rebuild. `neighbor` is the path
+    /// computed before the delete (next/previous sibling, or parent). It is
+    /// honoured only when its target node is still a real, visible task — the
+    /// parent fall-back can resolve to a context-section header (e.g. an
+    /// only-child root whose section vanished), in which case we drop the stale
+    /// selection and let [`TreeView::ensure_selection`] land on the first row.
+    fn reselect_tree_after_delete(&mut self, neighbor: Option<Vec<uuid::Uuid>>) {
+        let items = self.tree_items();
+        let resolved = neighbor.filter(|path| {
+            path.last()
+                .is_some_and(|last| self.all_tasks.iter().any(|t| t.id == *last))
+        });
+        match resolved {
+            Some(path) => {
+                self.tree_view.state_mut().select(path);
+            }
+            None => {
+                // The remembered node is gone; clear the stale (deleted) path so
+                // `ensure_selection` re-anchors instead of pointing at nothing.
+                self.tree_view.state_mut().select(Vec::new());
+            }
+        }
+        self.tree_view.ensure_selection(&items);
     }
 
     /// Opens the move (parent-picker) popup for the selected task, seeded with
@@ -2760,6 +2804,155 @@ mod tests {
         app.update(Action::TreeToggleAll);
         assert!(app.tree_include_all());
         assert_eq!(app.tree_items().len(), 1, "done task visible with include-all");
+    }
+
+    // ── Delete keeps the cursor near the removed row ──────────────────────────
+
+    /// Builds an app whose repo holds freshly committed root tasks with the
+    /// given titles, returning the app plus each title's id.
+    fn app_with_committed_roots(
+        titles: &[&str],
+    ) -> (App, std::collections::HashMap<String, uuid::Uuid>) {
+        let mut repo = test_repo();
+        let today = NaiveDate::from_ymd_opt(TODAY.0, TODAY.1, TODAY.2).unwrap();
+        let mut ids = std::collections::HashMap::new();
+        for title in titles {
+            let task = crate::core::service::create_task(
+                (*title).to_owned(),
+                crate::core::service::CreateTaskParams::default(),
+                today,
+                &repo.repo_root.clone(),
+                &mut *repo.store,
+                &*repo.vcs,
+            )
+            .unwrap();
+            ids.insert((*title).to_owned(), task.id);
+        }
+        let mut app = App::new(Config::default(), repo, ConfigSource::Default, today);
+        app.reload().unwrap();
+        (app, ids)
+    }
+
+    /// Recursively finds the full selection path (root → node) for `id`.
+    fn tree_path(
+        items: &[tui_tree_widget::TreeItem<'_, uuid::Uuid>],
+        id: uuid::Uuid,
+    ) -> Option<Vec<uuid::Uuid>> {
+        for item in items {
+            if *item.identifier() == id {
+                return Some(vec![id]);
+            }
+            if let Some(mut sub) = tree_path(item.children(), id) {
+                sub.insert(0, *item.identifier());
+                return Some(sub);
+            }
+        }
+        None
+    }
+
+    /// Points the tree highlight at `id` (independent of the seeded selection).
+    fn select_in_tree(app: &mut App, id: uuid::Uuid) {
+        let items = app.tree_items();
+        let path = tree_path(&items, id).expect("task must be present in the tree");
+        app.tree_view.state_mut().select(path);
+    }
+
+    #[test]
+    fn tree_delete_middle_selects_next_sibling() {
+        let (mut app, ids) = app_with_committed_roots(&["alpha", "bravo", "charlie"]);
+        app.update(Action::SwitchView(View::Tree));
+        select_in_tree(&mut app, ids["bravo"]);
+
+        app.update(Action::OpenDelete);
+        app.update(Action::ConfirmDelete);
+
+        // Siblings sort alphabetically → charlie follows bravo.
+        assert_eq!(app.tree_view.selected_id(), Some(ids["charlie"]));
+        assert_eq!(app.selected_task().map(|t| t.id), Some(ids["charlie"]));
+    }
+
+    #[test]
+    fn tree_delete_last_selects_previous_sibling() {
+        let (mut app, ids) = app_with_committed_roots(&["alpha", "bravo", "charlie"]);
+        app.update(Action::SwitchView(View::Tree));
+        select_in_tree(&mut app, ids["charlie"]);
+
+        app.update(Action::OpenDelete);
+        app.update(Action::ConfirmDelete);
+
+        // charlie was last → highlight falls back to the previous sibling.
+        assert_eq!(app.tree_view.selected_id(), Some(ids["bravo"]));
+    }
+
+    #[test]
+    fn tree_delete_only_child_selects_parent() {
+        let mut repo = test_repo();
+        let today = NaiveDate::from_ymd_opt(TODAY.0, TODAY.1, TODAY.2).unwrap();
+        let parent = crate::core::service::create_task(
+            "parent".to_owned(),
+            crate::core::service::CreateTaskParams::default(),
+            today,
+            &repo.repo_root.clone(),
+            &mut *repo.store,
+            &*repo.vcs,
+        )
+        .unwrap();
+        let child = crate::core::service::create_task(
+            "child".to_owned(),
+            crate::core::service::CreateTaskParams {
+                parent: Some(parent.id.to_string()),
+                ..Default::default()
+            },
+            today,
+            &repo.repo_root.clone(),
+            &mut *repo.store,
+            &*repo.vcs,
+        )
+        .unwrap();
+        let mut app = App::new(Config::default(), repo, ConfigSource::Default, today);
+        app.reload().unwrap();
+
+        app.update(Action::SwitchView(View::Tree));
+        select_in_tree(&mut app, child.id);
+
+        app.update(Action::OpenDelete);
+        app.update(Action::ConfirmDelete);
+
+        // The only child is gone → highlight lands on the parent.
+        assert_eq!(app.tree_view.selected_id(), Some(parent.id));
+        assert_eq!(app.selected_task().map(|t| t.id), Some(parent.id));
+    }
+
+    #[test]
+    fn list_delete_middle_keeps_cursor_on_next_row() {
+        let (mut app, _ids) = app_with_committed_roots(&["alpha", "bravo", "charlie"]);
+        assert_eq!(app.view(), View::List);
+        assert_eq!(app.tasks().len(), 3);
+
+        app.selected = 1;
+        let next_id = app.tasks()[2].task.id;
+
+        app.update(Action::OpenDelete);
+        app.update(Action::ConfirmDelete);
+
+        // The row below shifts up into the same index; the cursor stays on it.
+        assert_eq!(app.tasks().len(), 2);
+        assert_eq!(app.selected(), 1);
+        assert_eq!(app.selected_task().map(|t| t.id), Some(next_id));
+    }
+
+    #[test]
+    fn list_delete_last_row_falls_back_to_previous() {
+        let (mut app, _ids) = app_with_committed_roots(&["alpha", "bravo", "charlie"]);
+        app.selected = 2;
+        let prev_id = app.tasks()[1].task.id;
+
+        app.update(Action::OpenDelete);
+        app.update(Action::ConfirmDelete);
+
+        // Deleting the last row clamps the cursor onto the new last row.
+        assert_eq!(app.selected(), 1);
+        assert_eq!(app.selected_task().map(|t| t.id), Some(prev_id));
     }
 
     #[test]
