@@ -53,6 +53,7 @@ fn set(ctx: &mut AppContext, users: Vec<String>) -> anyhow::Result<()> {
         store.save_state(&state)?;
         Ok(())
     })?;
+    println!("Active users set to: {}", users.join(" "));
     tracing::info!(cmd = "user", "set {}", users.join(" "));
     Ok(())
 }
@@ -64,6 +65,7 @@ fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
         store.save_state(&state)?;
         Ok(())
     })?;
+    println!("User filter cleared.");
     tracing::info!(cmd = "user", "cleared");
     Ok(())
 }

@@ -152,7 +152,7 @@ fn main() -> anyhow::Result<()> {
         && !cli_no_autosync
         && !(cli_offline || cli_no_sync || ctx.config.sync.offline)
     {
-        let sync_args = sync_cmd::Args { push_only: false, pull_only: false };
+        let sync_args = sync_cmd::Args { push_only: false, pull_only: false, quiet: true };
         if let Err(e) = sync_cmd::run(sync_args, &mut ctx) {
             // Conflicts already printed their message inside `run`; the
             // mutation itself succeeded, so they never change its exit code.

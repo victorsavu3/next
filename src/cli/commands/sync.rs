@@ -29,11 +29,18 @@ pub struct Args {
     /// Only pull; skip pushing to remote.
     #[arg(long)]
     pub pull_only: bool,
+
+    /// Suppress the success confirmation (set by autosync, not a CLI flag).
+    #[arg(skip)]
+    pub quiet: bool,
 }
 
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     match sync(&mut ctx.repo, args.push_only, args.pull_only)? {
         SyncOutcome::Clean => {
+            if !args.quiet {
+                println!("Synced with remote.");
+            }
             tracing::info!(cmd = "sync", "ok");
             // Trigger any registered plugin's periodic sync that is now due.
             // Best-effort; runs after the sync (no repo lock held).

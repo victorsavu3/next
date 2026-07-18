@@ -24,6 +24,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     if args.json {
         println!("{}", serde_json::to_string_pretty(&task)?);
     } else {
+        println!("cancelled [{}] {}", &task.id.to_string()[..8], task.title);
         tracing::info!(cmd = "cancel", "[{}] {}", &task.id.to_string()[..8], task.title);
     }
     Ok(())

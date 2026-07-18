@@ -83,6 +83,7 @@ fn set(ctx: &mut AppContext, resource: String, availability: Availability) -> an
     })?;
 
     let label = if available { "available" } else { "unavailable" };
+    println!("{resource} marked as {label}");
     tracing::info!(cmd = "resource", "{resource} marked as {label}");
     Ok(())
 }

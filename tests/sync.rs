@@ -386,7 +386,7 @@ fn sync_command_returns_conflicts_error() {
         config: Config::default(),
         repo: TaskRepository::with_parts(Box::new(b_store), Box::new(b_vcs), b_path.clone()),
     };
-    let args = sync_cmd::Args { push_only: false, pull_only: false };
+    let args = sync_cmd::Args { push_only: false, pull_only: false, quiet: false };
     let err = sync_cmd::run(args, &mut ctx).expect_err("sync over conflicting histories must fail");
 
     let conflicts = err

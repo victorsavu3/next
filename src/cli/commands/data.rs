@@ -71,6 +71,7 @@ fn set(ctx: &mut AppContext, args: SetArgs) -> anyhow::Result<()> {
         Ok(())
     })?;
     ctx.repo.record_task_event("data", id);
+    println!("data [{}] set {}={}", &id.to_string()[..8], args.key, value);
     Ok(())
 }
 
@@ -96,6 +97,7 @@ fn unset(ctx: &mut AppContext, args: UnsetArgs) -> anyhow::Result<()> {
         Ok(())
     })?;
     ctx.repo.record_task_event("data", id);
+    println!("data [{}] unset {}", &id.to_string()[..8], args.key);
     Ok(())
 }
 

@@ -78,6 +78,7 @@ fn set(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
         store.save_state(&state)?;
         Ok(())
     })?;
+    println!("Active contexts set to: {}", tags.join(" "));
     tracing::info!(cmd = "context", "set {}", tags.join(" "));
     Ok(())
 }
@@ -89,6 +90,7 @@ fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
         store.save_state(&state)?;
         Ok(())
     })?;
+    println!("Active context cleared.");
     tracing::info!(cmd = "context", "cleared");
     Ok(())
 }
@@ -101,6 +103,7 @@ fn exclude(ctx: &mut AppContext, tags: Vec<String>) -> anyhow::Result<()> {
         store.save_state(&state)?;
         Ok(())
     })?;
+    println!("Excluded contexts set to: {}", tags.join(" "));
     tracing::info!(cmd = "context", "exclude {}", tags.join(" "));
     Ok(())
 }
@@ -112,6 +115,7 @@ fn clear_excluded(ctx: &mut AppContext) -> anyhow::Result<()> {
         store.save_state(&state)?;
         Ok(())
     })?;
+    println!("Excluded contexts cleared.");
     tracing::info!(cmd = "context", "cleared excluded");
     Ok(())
 }
