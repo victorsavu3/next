@@ -634,6 +634,13 @@ everyday command list stays small (room for future integrity/cleanup operations)
   source-of-truth data (committed TOML files, git history, archive segments). It
   MUST NOT change any committed data and MUST NOT be treated as a mutation (no
   autopush, no push).
+- The cache MUST self-heal on a format or build change: it stamps both the
+  table-schema version and the writing binary's version, and when either differs
+  from the running binary — an upgrade, a downgrade, or a cache left by a
+  different or cache-unaware build — the next command that opens it MUST rebuild
+  from the source-of-truth data before serving any query, so a version change can
+  never surface stale, partial, or empty results. The rebuild is a one-time cost
+  per change (the stamp is advanced afterwards) and touches no committed data.
 - `archive` MUST run the archive pass on demand, bypassing the once-per-day
   throttle (see §2.3). It is a mutation (it commits) and follows the normal
   autopush rules. The archive pass is exposed *only* here — there is no

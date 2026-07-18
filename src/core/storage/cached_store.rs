@@ -39,6 +39,7 @@ impl CachedStore {
             .map_err(|e| TaskError::Other(format!("sqlite open {}: {e}", db_path.display())))?;
         configure_connection(&conn)?;
         setup_schema(&conn)?;
+        heal_on_version_change(&conn)?;
         let root = inner.root().to_path_buf();
         let this = Self {
             inner,
@@ -648,6 +649,17 @@ fn configure_connection(conn: &Connection) -> Result<()> {
 /// the task tables and clears the stored head so `open()` rebuilds from TOML.
 const SCHEMA_VERSION: &str = "3";
 
+/// The version of the binary that wrote the cache, stamped into `meta`.
+///
+/// [`SCHEMA_VERSION`] only tracks the table *layout*; it stays put when the
+/// reconcile or query *logic* changes between releases, or when a
+/// cache-unaware older binary writes TOML behind the cache's back. Stamping
+/// the crate version lets [`heal_on_version_change`] force a one-time full
+/// rebuild on any version change, so an upgrade can never serve results
+/// derived from a mismatched build. The rebuild reads from the committed TOML
+/// (the source of truth), so no committed data is touched.
+const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 fn setup_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
@@ -702,6 +714,30 @@ fn setup_schema(conn: &Connection) -> Result<()> {
         ",
     )
     .map_err(|e| TaskError::Other(format!("sqlite schema setup: {e}")))
+}
+
+/// Forces a full rebuild when the cache was last written by a different build.
+///
+/// Called after [`setup_schema`] and before the first `reconcile`. When the
+/// stored `build_version` differs from the running binary's (including the
+/// `None` of a pre-stamp or cache-unaware cache), it clears the stored git
+/// head so `reconcile` cannot take the "head unchanged, nothing to do" fast
+/// path and instead rebuilds every row from the TOML source of truth. The
+/// stamp is then advanced, so the heal is a one-time cost per upgrade.
+///
+/// The tables are left in place — the rebuild repopulates them — so this is
+/// cheaper than a [`SCHEMA_VERSION`] bump, which additionally drops them.
+fn heal_on_version_change(conn: &Connection) -> Result<()> {
+    if get_meta(conn, "build_version")?.as_deref() != Some(BUILD_VERSION) {
+        conn.execute("DELETE FROM meta WHERE key = 'head_hash'", [])
+            .map_err(|e| TaskError::Other(format!("sqlite version heal: {e}")))?;
+        set_meta(conn, "build_version", BUILD_VERSION)?;
+        tracing::info!(
+            build_version = BUILD_VERSION,
+            "cache written by a different build; rebuilding from TOML"
+        );
+    }
+    Ok(())
 }
 
 fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
@@ -1643,5 +1679,65 @@ mod tests {
 
         let version = store.with_conn(|conn| get_meta(conn, "schema_version")).unwrap();
         assert_eq!(version.as_deref(), Some(SCHEMA_VERSION));
+    }
+
+    #[test]
+    fn build_version_mismatch_forces_rebuild_despite_matching_head() {
+        let dir = TempDir::new().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+
+        // A real task on disk the rebuild must surface.
+        let mut inner =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let task = Task::new("Survivor");
+        inner.save_task(&task).unwrap();
+
+        // A cache with the *current* table layout and a head that matches the
+        // one we open with, but stamped with an old build version and holding a
+        // stale row. Only the build-version mismatch can trigger a rebuild here
+        // — reconcile's fast path would otherwise keep the stale row.
+        let db_path = dir.path().join(".next.db");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            setup_schema(&conn).unwrap();
+            set_meta(&conn, "build_version", "0.0.0-old").unwrap();
+            set_meta(&conn, "head_hash", "same-head").unwrap();
+            let stale = Task::new("Stale");
+            upsert_task_row(&conn, &stale, "tasks/stale.toml", None, 0).unwrap();
+        }
+
+        let store = CachedStore::open(inner, db_path, "same-head").unwrap();
+        let all = store.list_tasks().unwrap();
+        assert_eq!(all.len(), 1, "stale row must be gone, disk task present");
+        assert_eq!(all[0].title, "Survivor");
+
+        let stamped = store.with_conn(|conn| get_meta(conn, "build_version")).unwrap();
+        assert_eq!(stamped.as_deref(), Some(BUILD_VERSION));
+    }
+
+    #[test]
+    fn matching_build_version_keeps_reconcile_fast_path() {
+        let dir = TempDir::new().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let inner =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+
+        // Current schema + current build version + matching head + a lone row
+        // that is NOT on disk. If the heal wrongly fired, the rebuild would drop
+        // it; because the stamp already matches, the fast path preserves it.
+        let db_path = dir.path().join(".next.db");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            setup_schema(&conn).unwrap();
+            set_meta(&conn, "build_version", BUILD_VERSION).unwrap();
+            set_meta(&conn, "head_hash", "same-head").unwrap();
+            let ghost = Task::new("Ghost");
+            upsert_task_row(&conn, &ghost, "tasks/ghost.toml", None, 0).unwrap();
+        }
+
+        let store = CachedStore::open(inner, db_path, "same-head").unwrap();
+        let all = store.list_tasks().unwrap();
+        assert_eq!(all.len(), 1, "fast path must not rebuild when the stamp matches");
+        assert_eq!(all[0].title, "Ghost");
     }
 }

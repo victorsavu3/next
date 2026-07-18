@@ -38,7 +38,11 @@ single source of truth.
 
 `next` also maintains an SQLite database (`.next.db`) as a read cache. It is reconciled
 incrementally whenever the git HEAD changes (e.g. after a pull), so it is always
-consistent with the TOML files. Add it to `.gitignore`; `next init` does this for you.
+consistent with the TOML files. The cache is stamped with the writing binary's version
+and its table-schema version; when either differs from the running binary (an upgrade,
+or a cache left by a different build), the next command rebuilds it from the TOML source
+of truth automatically — so a version change can never surface stale or empty results.
+Add it to `.gitignore`; `next init` does this for you.
 
 Old closed tasks are **archived** automatically (at most once a day, during sync): they
 move out of `tasks/` into month-keyed segment files under `archive/`, keeping the
