@@ -10,11 +10,21 @@ use next::{
 };
 
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
     let cli = Cli::parse();
+
+    // `--log-level` sets the default filter directive; without it we fall back to
+    // the historical default (error), still honouring any `RUST_LOG` directives.
+    let default_directive = cli
+        .log_level
+        .map(next::cli::LogLevel::to_level_filter)
+        .unwrap_or(tracing::level_filters::LevelFilter::ERROR);
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::builder()
+                .with_default_directive(default_directive.into())
+                .from_env_lossy(),
+        )
+        .init();
 
     // Init, Tutorial, and Config run before the repository exists — handle them before AppContext.
     if let Some(Command::Init(args)) = cli.command {

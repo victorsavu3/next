@@ -236,6 +236,20 @@ The master flags `--autosync` / `--no-autosync` toggle **both** at once for one 
 flags are mutually exclusive. `next sync` always pulls and pushes and refuses to run with any
 disabling flag.
 
+### Logging
+
+`next` emits diagnostic logs through `tracing`. By default only errors are shown. Raise the
+verbosity for one invocation with the global `--log-level` flag (`error`, `warn`, `info`,
+`debug`, or `trace`):
+
+```sh
+next --log-level debug add "buy milk"
+```
+
+The flag sets the default log level; any `RUST_LOG` per-target directives still apply on top,
+so you can raise the floor with `--log-level debug` while silencing a noisy module via
+`RUST_LOG=next::core::sync=warn`.
+
 ---
 
 ## Configuration

@@ -88,11 +88,84 @@ mod tests {
         let result = Cli::try_parse_from(["next", "--no-sync", "list"]);
         assert!(result.is_err(), "--no-sync must no longer be recognised");
     }
+
+    #[test]
+    fn log_level_defaults_to_none() {
+        let cli = Cli::try_parse_from(["next", "list"]).unwrap();
+        assert_eq!(cli.log_level, None);
+    }
+
+    #[test]
+    fn log_level_accepts_each_level() {
+        for (arg, want) in [
+            ("error", LogLevel::Error),
+            ("warn", LogLevel::Warn),
+            ("info", LogLevel::Info),
+            ("debug", LogLevel::Debug),
+            ("trace", LogLevel::Trace),
+        ] {
+            let cli = Cli::try_parse_from(["next", "--log-level", arg, "list"]).unwrap();
+            assert_eq!(cli.log_level, Some(want), "--log-level {arg}");
+        }
+    }
+
+    #[test]
+    fn log_level_is_global() {
+        // `global = true` means the flag is accepted after the subcommand too.
+        let cli = Cli::try_parse_from(["next", "list", "--log-level", "debug"]).unwrap();
+        assert_eq!(cli.log_level, Some(LogLevel::Debug));
+    }
+
+    #[test]
+    fn log_level_rejects_unknown_value() {
+        let result = Cli::try_parse_from(["next", "--log-level", "verbose", "list"]);
+        assert!(result.is_err(), "unknown log level must be rejected");
+    }
+
+    #[test]
+    fn log_level_maps_to_tracing_filter() {
+        use tracing::level_filters::LevelFilter;
+        assert_eq!(LogLevel::Error.to_level_filter(), LevelFilter::ERROR);
+        assert_eq!(LogLevel::Warn.to_level_filter(), LevelFilter::WARN);
+        assert_eq!(LogLevel::Info.to_level_filter(), LevelFilter::INFO);
+        assert_eq!(LogLevel::Debug.to_level_filter(), LevelFilter::DEBUG);
+        assert_eq!(LogLevel::Trace.to_level_filter(), LevelFilter::TRACE);
+    }
 }
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+/// Diagnostic log verbosity, selectable per invocation with `--log-level`.
+///
+/// Maps directly onto the `tracing` levels.  The chosen level becomes the
+/// default directive of the log filter; when `RUST_LOG` is also set, its
+/// per-target directives are layered on top (so you can raise the floor with
+/// `--log-level debug` while still silencing a noisy module via `RUST_LOG`).
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[value(rename_all = "lower")]
+pub enum LogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    /// Convert to the corresponding `tracing` level filter.
+    pub fn to_level_filter(self) -> tracing::level_filters::LevelFilter {
+        use tracing::level_filters::LevelFilter;
+        match self {
+            LogLevel::Error => LevelFilter::ERROR,
+            LogLevel::Warn => LevelFilter::WARN,
+            LogLevel::Info => LevelFilter::INFO,
+            LogLevel::Debug => LevelFilter::DEBUG,
+            LogLevel::Trace => LevelFilter::TRACE,
+        }
+    }
+}
 
 /// next — a task manager with automatic urgency scoring.
 #[derive(Parser, Debug)]
@@ -101,6 +174,12 @@ pub struct Cli {
     /// Path to the configuration file (default: $XDG_CONFIG_HOME/task-manager/config.toml).
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
+
+    /// Diagnostic log verbosity for this invocation: error, warn, info, debug,
+    /// or trace.  Sets the default log level (overriding `RUST_LOG`'s default of
+    /// error); any `RUST_LOG` per-target directives still apply on top.
+    #[arg(long, global = true, value_name = "LEVEL")]
+    pub log_level: Option<LogLevel>,
 
     /// Path to the task repository root.  Overrides the `repository` key in
     /// the config file and the automatic upward search from the current
