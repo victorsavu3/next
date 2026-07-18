@@ -33,8 +33,8 @@ use super::sync::{SyncMsg, SyncResult};
 const DETAIL_SCROLL_STEP: u16 = 10;
 
 /// Which top-level view is active. [`View::List`] is the scored, flat list
-/// (the original UI); [`View::Tree`] is the parent/child hierarchy; and
-/// [`View::Forecast`] is the chronological, sectioned forecast.
+/// (the original UI); [`View::Tree`] is the parent/child hierarchy (the default
+/// on startup); and [`View::Forecast`] is the chronological, sectioned forecast.
 ///
 /// Switch with `1`/`2`/`3` (or `Tab` to cycle) from [`Mode::Normal`]. The list
 /// and tree views share the detail pane and the per-task actions/edit keys; the
@@ -42,9 +42,9 @@ const DETAIL_SCROLL_STEP: u16 = 10;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum View {
     /// The scored, sorted flat task list.
-    #[default]
     List,
-    /// The parent/child task hierarchy.
+    /// The parent/child task hierarchy (the default view on startup).
+    #[default]
     Tree,
     /// The chronological forecast (concrete + projected occurrences).
     Forecast,
@@ -703,6 +703,11 @@ impl App {
         self.tag_metas = tag_metas;
         self.task_dates = task_dates;
         self.clamp_selection();
+        // Tree is the default view and may never pass through `switch_view`, so
+        // seed its highlight here whenever it is active (no-op once selected).
+        if self.view == View::Tree {
+            self.seed_tree_selection();
+        }
         Ok(())
     }
 
@@ -1150,22 +1155,30 @@ impl App {
             self.reload().ok();
         }
         if view == View::Tree {
-            let items = self.tree_items();
-            // Seed the tree highlight from the list selection where possible.
-            // Tasks are now nested under section headers, so the selection path
-            // is [section_uuid, task_uuid].
-            if self.tree_view.selected_id().is_none() {
-                if let Some(id) = self.tasks.get(self.selected).map(|s| s.task.id) {
-                    let path = if let Some(&sec_id) = self.tree_task_section.get(&id) {
-                        vec![sec_id, id]
-                    } else {
-                        vec![id]
-                    };
-                    self.tree_view.state_mut().select(path);
-                }
-            }
-            self.tree_view.ensure_selection(&items);
+            self.seed_tree_selection();
         }
+    }
+
+    /// Seeds the tree highlight when it has none yet: prefer the current list
+    /// selection (so switching List → Tree keeps the same task highlighted),
+    /// otherwise fall back to the first node. Idempotent — an existing tree
+    /// selection is left untouched, so it is safe to call on every reload and
+    /// when starting up in the default [`View::Tree`].
+    fn seed_tree_selection(&mut self) {
+        let items = self.tree_items();
+        // Tasks are nested under section headers, so the selection path is
+        // [section_uuid, task_uuid].
+        if self.tree_view.selected_id().is_none() {
+            if let Some(id) = self.tasks.get(self.selected).map(|s| s.task.id) {
+                let path = if let Some(&sec_id) = self.tree_task_section.get(&id) {
+                    vec![sec_id, id]
+                } else {
+                    vec![id]
+                };
+                self.tree_view.state_mut().select(path);
+            }
+        }
+        self.tree_view.ensure_selection(&items);
     }
 
     /// Opens the edit modal for the selected task. No-op when the list is empty.
@@ -2302,6 +2315,8 @@ mod tests {
     #[test]
     fn selected_task_tracks_index() {
         let mut app = app_with_n_tasks(3);
+        // Index tracking is a list-view concept; Tree is the startup view.
+        app.view = View::List;
         app.select_next();
         assert_eq!(app.selected_task().unwrap().title, "task 1");
     }
@@ -2623,6 +2638,8 @@ mod tests {
             .unwrap();
         app.reload().unwrap();
 
+        // Operate through the list selection; Tree is the startup view.
+        app.view = View::List;
         let idx = app.tasks().iter().position(|s| s.task.id == child_id).unwrap();
         app.selected = idx;
         app.update(Action::OpenMove);
@@ -2743,11 +2760,17 @@ mod tests {
     // ── view switching + tree/forecast (T8) ─────────────────────────────────
 
     #[test]
+    fn default_view_is_tree() {
+        let app = app_with_repo_tasks(vec![Task::new("a")]);
+        assert_eq!(app.view(), View::Tree);
+    }
+
+    #[test]
     fn switch_view_changes_active_view() {
         let mut app = app_with_repo_tasks(vec![Task::new("a")]);
-        assert_eq!(app.view(), View::List);
-        app.update(Action::SwitchView(View::Tree));
         assert_eq!(app.view(), View::Tree);
+        app.update(Action::SwitchView(View::List));
+        assert_eq!(app.view(), View::List);
         app.update(Action::SwitchView(View::Forecast));
         assert_eq!(app.view(), View::Forecast);
     }
@@ -2755,12 +2778,14 @@ mod tests {
     #[test]
     fn cycle_view_rotates_list_tree_forecast() {
         let mut app = app_with_repo_tasks(vec![Task::new("a")]);
-        app.update(Action::CycleView);
+        // Startup view is Tree; the Tab cycle order is List → Tree → Forecast.
         assert_eq!(app.view(), View::Tree);
         app.update(Action::CycleView);
         assert_eq!(app.view(), View::Forecast);
         app.update(Action::CycleView);
         assert_eq!(app.view(), View::List);
+        app.update(Action::CycleView);
+        assert_eq!(app.view(), View::Tree);
     }
 
     #[test]
@@ -3257,6 +3282,8 @@ mod tests {
         blocked.blocked_by = vec![blocker_id];
 
         let mut app = app_with_repo_tasks(vec![blocker, blocked]);
+        // Jump-to-blocker moves the list selection; Tree is the startup view.
+        app.view = View::List;
         // Show all so both are visible.
         app.filter_all = true;
         app.reload().unwrap();

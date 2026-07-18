@@ -55,15 +55,15 @@ view), and `forecast_horizon_days` (the initial forecast horizon).
 ## Views
 
 `next-tui` has three top-level views, switched from Normal mode with `1`/`2`/`3` or cycled
-with `Tab` (`List → Tree → Forecast → List`):
+with `Tab` (`List → Tree → Forecast → List`). It opens in the **Tree** view:
 
 - **List** (`1`) — the scored, sorted flat task list, the same pipeline as `next list`
   (filters + scoring + the configured `list_limit`). Overdue / due-today rows are
   highlighted. A detail pane shows the selected task's fields, resolved
   parent/children/blockers, and its urgency-score breakdown.
-- **Tree** (`2`) — the parent/child hierarchy (`tui-tree-widget`). Nodes expand/collapse;
-  a tree-local toggle includes done/cancelled tasks. The detail pane and per-task actions
-  operate on the highlighted node.
+- **Tree** (`2`) — the parent/child hierarchy (`tui-tree-widget`), shown by default on
+  startup. Nodes expand/collapse; a tree-local toggle includes done/cancelled tasks. The
+  detail pane and per-task actions operate on the highlighted node.
 - **Forecast** (`3`) — the chronological forecast of upcoming due dates, including projected
   schedule-recurrence occurrences over the horizon (same engine as `next forecast`). It is
   a read-only, full-width list; the horizon is adjustable live.

@@ -1386,6 +1386,8 @@ mod tests {
     #[test]
     fn renders_rich_detail_without_panicking() {
         let mut app = app_with_tasks(rich_tasks());
+        // This exercises the list view's detail pane; Tree is the startup view.
+        app.update(Action::SwitchView(View::List));
         // The child is blocked, so reveal it via `--all`.
         app.update(Action::ToggleAll);
         // Select the child (the richly-populated one).
@@ -1407,6 +1409,8 @@ mod tests {
     #[test]
     fn detail_lines_cover_show_fields() {
         let mut app = app_with_tasks(rich_tasks());
+        // This exercises the list view's detail pane; Tree is the startup view.
+        app.update(Action::SwitchView(View::List));
         app.update(Action::ToggleAll);
         let idx = app
             .tasks()
