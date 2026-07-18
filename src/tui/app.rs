@@ -1775,12 +1775,12 @@ impl App {
     /// moved across threads) and stores the result receiver for [`App::poll_sync`].
     /// Triggers a background sync at startup when the local copy is stale
     /// (Req A pull-before-query, TUI variant — non-blocking so the UI never
-    /// freezes). Gated by `sync.pull_before_query`; a no-op when disabled, when
+    /// freezes). Gated by `sync.autopull`; a no-op when disabled, when
     /// a sync is already running, or when the last pull is within the staleness
     /// window. A clean sync updates `last_pull` (see `core::sync::sync`), so this
     /// won't re-fire on every launch.
     pub fn start_sync_if_stale(&mut self) {
-        if self.syncing || !self.config.sync.pull_before_query {
+        if self.syncing || !self.config.sync.autopull {
             return;
         }
         let staleness = std::time::Duration::from_secs(self.config.sync.staleness_secs);
@@ -2931,9 +2931,9 @@ mod tests {
     #[test]
     fn start_sync_if_stale_noop_when_disabled() {
         let mut app = app_with_repo_tasks(vec![Task::new("t")]);
-        app.config.sync.pull_before_query = false;
+        app.config.sync.autopull = false;
         app.start_sync_if_stale();
-        assert!(!app.syncing(), "must not sync when pull_before_query is off");
+        assert!(!app.syncing(), "must not sync when autopull is off");
     }
 
     #[test]

@@ -32,11 +32,41 @@ fn main() -> anyhow::Result<()> {
         return commands::config::run(args, cli.config.as_deref());
     }
 
+    // Raw sync flags. clap guarantees the mutually-exclusive ones can't be set
+    // together (see the `conflicts_with*` attributes on `Cli`).
     let cli_autosync = cli.autosync;
     let cli_no_autosync = cli.no_autosync;
     let cli_offline = cli.offline;
-    let cli_no_sync = cli.no_sync;
+    let cli_autopull = cli.autopull;
+    let cli_no_autopull = cli.no_autopull;
+    let cli_autopush = cli.autopush;
+    let cli_no_autopush = cli.no_autopush;
     let mut ctx = AppContext::new(cli.config.as_deref(), cli.repo.as_deref())?;
+
+    // Resolve the two orthogonal sync capabilities for this invocation.
+    // Precedence: granular flag → master flag → config default.
+    let effective_autopull = if cli_autopull {
+        true
+    } else if cli_no_autopull {
+        false
+    } else if cli_autosync {
+        true
+    } else if cli_no_autosync || cli_offline {
+        false
+    } else {
+        ctx.config.sync.autopull
+    };
+    let effective_autopush = if cli_autopush {
+        true
+    } else if cli_no_autopush {
+        false
+    } else if cli_autosync {
+        true
+    } else if cli_no_autosync || cli_offline {
+        false
+    } else {
+        ctx.config.sync.autopush
+    };
 
     // Default to `list` when no subcommand is given.
     let command = cli.command.unwrap_or_else(|| {
@@ -90,13 +120,22 @@ fn main() -> anyhow::Result<()> {
         "add" | "start" | "stop" | "done" | "cancel" | "edit" | "delete" | "move" | "tag" | "data" | "archive"
     );
 
-    // Pull-before-query: before any command except `sync` (which pulls
-    // explicitly; init/tutorial were handled earlier), pull from the remote if
-    // the local copy is stale. Best-effort — it never fails the command.
+    // An explicit `next sync` always pulls and pushes, so a flag that disables
+    // either half contradicts the command — fail fast with an actionable error
+    // rather than silently ignoring the flag.
+    if cmd_name == "sync" && (cli_no_autosync || cli_offline || cli_no_autopull || cli_no_autopush) {
+        anyhow::bail!(
+            "next sync cannot run with --no-autopull/--no-autopush/--no-autosync/--offline: \
+             it always pulls and pushes"
+        );
+    }
+
+    // Autopull: before any command except `sync` (which pulls explicitly;
+    // init/tutorial were handled earlier), pull from the remote if the local
+    // copy is stale. Best-effort — it never fails the command.
     if cmd_name != "sync" {
         let opts = core::sync::StaleOpts {
-            enabled: ctx.config.sync.pull_before_query
-                && !(cli_offline || cli_no_sync || ctx.config.sync.offline),
+            enabled: effective_autopull,
             staleness: Duration::from_secs(ctx.config.sync.staleness_secs),
             now: chrono::Utc::now(),
         };
@@ -149,19 +188,14 @@ fn main() -> anyhow::Result<()> {
         tracing::error!(cmd = cmd_name, "{e:#}");
     }
 
-    if result.is_ok()
-        && is_mutation
-        && (cli_autosync || ctx.config.autosync)
-        && !cli_no_autosync
-        && !(cli_offline || cli_no_sync || ctx.config.sync.offline)
-    {
+    if result.is_ok() && is_mutation && effective_autopush {
         let sync_args = sync_cmd::Args { push_only: false, pull_only: false, quiet: true };
         if let Err(e) = sync_cmd::run(sync_args, &mut ctx) {
             // Conflicts already printed their message inside `run`; the
             // mutation itself succeeded, so they never change its exit code.
             if e.downcast_ref::<sync_cmd::ConflictsError>().is_none() {
-                eprintln!("autosync failed: {e:#}");
-                tracing::error!(cmd = "sync", "autosync: {e:#}");
+                eprintln!("autopush failed: {e:#}");
+                tracing::error!(cmd = "sync", "autopush: {e:#}");
             }
         }
     }

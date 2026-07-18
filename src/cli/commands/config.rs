@@ -20,7 +20,7 @@ pub enum ConfigSubcommand {
 
 #[derive(clap::Args, Debug)]
 pub struct GetArgs {
-    /// Config key to read (e.g. `autosync`, `sync.pull_before_query`).
+    /// Config key to read (e.g. `sync.autopull`, `sync.autopush`).
     /// Omit to print all keys.
     pub key: Option<String>,
 }
@@ -64,10 +64,8 @@ fn load_config(config_path: Option<&Path>) -> Config {
 
 fn print_key(cfg: &Config, key: &str) -> anyhow::Result<()> {
     match key {
-        "autosync" => println!("autosync = {}", cfg.autosync),
-        "sync.pull_before_query" => {
-            println!("sync.pull_before_query = {}", cfg.sync.pull_before_query)
-        }
+        "sync.autopull" => println!("sync.autopull = {}", cfg.sync.autopull),
+        "sync.autopush" => println!("sync.autopush = {}", cfg.sync.autopush),
         "sync.git_subprocess" => println!("sync.git_subprocess = {}", cfg.sync.git_subprocess),
         "sync.staleness_secs" => println!("sync.staleness_secs = {}", cfg.sync.staleness_secs),
         "sync.pull_timeout_secs" => {
@@ -92,8 +90,8 @@ fn print_key(cfg: &Config, key: &str) -> anyhow::Result<()> {
 
 fn print_all(cfg: &Config) -> anyhow::Result<()> {
     let keys = [
-        "autosync",
-        "sync.pull_before_query",
+        "sync.autopull",
+        "sync.autopush",
         "sync.git_subprocess",
         "sync.staleness_secs",
         "sync.pull_timeout_secs",
@@ -118,8 +116,8 @@ fn parse_bool(value: &str) -> anyhow::Result<bool> {
 
 fn apply_set(cfg: &mut Config, key: &str, value: &str) -> anyhow::Result<()> {
     match key {
-        "autosync" => cfg.autosync = parse_bool(value)?,
-        "sync.pull_before_query" => cfg.sync.pull_before_query = parse_bool(value)?,
+        "sync.autopull" => cfg.sync.autopull = parse_bool(value)?,
+        "sync.autopush" => cfg.sync.autopush = parse_bool(value)?,
         "sync.git_subprocess" => cfg.sync.git_subprocess = parse_bool(value)?,
         "sync.staleness_secs" => {
             cfg.sync.staleness_secs = value
@@ -203,38 +201,58 @@ mod tests {
     }
 
     #[test]
-    fn set_bool_autosync() {
+    fn set_bool_autopush() {
         let dir = TempDir::new().unwrap();
         let path = write_config(&dir, "");
 
-        cmd_set(SetArgs { key: "autosync".into(), value: "true".into() }, Some(&path)).unwrap();
+        cmd_set(SetArgs { key: "sync.autopush".into(), value: "true".into() }, Some(&path)).unwrap();
 
         let cfg = crate::core::bootstrap::parse_config_file(&path);
-        assert!(cfg.autosync);
+        assert!(cfg.sync.autopush);
     }
 
     #[test]
-    fn set_nested_bool_pull_before_query() {
+    fn set_nested_bool_autopull() {
         let dir = TempDir::new().unwrap();
         let path = write_config(&dir, "");
 
         cmd_set(
-            SetArgs { key: "sync.pull_before_query".into(), value: "false".into() },
+            SetArgs { key: "sync.autopull".into(), value: "false".into() },
             Some(&path),
         )
         .unwrap();
 
         let cfg = crate::core::bootstrap::parse_config_file(&path);
-        assert!(!cfg.sync.pull_before_query);
+        assert!(!cfg.sync.autopull);
     }
 
     #[test]
     fn get_single_key() {
         let dir = TempDir::new().unwrap();
-        let path = write_config(&dir, "autosync = true\n");
+        let path = write_config(&dir, "[sync]\nautopush = true\n");
 
-        let args = GetArgs { key: Some("autosync".into()) };
+        let args = GetArgs { key: Some("sync.autopush".into()) };
         cmd_get(args, Some(&path)).unwrap();
+    }
+
+    #[test]
+    fn set_removed_key_autosync_errors() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(&dir, "");
+        let result =
+            cmd_set(SetArgs { key: "autosync".into(), value: "true".into() }, Some(&path));
+        assert!(result.is_err(), "old `autosync` key must no longer be settable");
+    }
+
+    #[test]
+    fn set_removed_key_pull_before_query_errors() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(&dir, "");
+        let result = cmd_set(
+            SetArgs { key: "sync.pull_before_query".into(), value: "false".into() },
+            Some(&path),
+        );
+        assert!(result.is_err(), "old `sync.pull_before_query` key must no longer be settable");
     }
 
     #[test]
@@ -309,13 +327,13 @@ mod tests {
         let path = dir.path().join("subdir").join("config.toml");
 
         cmd_set(
-            SetArgs { key: "autosync".into(), value: "true".into() },
+            SetArgs { key: "sync.autopush".into(), value: "true".into() },
             Some(&path),
         )
         .unwrap();
         assert!(path.exists());
         let cfg = crate::core::bootstrap::parse_config_file(&path);
-        assert!(cfg.autosync);
+        assert!(cfg.sync.autopush);
     }
 
     #[test]
@@ -344,7 +362,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_config(&dir, "");
         let result = cmd_set(
-            SetArgs { key: "autosync".into(), value: "maybe".into() },
+            SetArgs { key: "sync.autopush".into(), value: "maybe".into() },
             Some(&path),
         );
         assert!(result.is_err());

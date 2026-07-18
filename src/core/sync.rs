@@ -95,7 +95,7 @@ fn maybe_auto_archive(ctx: &mut TaskRepository, now: DateTime<Utc>) {
 /// with the command regardless of which arm is returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PullStatus {
-    /// Pull-before-query is disabled (config off or `--offline`); no I/O done.
+    /// Autopull is disabled (config off, `--no-autopull`, or `--offline`); no I/O done.
     Disabled,
     /// The local copy is within the staleness window; no pull was attempted.
     Fresh,
