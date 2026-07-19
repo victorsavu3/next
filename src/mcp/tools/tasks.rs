@@ -541,6 +541,45 @@ mod tests {
     }
 
     #[test]
+    fn update_task_stop_applies_field_edits() {
+        // {action:"stop", <edits>} must apply the edits AND perform the stop.
+        let (_dir, mut ctx) = make_ctx();
+        let task = add_task(&json!({ "title": "Task" }), &mut ctx).unwrap();
+        let id = task["id"].as_str().unwrap().to_owned();
+        update_task(&json!({ "id": id, "action": "start" }), &mut ctx).unwrap();
+
+        let stopped = update_task(
+            &json!({ "id": id, "action": "stop", "description": "paused for now" }),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(stopped["status"], "open");
+        assert_eq!(
+            stopped["description"], "paused for now",
+            "description edit must not be dropped by the stop action"
+        );
+    }
+
+    #[test]
+    fn update_task_cancel_applies_field_edits() {
+        // {action:"cancel", <edits>} must apply the edits AND perform the cancel.
+        let (_dir, mut ctx) = make_ctx();
+        let task = add_task(&json!({ "title": "Task" }), &mut ctx).unwrap();
+        let id = task["id"].as_str().unwrap().to_owned();
+
+        let cancelled = update_task(
+            &json!({ "id": id, "action": "cancel", "notes": "no longer needed" }),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(cancelled["status"], "cancelled");
+        assert_eq!(
+            cancelled["notes"], "no longer needed",
+            "notes edit must not be dropped by the cancel action"
+        );
+    }
+
+    #[test]
     fn update_task_long_term_false_clears() {
         // Both true and false must take effect; previously only true was mapped.
         let (_dir, mut ctx) = make_ctx();
