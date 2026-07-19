@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
@@ -11,13 +12,30 @@ use next::mcp::{
 };
 use next::TaskRepository;
 
+/// Minimal argv scan for `--config <path>` / `--config=<path>`.
+///
+/// next-mcp intentionally does not depend on clap (keeps the container image
+/// lean); this one flag is all the CLI surface the server needs.
+fn config_arg() -> Option<PathBuf> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if let Some(path) = arg.strip_prefix("--config=") {
+            return Some(PathBuf::from(path));
+        }
+        if arg == "--config" {
+            return args.next().map(PathBuf::from);
+        }
+    }
+    None
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let config = McpConfig::from_env()?;
+    let config = McpConfig::load(config_arg())?;
 
     // Ensure the git repo is present (clone if needed).
     let repo_path = clone_or_open(&config)?;
