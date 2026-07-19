@@ -812,17 +812,26 @@ binary. It implements the MCP Streamable HTTP transport (JSON-RPC 2.0 over HTTP 
 ### 12.2 Configuration
 
 Configuration MUST be resolved as **env var > TOML config file > built-in default**.
-The config file is read from `NEXT_CONFIG` if set, else `/data/config/config.toml`;
-an absent or unparsable file falls back to defaults (with a warning when unparsable).
+The config-file path MUST be resolved as `--config <path>` > `NEXT_MCP_CONFIG` >
+`NEXT_CONFIG` (deprecated alias) > `$XDG_CONFIG_HOME/next-mcp/config.toml` (the image
+sets `XDG_CONFIG_HOME=/data/config`, giving `/data/config/next-mcp/config.toml`); an
+absent or unparsable file falls back to defaults (with a warning when unparsable).
 The file schema mirrors the variables: top-level `bearer_token`, `webhook_token`,
 `repo_path`, `bind_addr`; `[git]` `url`/`user`/`token`/`author_name`/`author_email`/
 `partial_clone`; `[sync]` `interval_secs`/`deferred_delay_secs`/`autopull` (accepts the
 old name `pull_before_query` as an alias)/`staleness_secs`/`pull_timeout_secs`.
 
+Each secret (`bearer_token`, `webhook_token`, `git.token`) MUST accept exactly one of
+three forms — inline, `<name>_file` (a path, e.g. a podman secret at `/run/secrets/…`),
+or `<name>_env` (the name of an env var holding the value) — with more than one form for
+the same secret being a hard error. The matching legacy `NEXT_*` env var MUST still take
+precedence and short-circuit resolution (so a stale `*_file` cannot break an env-based
+deployment). This lets `config.toml` stay non-secret (references only).
+
 | Variable | Required | Default |
 |----------|----------|---------|
 | `NEXT_BEARER_TOKEN` | ✓ (env or file) | — |
-| `NEXT_CONFIG` | | `/data/config/config.toml` |
+| `NEXT_MCP_CONFIG` | | `/data/config/next-mcp/config.toml` (`--config` wins; `NEXT_CONFIG` deprecated alias) |
 | `NEXT_GIT_URL` | on first start | — |
 | `NEXT_GIT_USER` / `NEXT_GIT_TOKEN` | | — |
 | `NEXT_GIT_AUTHOR_NAME` / `NEXT_GIT_AUTHOR_EMAIL` | | `next-mcp` / `next-mcp@unknown` |
@@ -922,6 +931,6 @@ At most one sync MUST run at a time. When an explicit sync (tool call or webhook
 - A `Containerfile` MUST be provided for building the image
 - A Podman Quadlet unit file (`quadlets/next-mcp.container`) MUST be provided
 - The container MUST run as an unprivileged non-root user (UID 1000)
-- Three named volumes MUST be used: `next-tasks` at `/data/tasks` (tasks repository), `next-state` at `/data/state` (XDG machine-local state via `XDG_STATE_HOME=/data/state`), and `next-config` at `/data/config` (optional TOML config file)
-- Secrets MUST be passed via an `EnvironmentFile` or the config file (chmod 600), not baked into the image
+- Three named volumes MUST be used: `next-tasks` at `/data/tasks` (tasks repository), `next-state` at `/data/state` (XDG machine-local state via `XDG_STATE_HOME=/data/state`), and `next-config` at `/data/config` (TOML config file at `next-mcp/config.toml`, via `XDG_CONFIG_HOME=/data/config`)
+- Secrets MUST be passed via podman `Secret=` mounts referenced by the config's `*_file` forms, an `EnvironmentFile` override, or an inline chmod-600 config file — never baked into the image
 - Credentials embedded in `NEXT_GIT_URL` MUST be stripped before any log output; only the credential-free URL MAY be logged

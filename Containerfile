@@ -26,7 +26,7 @@ RUN apk add --no-cache \
 # Unprivileged service user. UID 1000 matches typical rootless-Podman host UID.
 RUN addgroup -S -g 1000 next \
  && adduser  -S -G next -u 1000 -h /home/next -s /sbin/nologin next \
- && mkdir -p /home/next /data/tasks /data/state /data/config \
+ && mkdir -p /home/next /data/tasks /data/state /data/config/next-mcp \
  && chown -R next:next /home/next /data/tasks /data/state /data/config
 
 COPY --from=builder /app/target/release/next-mcp /usr/local/bin/
@@ -36,10 +36,13 @@ COPY --from=builder /app/target/release/next-mcp /usr/local/bin/
 # This container is single-purpose and all repositories it touches are trusted.
 RUN git config --system safe.directory '*'
 
-# XDG_STATE_HOME at a well-known path inside the container so the quadlet
-# volume mount is predictable regardless of the home directory.
+# XDG_STATE_HOME / XDG_CONFIG_HOME at well-known paths inside the container so
+# the quadlet volume mounts are predictable regardless of the home directory.
+# XDG_CONFIG_HOME=/data/config makes next-mcp's default config path resolve to
+# /data/config/next-mcp/config.toml.
 ENV HOME=/home/next
 ENV XDG_STATE_HOME=/data/state
+ENV XDG_CONFIG_HOME=/data/config
 
 USER next
 EXPOSE 3000

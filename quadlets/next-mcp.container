@@ -16,15 +16,27 @@ Volume=next-config:/data/config:Z
 #   Volume=/var/next-mcp/data/:/data/:Z
 #   (creates tasks/, state/, and config/ subdirectories automatically on first start)
 
-# TOML config file — place config.toml in the next-config volume
-# (see quadlets/next-mcp.config.toml.example).  Sensitive secrets (bearer
-# token, git token) can live here instead of, or in addition to, the env file.
-# The env file always takes precedence over the config file for any key set
-# in both places.
+# TOML config file — place config.toml in the next-config volume at
+#   next-mcp/config.toml  (resolves to /data/config/next-mcp/config.toml, since
+#   the image sets XDG_CONFIG_HOME=/data/config).
+# See quadlets/next-mcp.config.toml.example for the full schema.
 
-# Environment overrides — keep this file at ~/.config/next-mcp/env (chmod 600).
-# Only needed for values not already set in config.toml.
-EnvironmentFile=%h/.config/next-mcp/env
+# Secrets — provision with `podman secret create`, then reference them from
+# config.toml via the *_file forms (they mount read-only at /run/secrets/<name>):
+#   podman secret create next_bearer_token -   # paste token, Ctrl-D
+#   podman secret create next_git_token -
+# and in config.toml:
+#   bearer_token_file = "/run/secrets/next_bearer_token"
+#   [git]
+#   token_file = "/run/secrets/next_git_token"
+Secret=next_bearer_token,type=mount
+#Secret=next_webhook_token,type=mount
+#Secret=next_git_token,type=mount
+
+# Env vars remain a permanent top-precedence override (env > config > default).
+# Uncomment to supply any value (e.g. secrets) via an env file instead of the
+# config-file/secret mechanism above:
+#EnvironmentFile=%h/.config/next-mcp/env
 
 [Service]
 Restart=always

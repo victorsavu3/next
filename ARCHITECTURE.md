@@ -61,7 +61,6 @@ next/                             # crate root (also git repo)
   Containerfile                   # multi-stage build for next-mcp container image
   quadlets/
     next-mcp.container            # Podman Quadlet systemd unit file
-    next-mcp.env.example          # environment-file template
     next-mcp.config.toml.example  # TOML config-file template (next-config volume)
   src/
     lib.rs                        # `pub mod core` + feature-gated cli/mcp/forgejo/tui; small type prelude

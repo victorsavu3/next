@@ -1,23 +1,37 @@
 # next-mcp configuration file
-# Default location inside the container: /data/config/config.toml
-# Override with the NEXT_CONFIG environment variable.
+# Default location inside the container: /data/config/next-mcp/config.toml
+#   (XDG_CONFIG_HOME=/data/config is set in the image).
+# Override the path with `next-mcp --config <path>` or NEXT_MCP_CONFIG.
 #
-# Environment variables always take precedence over values in this file.
+# Precedence for every value: environment variable > this file > built-in
+# default. Existing NEXT_* env deployments keep working unchanged.
 # Absent fields fall back to the built-in defaults shown below.
 #
-# Sensitive values (bearer_token, git.token) should have the file
-# owned by root and readable only by the service user (chmod 600).
+# ── Secrets ─────────────────────────────────────────────────────────────────────
+# bearer_token, webhook_token and git.token each accept EXACTLY ONE of three
+# forms, so the config file itself can stay non-secret (references only):
+#   <name>        = "literal"          # inline (keep the file chmod 600)
+#   <name>_file   = "/run/secrets/x"   # read from a file — pairs with podman Secret=
+#   <name>_env    = "SOME_VAR"         # read from another environment variable
+# Setting more than one form for the same secret is an error. The matching
+# legacy NEXT_* env var (e.g. NEXT_BEARER_TOKEN) still overrides all of them.
 
 # ── Authentication ─────────────────────────────────────────────────────────────
 
 # Bearer token that MCP clients must supply.
-# Required — must be set here or via NEXT_BEARER_TOKEN.
+# Required — set one form here, or via NEXT_BEARER_TOKEN.
 # Generate with: openssl rand -hex 32
 bearer_token = "change-me"
+# …or reference a podman secret mounted at /run/secrets/next_bearer_token:
+#bearer_token_file = "/run/secrets/next_bearer_token"
+# …or name an environment variable that holds it:
+#bearer_token_env = "NEXT_BEARER_TOKEN_VALUE"
 
 # Separate bearer token for the POST /webhook/sync endpoint.
 # If absent (and NEXT_WEBHOOK_TOKEN is unset), the endpoint is disabled.
 #webhook_token = ""
+#webhook_token_file = "/run/secrets/next_webhook_token"
+#webhook_token_env = "NEXT_WEBHOOK_TOKEN_VALUE"
 
 # ── Server ─────────────────────────────────────────────────────────────────────
 
@@ -42,7 +56,10 @@ url = "https://git.example.com/user/tasks.git"
 # Alternatively embed them in the URL as https://user:token@host/repo.git
 # (embedded credentials are stripped from logs automatically).
 user  = "user"
+# token accepts the same three secret forms as bearer_token above:
 token = "glpat-xxxxxxxxxxxxxxxxxxxx"
+#token_file = "/run/secrets/next_git_token"
+#token_env  = "NEXT_GIT_TOKEN_VALUE"
 
 # Name and email used for git commits made by next-mcp.
 # Defaults: "next-mcp" / "next-mcp@unknown"

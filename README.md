@@ -339,17 +339,24 @@ podman build -f Containerfile -t localhost/next-mcp:latest .
 
 ### Configuration
 
-Configuration comes from environment variables and an optional TOML config file, with
-env vars taking precedence: **env var > config file > built-in default**. The config
-file lives at `/data/config/config.toml` inside the container (override the path with
-`NEXT_CONFIG`); see `quadlets/next-mcp.config.toml.example` for the full schema
+Configuration comes from a TOML config file and environment variables, with env vars
+taking precedence: **env var > config file > built-in default**. The config file lives
+at `/data/config/next-mcp/config.toml` inside the container (the image sets
+`XDG_CONFIG_HOME=/data/config`); override the path with `next-mcp --config <path>` or
+`NEXT_MCP_CONFIG`. See `quadlets/next-mcp.config.toml.example` for the full schema
 (`bearer_token`, `webhook_token`, `repo_path`, `bind_addr`, plus `[git]` and `[sync]`
 tables mirroring the variables below).
+
+**Secrets** (`bearer_token`, `webhook_token`, `git.token`) each accept exactly one of
+three forms, so the config file can stay non-secret: an inline value, `<name>_file` (a
+path such as a podman secret at `/run/secrets/…`), or `<name>_env` (the name of another
+env var). Setting more than one form for the same secret is an error; the matching
+`NEXT_*` env var still overrides all of them.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `NEXT_BEARER_TOKEN` | ✓ (or file) | — | MCP client auth token |
-| `NEXT_CONFIG` | | `/data/config/config.toml` | Path of the TOML config file |
+| `NEXT_MCP_CONFIG` | | `/data/config/next-mcp/config.toml` | Path of the TOML config file (`--config` flag wins; `NEXT_CONFIG` is a deprecated alias) |
 | `NEXT_GIT_URL` | first start | — | HTTPS URL to clone the tasks repo |
 | `NEXT_GIT_USER` | | — | Git username (or embed in URL as `https://user:token@…`) |
 | `NEXT_GIT_TOKEN` | | — | Git password/token |
@@ -376,22 +383,29 @@ next-mcp
 
 ### Quadlet (Podman)
 
-Copy `quadlets/next-mcp.container` to `~/.config/containers/systemd/` and create
-`~/.config/next-mcp/env` (chmod 600) — use `quadlets/next-mcp.env.example` as a
-starting point:
+Copy `quadlets/next-mcp.container` to `~/.config/containers/systemd/`, then place a
+`config.toml` in the `next-config` volume at `next-mcp/config.toml` — use
+`quadlets/next-mcp.config.toml.example` as a starting point. Provision secrets as
+podman secrets and reference them from the config with the `*_file` forms:
 
-```
-NEXT_BEARER_TOKEN=…
-NEXT_WEBHOOK_TOKEN=…          # optional; enables POST /webhook/sync
-NEXT_GIT_URL=https://git.example.com/user/tasks.git
-NEXT_GIT_USER=user
-NEXT_GIT_TOKEN=…
-NEXT_SYNC_INTERVAL=86400
+```sh
+podman secret create next_bearer_token -   # paste token, then Ctrl-D
+podman secret create next_git_token -
 ```
 
-Alternatively (or additionally), place a `config.toml` in the `next-config` volume —
-see `quadlets/next-mcp.config.toml.example`. Env vars win over the file for any key
-set in both places.
+```toml
+# /data/config/next-mcp/config.toml
+bearer_token_file = "/run/secrets/next_bearer_token"
+[git]
+url        = "https://git.example.com/user/tasks.git"
+user       = "user"
+token_file = "/run/secrets/next_git_token"
+```
+
+The `Secret=` lines in the quadlet mount those at `/run/secrets/…`. Environment
+variables remain a permanent top-precedence override (env > config > default), so an
+existing `EnvironmentFile=` deployment keeps working — just uncomment that line in the
+quadlet.
 
 Three named volumes are used — Podman creates them automatically on first start:
 
@@ -399,7 +413,7 @@ Three named volumes are used — Podman creates them automatically on first star
 |--------|-------|----------|
 | `next-tasks` | `/data/tasks` | Cloned tasks git repository |
 | `next-state` | `/data/state` | Machine-local state (active context, user filter, resources) |
-| `next-config` | `/data/config` | Optional `config.toml` (see above) |
+| `next-config` | `/data/config` | `config.toml` at `next-mcp/config.toml` (see above) |
 
 Then:
 
