@@ -111,6 +111,10 @@ pub enum Field {
 }
 
 /// The subset of fields a search can be scoped to.
+///
+/// `slug` is deliberately absent: it is an identifier, not prose. `slug:x`
+/// tests equality, so referring to a task by slug in a filter means the same
+/// thing as everywhere else in the tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextField {
@@ -118,7 +122,6 @@ pub enum TextField {
     Description,
     Notes,
     Url,
-    Slug,
 }
 
 /// The ordered comparison operators.
@@ -208,7 +211,6 @@ impl Field {
             Field::Description => Some(TextField::Description),
             Field::Notes => Some(TextField::Notes),
             Field::Url => Some(TextField::Url),
-            Field::Slug => Some(TextField::Slug),
             _ => None,
         }
     }
@@ -238,7 +240,6 @@ impl TextField {
             TextField::Description => "description",
             TextField::Notes => "notes",
             TextField::Url => "url",
-            TextField::Slug => "slug",
         }
     }
 }
@@ -486,6 +487,24 @@ fn tag_atom(input: &str) -> PResult<'_, Expr> {
             format!("{sign:?} must be followed by a tag name"),
         ));
     };
+    // `-due<7d` is someone reaching for negation, not writing a tag. Saying
+    // "segments may only contain letters" sends them to fix a tag they never
+    // meant to write, so name the mistake instead.
+    if let Some(op) = name.find([':', '<', '>']) {
+        let suggestion = if sign == '-' {
+            format!("not {name}")
+        } else {
+            name.to_owned()
+        };
+        return Err(fail(
+            input,
+            format!(
+                "{sign:?} takes a tag name, but {:?} is a {} predicate — write {suggestion:?}",
+                name,
+                &name[op..op + 1],
+            ),
+        ));
+    }
     tag::validate_tag(name).map_err(|e| fail(input, e))?;
     let atom = Expr::Atom(Atom::Tag(name.to_owned()));
     Ok((
@@ -1071,7 +1090,6 @@ mod tests {
             ("description:rename", TextField::Description),
             ("notes:rename", TextField::Notes),
             ("url:rename", TextField::Url),
-            ("slug:rename", TextField::Slug),
         ] {
             assert_eq!(
                 ok(input),
@@ -1083,6 +1101,27 @@ mod tests {
                 "{input}"
             );
         }
+    }
+
+    #[test]
+    fn slug_is_an_identifier_not_a_search() {
+        // A slug names one task, so `slug:` matches it exactly rather than
+        // searching within it — `slug:water` must not match "water-plants".
+        assert_eq!(
+            ok("slug:water-plants"),
+            Expr::Atom(Atom::Equals {
+                field: Field::Slug,
+                values: vec![Value::word("water-plants")],
+            })
+        );
+        assert_eq!(
+            ok("slug:a,b"),
+            Expr::Atom(Atom::Equals {
+                field: Field::Slug,
+                values: vec![Value::word("a"), Value::word("b")],
+            })
+        );
+        assert!(err("slug<x").contains("does not support the < operator"));
     }
 
     #[test]
@@ -1152,6 +1191,22 @@ mod tests {
         assert!(err("-work//backend").contains("empty path segment"));
         assert!(err("tag:__reserved").contains("__"));
         assert!(err("+").contains("must be followed by a tag name"));
+    }
+
+    #[test]
+    fn sign_on_a_predicate_suggests_the_right_spelling() {
+        // Reaching for negation with `-` is the likely mistake here; a
+        // complaint about tag syntax would send the user to fix the wrong thing.
+        let message = err("-due<7d");
+        assert!(message.contains("is a < predicate"), "{message}");
+        assert!(message.contains(r#""not due<7d""#), "{message}");
+
+        let message = err("+status:open");
+        assert!(message.contains("is a : predicate"), "{message}");
+        assert!(message.contains(r#""status:open""#), "{message}");
+
+        // A genuinely malformed tag still gets the tag-validation message.
+        assert!(err("+1bug").contains("must start with a letter"));
     }
 
     // ── Field predicates ────────────────────────────────────────────────────
