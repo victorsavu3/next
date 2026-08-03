@@ -3,8 +3,8 @@ mod common;
 use chrono::Local;
 use next::cli::commands::{add, resource};
 use next::core::store::Store as _;
-use next::core::{domain::filter, scoring};
 use next::core::FilterArgs;
+use next::core::{domain::filter, scoring};
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -33,8 +33,20 @@ fn visible_titles(env: &mut common::TestEnv) -> Vec<String> {
     let today = Local::now().date_naive();
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
-    let filtered = filter::apply(all.clone(), &FilterArgs::parse(vec![]).to_filter_set().unwrap(), &state, today);
-    let scored = scoring::score_and_sort(filtered, &all, today, &env.ctx.repo.scoring, &std::collections::HashMap::new(), &std::collections::HashMap::new());
+    let filtered = filter::apply(
+        all.clone(),
+        &FilterArgs::parse(vec![]).to_filter_set().unwrap(),
+        &state,
+        today,
+    );
+    let scored = scoring::score_and_sort(
+        filtered,
+        &all,
+        today,
+        &env.ctx.repo.scoring,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+    );
     scored.into_iter().map(|s| s.task.title).collect()
 }
 
@@ -104,7 +116,10 @@ fn resource_set_missing_hash_prefix_errors() {
 fn resource_set_off_hides_tagged_tasks() {
     let mut env = common::setup();
     add::run(
-        add::Args { tags: vec!["#printer".into()], ..add_args("Print document") },
+        add::Args {
+            tags: vec!["#printer".into()],
+            ..add_args("Print document")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -131,7 +146,10 @@ fn resource_set_off_hides_tagged_tasks() {
 fn resource_set_on_restores_hidden_tasks() {
     let mut env = common::setup();
     add::run(
-        add::Args { tags: vec!["#laptop".into()], ..add_args("Laptop task") },
+        add::Args {
+            tags: vec!["#laptop".into()],
+            ..add_args("Laptop task")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -157,7 +175,14 @@ fn resource_set_on_restores_hidden_tasks() {
 #[test]
 fn resource_show_does_not_error() {
     let mut env = common::setup();
-    resource::run(resource::Args { json: false, subcommand: None }, &mut env.ctx).unwrap();
+    resource::run(
+        resource::Args {
+            json: false,
+            subcommand: None,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 }
 
 #[test]

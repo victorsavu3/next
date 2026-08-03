@@ -180,9 +180,9 @@ pub fn validate_key(key: &str) -> anyhow::Result<()> {
 impl std::fmt::Display for Status {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Status::Open      => write!(f, "open"),
-            Status::Started   => write!(f, "started"),
-            Status::Done      => write!(f, "done"),
+            Status::Open => write!(f, "open"),
+            Status::Started => write!(f, "started"),
+            Status::Done => write!(f, "done"),
             Status::Cancelled => write!(f, "cancelled"),
         }
     }
@@ -191,9 +191,9 @@ impl std::fmt::Display for Status {
 impl std::fmt::Display for Priority {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Priority::Low    => write!(f, "low"),
+            Priority::Low => write!(f, "low"),
             Priority::Medium => write!(f, "medium"),
-            Priority::High   => write!(f, "high"),
+            Priority::High => write!(f, "high"),
         }
     }
 }
@@ -202,9 +202,9 @@ impl std::str::FromStr for Priority {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "low"          => Ok(Priority::Low),
+            "low" => Ok(Priority::Low),
             "medium" | "med" => Ok(Priority::Medium),
-            "high"         => Ok(Priority::High),
+            "high" => Ok(Priority::High),
             _ => anyhow::bail!("unknown priority {s:?} — expected low, medium, or high"),
         }
     }
@@ -273,7 +273,10 @@ impl Task {
     fn append_time_event(&mut self, event: &str) {
         use serde_json::json;
         let entry = json!({"event": event, "at": Utc::now().to_rfc3339()});
-        let log = self.data.entry("time_log".to_owned()).or_insert_with(|| serde_json::Value::Array(vec![]));
+        let log = self
+            .data
+            .entry("time_log".to_owned())
+            .or_insert_with(|| serde_json::Value::Array(vec![]));
         if let serde_json::Value::Array(arr) = log {
             arr.push(entry);
         }
@@ -389,13 +392,25 @@ mod tests {
     #[test]
     fn validate_key_rejects_oversized() {
         let err = validate_key(&"a".repeat(257)).unwrap_err();
-        assert!(err.to_string().contains("too long"), "expected 'too long' in: {err}");
+        assert!(
+            err.to_string().contains("too long"),
+            "expected 'too long' in: {err}"
+        );
     }
 
     #[test]
     fn validate_key_rejects_invalid_chars() {
-        assert!(validate_key("bad key").unwrap_err().to_string().contains("invalid character"));
-        assert!(validate_key("path/traversal").unwrap_err().to_string().contains("invalid character"));
-        assert!(validate_key("some.key").unwrap_err().to_string().contains("invalid character"));
+        assert!(validate_key("bad key")
+            .unwrap_err()
+            .to_string()
+            .contains("invalid character"));
+        assert!(validate_key("path/traversal")
+            .unwrap_err()
+            .to_string()
+            .contains("invalid character"));
+        assert!(validate_key("some.key")
+            .unwrap_err()
+            .to_string()
+            .contains("invalid character"));
     }
 }

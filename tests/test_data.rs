@@ -56,7 +56,14 @@ fn get(id: &str, key: &str) -> data::Args {
 #[test]
 fn data_set_string_value() {
     let mut env = common::setup();
-    add::run(add::Args { slug: Some("t".to_string()), ..add_args("Task") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("t".to_string()),
+            ..add_args("Task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     data::run(set("t", "source", "github"), &mut env.ctx).unwrap();
 
@@ -67,7 +74,14 @@ fn data_set_string_value() {
 #[test]
 fn data_set_number_value() {
     let mut env = common::setup();
-    add::run(add::Args { slug: Some("t".to_string()), ..add_args("Task") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("t".to_string()),
+            ..add_args("Task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     data::run(set("t", "score", "42"), &mut env.ctx).unwrap();
 
@@ -78,7 +92,14 @@ fn data_set_number_value() {
 #[test]
 fn data_set_bool_value() {
     let mut env = common::setup();
-    add::run(add::Args { slug: Some("t".to_string()), ..add_args("Task") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("t".to_string()),
+            ..add_args("Task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     data::run(set("t", "urgent", "true"), &mut env.ctx).unwrap();
 
@@ -89,7 +110,14 @@ fn data_set_bool_value() {
 #[test]
 fn data_set_updates_existing_key() {
     let mut env = common::setup();
-    add::run(add::Args { slug: Some("t".to_string()), ..add_args("Task") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("t".to_string()),
+            ..add_args("Task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     data::run(set("t", "phase", "alpha"), &mut env.ctx).unwrap();
     data::run(set("t", "phase", "beta"), &mut env.ctx).unwrap();
@@ -102,7 +130,14 @@ fn data_set_updates_existing_key() {
 #[test]
 fn data_set_multiple_independent_keys() {
     let mut env = common::setup();
-    add::run(add::Args { slug: Some("t".to_string()), ..add_args("Task") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("t".to_string()),
+            ..add_args("Task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     data::run(set("t", "key1", "a"), &mut env.ctx).unwrap();
     data::run(set("t", "key2", "b"), &mut env.ctx).unwrap();
@@ -115,7 +150,14 @@ fn data_set_multiple_independent_keys() {
 #[test]
 fn data_unset_removes_key() {
     let mut env = common::setup();
-    add::run(add::Args { slug: Some("t".to_string()), ..add_args("Task") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("t".to_string()),
+            ..add_args("Task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     data::run(set("t", "remove-me", "yes"), &mut env.ctx).unwrap();
     data::run(set("t", "keep-me", "yes"), &mut env.ctx).unwrap();
@@ -129,7 +171,14 @@ fn data_unset_removes_key() {
 #[test]
 fn data_unset_missing_key_errors() {
     let mut env = common::setup();
-    add::run(add::Args { slug: Some("t".to_string()), ..add_args("Task") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("t".to_string()),
+            ..add_args("Task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     let err = data::run(unset("t", "no-such-key"), &mut env.ctx).unwrap_err();
     assert!(
@@ -141,7 +190,14 @@ fn data_unset_missing_key_errors() {
 #[test]
 fn data_get_returns_value() {
     let mut env = common::setup();
-    add::run(add::Args { slug: Some("t".to_string()), ..add_args("Task") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("t".to_string()),
+            ..add_args("Task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
     data::run(set("t", "color", "blue"), &mut env.ctx).unwrap();
 
     // get succeeds (output goes to stdout — just assert it doesn't error).
@@ -151,7 +207,14 @@ fn data_get_returns_value() {
 #[test]
 fn data_get_missing_key_errors() {
     let mut env = common::setup();
-    add::run(add::Args { slug: Some("t".to_string()), ..add_args("Task") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("t".to_string()),
+            ..add_args("Task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     let err = data::run(get("t", "missing"), &mut env.ctx).unwrap_err();
     assert!(
@@ -173,11 +236,15 @@ fn data_set_errors_on_nonexistent_task() {
 #[test]
 fn data_set_rejects_null_json() {
     let mut env = common::setup();
-    add::run(add::Args { slug: Some("t".to_string()), ..add_args("Task") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("t".to_string()),
+            ..add_args("Task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     let err = data::run(set("t", "k", "null"), &mut env.ctx).unwrap_err();
-    assert!(
-        err.to_string().contains("null"),
-        "unexpected error: {err}"
-    );
+    assert!(err.to_string().contains("null"), "unexpected error: {err}");
 }

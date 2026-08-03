@@ -30,18 +30,35 @@ fn show_by_id() {
     let mut env = common::setup();
     add::run(add_args("My task"), &mut env.ctx).unwrap();
     let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
-    show::run(show::Args { id: task.id.to_string(), json: false }, &env.ctx).unwrap();
+    show::run(
+        show::Args {
+            id: task.id.to_string(),
+            json: false,
+        },
+        &env.ctx,
+    )
+    .unwrap();
 }
 
 #[test]
 fn show_by_slug() {
     let mut env = common::setup();
     add::run(
-        add::Args { slug: Some("my-slug".into()), ..add_args("Slugged task") },
+        add::Args {
+            slug: Some("my-slug".into()),
+            ..add_args("Slugged task")
+        },
         &mut env.ctx,
     )
     .unwrap();
-    show::run(show::Args { id: "my-slug".into(), json: false }, &env.ctx).unwrap();
+    show::run(
+        show::Args {
+            id: "my-slug".into(),
+            json: false,
+        },
+        &env.ctx,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -50,7 +67,14 @@ fn show_by_id_prefix() {
     add::run(add_args("Prefix task"), &mut env.ctx).unwrap();
     let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     let prefix = task.id.to_string().replace('-', "")[..8].to_string();
-    show::run(show::Args { id: prefix, json: false }, &env.ctx).unwrap();
+    show::run(
+        show::Args {
+            id: prefix,
+            json: false,
+        },
+        &env.ctx,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -58,14 +82,24 @@ fn show_json_output() {
     let mut env = common::setup();
     add::run(add_args("JSON task"), &mut env.ctx).unwrap();
     let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
-    show::run(show::Args { id: task.id.to_string(), json: true }, &env.ctx).unwrap();
+    show::run(
+        show::Args {
+            id: task.id.to_string(),
+            json: true,
+        },
+        &env.ctx,
+    )
+    .unwrap();
 }
 
 #[test]
 fn show_nonexistent_errors() {
     let env = common::setup();
     let err = show::run(
-        show::Args { id: "00000000-0000-0000-0000-000000000000".into(), json: false },
+        show::Args {
+            id: "00000000-0000-0000-0000-000000000000".into(),
+            json: false,
+        },
         &env.ctx,
     )
     .unwrap_err();
@@ -94,14 +128,24 @@ fn show_task_with_all_optional_fields() {
         &mut env.ctx,
     )
     .unwrap();
-    show::run(show::Args { id: "full-task".into(), json: false }, &env.ctx).unwrap();
+    show::run(
+        show::Args {
+            id: "full-task".into(),
+            json: false,
+        },
+        &env.ctx,
+    )
+    .unwrap();
 }
 
 #[test]
 fn show_task_with_parent() {
     let mut env = common::setup();
     add::run(
-        add::Args { slug: Some("parent".into()), ..add_args("Parent task") },
+        add::Args {
+            slug: Some("parent".into()),
+            ..add_args("Parent task")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -114,14 +158,24 @@ fn show_task_with_parent() {
         &mut env.ctx,
     )
     .unwrap();
-    show::run(show::Args { id: "child".into(), json: false }, &env.ctx).unwrap();
+    show::run(
+        show::Args {
+            id: "child".into(),
+            json: false,
+        },
+        &env.ctx,
+    )
+    .unwrap();
 }
 
 #[test]
 fn show_task_with_blocker() {
     let mut env = common::setup();
     add::run(
-        add::Args { slug: Some("blocker".into()), ..add_args("Blocking task") },
+        add::Args {
+            slug: Some("blocker".into()),
+            ..add_args("Blocking task")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -134,5 +188,12 @@ fn show_task_with_blocker() {
         &mut env.ctx,
     )
     .unwrap();
-    show::run(show::Args { id: "blocked".into(), json: false }, &env.ctx).unwrap();
+    show::run(
+        show::Args {
+            id: "blocked".into(),
+            json: false,
+        },
+        &env.ctx,
+    )
+    .unwrap();
 }

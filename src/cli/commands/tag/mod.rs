@@ -101,7 +101,9 @@ fn list(ctx: &mut AppContext) -> anyhow::Result<()> {
     }
 
     println!("Tag conventions:");
-    println!("  @context   Tasks are hidden unless this context is active (or no context is active).");
+    println!(
+        "  @context   Tasks are hidden unless this context is active (or no context is active)."
+    );
     println!("  #resource  Tasks are hidden while this resource is marked unavailable.");
     println!("  freeform   Plain label — no filtering effect.");
     println!("  a/b        Nested tags: filtering on 'a' matches all 'a/*' descendants.");

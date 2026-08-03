@@ -13,8 +13,8 @@ pub mod list;
 pub mod maintenance;
 pub mod move_cmd;
 pub mod next_cmd;
-pub mod plugin;
 pub mod open;
+pub mod plugin;
 pub mod resource;
 pub mod show;
 pub mod start;
@@ -24,4 +24,3 @@ pub mod tag;
 pub mod tree;
 pub mod tutorial;
 pub mod user;
-

@@ -60,7 +60,10 @@ fn is_default_sync(sync: &SyncState) -> bool {
 /// which knows its state-file path directly (and may use a non-XDG path in
 /// tests), goes through [`load_machine_state_at`].
 pub(crate) fn load_machine_state(root: &Path) -> Result<MachineState> {
-    load_machine_state_at(&storage::state_path_for_repo(root), &storage::state_lock_path_for_repo(root))
+    load_machine_state_at(
+        &storage::state_path_for_repo(root),
+        &storage::state_lock_path_for_repo(root),
+    )
 }
 
 /// Like [`load_machine_state`] but with the state-file and lock paths given
@@ -156,7 +159,9 @@ mod tests {
         m.sync.last_pull = Some(now);
         m.sync.plugins = BTreeMap::from([(
             "forgejo".to_owned(),
-            PluginSyncState { last_sync: Some(now) },
+            PluginSyncState {
+                last_sync: Some(now),
+            },
         )]);
 
         // The toml crate errors if a plain value is emitted after a table; this

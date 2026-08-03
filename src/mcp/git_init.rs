@@ -48,11 +48,20 @@ pub fn clone_or_open(config: &McpConfig) -> anyhow::Result<PathBuf> {
     // NEXT_GIT_PARTIAL_CLONE=0 (or git.partial_clone = false) skips the
     // attempt entirely for deployments without a git binary.
     if config.partial_clone {
-        match partial_clone(&url_for_auth, git_user.as_deref(), git_token.as_deref(), repo_path) {
+        match partial_clone(
+            &url_for_auth,
+            git_user.as_deref(),
+            git_token.as_deref(),
+            repo_path,
+        ) {
             Ok(()) => {
                 let repo = git2::Repository::open(repo_path)
                     .with_context(|| format!("open partial clone at {}", repo_path.display()))?;
-                ensure_git_identity(&repo, config.git_author_name.as_deref(), config.git_author_email.as_deref())?;
+                ensure_git_identity(
+                    &repo,
+                    config.git_author_name.as_deref(),
+                    config.git_author_email.as_deref(),
+                )?;
                 init_repo_structure(repo_path)?;
                 return Ok(repo_path.clone());
             }
@@ -90,7 +99,11 @@ pub fn clone_or_open(config: &McpConfig) -> anyhow::Result<PathBuf> {
         .clone(&url_for_auth, repo_path)
         .with_context(|| format!("git clone {} failed", url_for_auth))?;
 
-    ensure_git_identity(&repo, config.git_author_name.as_deref(), config.git_author_email.as_deref())?;
+    ensure_git_identity(
+        &repo,
+        config.git_author_name.as_deref(),
+        config.git_author_email.as_deref(),
+    )?;
     init_repo_structure(repo_path)?;
     Ok(repo_path.clone())
 }
@@ -117,7 +130,11 @@ fn partial_clone(
             let rest = clean_url
                 .strip_prefix("https://")
                 .map(|r| format!("https://{u}:{t}@{r}"))
-                .or_else(|| clean_url.strip_prefix("http://").map(|r| format!("http://{u}:{t}@{r}")));
+                .or_else(|| {
+                    clean_url
+                        .strip_prefix("http://")
+                        .map(|r| format!("http://{u}:{t}@{r}"))
+                });
             match rest {
                 Some(url) => url,
                 // Non-HTTP URL with separate credentials — let git2 handle it.
@@ -132,7 +149,13 @@ fn partial_clone(
         .arg(repo_path)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
-    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+    ] {
         cmd.env_remove(var);
     }
     // Never block on an interactive credential prompt inside the container.
@@ -163,7 +186,11 @@ fn extract_credentials(url: &str) -> (String, Option<String>, Option<String>) {
     if let Some(at_pos) = rest.find('@') {
         let credentials = &rest[..at_pos];
         let host_and_path = &rest[at_pos + 1..];
-        let prefix = if url.starts_with("https") { "https" } else { "http" };
+        let prefix = if url.starts_with("https") {
+            "https"
+        } else {
+            "http"
+        };
         let clean_url = format!("{prefix}://{host_and_path}");
 
         if let Some(colon) = credentials.find(':') {
@@ -185,19 +212,23 @@ fn ensure_git_identity(
     author_name: Option<&str>,
     author_email: Option<&str>,
 ) -> anyhow::Result<()> {
-    let config = repo.config()
-        .with_context(|| "failed to open git config")?;
+    let config = repo.config().with_context(|| "failed to open git config")?;
 
     // Check if identity is already set at any scope (global, system, local).
-    let has_name  = config.get_string("user.name").is_ok();
+    let has_name = config.get_string("user.name").is_ok();
     let has_email = config.get_string("user.email").is_ok();
 
     if !has_name || !has_email {
         // Write into the repo-local config only.
-        let mut local = config.open_level(git2::ConfigLevel::Local)
+        let mut local = config
+            .open_level(git2::ConfigLevel::Local)
             .with_context(|| "failed to open local git config")?;
-        if !has_name  { local.set_str("user.name",  author_name.unwrap_or("next-mcp"))?; }
-        if !has_email { local.set_str("user.email", author_email.unwrap_or("next-mcp@unknown"))?; }
+        if !has_name {
+            local.set_str("user.name", author_name.unwrap_or("next-mcp"))?;
+        }
+        if !has_email {
+            local.set_str("user.email", author_email.unwrap_or("next-mcp@unknown"))?;
+        }
     }
 
     Ok(())
@@ -236,7 +267,8 @@ mod tests {
 
     #[test]
     fn extract_user_token_from_url() {
-        let (url, user, token) = extract_credentials("https://alice:secret@git.example.com/repo.git");
+        let (url, user, token) =
+            extract_credentials("https://alice:secret@git.example.com/repo.git");
         assert_eq!(url, "https://git.example.com/repo.git");
         assert_eq!(user.as_deref(), Some("alice"));
         assert_eq!(token.as_deref(), Some("secret"));
@@ -261,12 +293,17 @@ mod tests {
         let repo = git2::Repository::open(&repo_path).unwrap();
         let config = repo.config().unwrap();
         assert_eq!(
-            config.get_string("remote.origin.partialclonefilter").as_deref(),
+            config
+                .get_string("remote.origin.partialclonefilter")
+                .as_deref(),
             Ok("blob:none"),
             "clone must be a partial clone"
         );
         assert!(config.get_bool("remote.origin.promisor").unwrap_or(false));
-        assert!(repo_path.join("seed.txt").exists(), "checkout blobs are present");
+        assert!(
+            repo_path.join("seed.txt").exists(),
+            "checkout blobs are present"
+        );
     }
 
     #[test]
@@ -306,9 +343,7 @@ mod tests {
             // URL contains a secret that must not appear in any error message.
             // 127.0.0.1:1 is almost certain to refuse immediately (nothing
             // listens on port 1), so the test is fast.
-            git_url: Some(
-                "https://user:s3cr3t_token@127.0.0.1:1/repo.git".to_owned(),
-            ),
+            git_url: Some("https://user:s3cr3t_token@127.0.0.1:1/repo.git".to_owned()),
             git_user: None,
             git_token: None,
             sync_interval: None,
@@ -321,8 +356,7 @@ mod tests {
             pull_timeout: Duration::from_secs(10),
         };
 
-        let err = clone_or_open(&config)
-            .expect_err("clone to unreachable host must fail");
+        let err = clone_or_open(&config).expect_err("clone to unreachable host must fail");
 
         // Capture the full error chain (anyhow Debug includes all causes).
         let err_text = format!("{err:#}");

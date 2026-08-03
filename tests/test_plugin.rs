@@ -4,8 +4,8 @@ mod common;
 
 use std::path::Path;
 
-use next::core::service::{create_task, CreateTaskParams};
 use next::core::plugin::{notify, registry, TaskEvent};
+use next::core::service::{create_task, CreateTaskParams};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -43,7 +43,10 @@ fn notify_spawns_subscribed_plugin_with_payload() {
     let out = read_output(root).expect("subscribed plugin should have run");
     assert_eq!(out["event"].as_str(), Some("start"));
     assert_eq!(out["task_id"].as_str(), Some(id.to_string().as_str()));
-    assert_eq!(out["repo"].as_str(), Some(root.display().to_string().as_str()));
+    assert_eq!(
+        out["repo"].as_str(),
+        Some(root.display().to_string().as_str())
+    );
     assert!(out["timestamp"].is_string(), "payload carries a timestamp");
 }
 
@@ -78,10 +81,16 @@ fn notify_ignores_unsubscribed_tasks() {
     registry::watch(root, "demo", watched).unwrap();
 
     notify(root, &[TaskEvent::new("edit", other)], None);
-    assert!(read_output(root).is_none(), "no notification for an unwatched task");
+    assert!(
+        read_output(root).is_none(),
+        "no notification for an unwatched task"
+    );
 
     notify(root, &[TaskEvent::new("edit", watched)], None);
-    assert!(read_output(root).is_some(), "notification fires for the watched task");
+    assert!(
+        read_output(root).is_some(),
+        "notification fires for the watched task"
+    );
 }
 
 #[test]
@@ -103,7 +112,10 @@ fn cli_mutation_handler_records_event() {
     assert!(env.ctx.repo.take_task_events().is_empty());
 
     next::cli::commands::start::run(
-        next::cli::commands::start::Args { id: task.id.to_string(), json: false },
+        next::cli::commands::start::Args {
+            id: task.id.to_string(),
+            json: false,
+        },
         &mut env.ctx,
     )
     .unwrap();

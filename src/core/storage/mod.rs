@@ -9,13 +9,18 @@ pub mod toml_store;
 pub use cached_store::CachedStore;
 pub use git_backend::GitBackend;
 pub use lock::FileLock;
-pub(crate) use machine_state::{load_machine_state, load_machine_state_at, update_machine_state_at};
+pub(crate) use machine_state::{
+    load_machine_state, load_machine_state_at, update_machine_state_at,
+};
 pub use toml_store::TomlStore;
 
 use std::path::{Path, PathBuf};
 
-use crate::core::{domain::task::Task, error::{TaskError, Result}};
 use crate::core::store::VcsBackend as _;
+use crate::core::{
+    domain::task::Task,
+    error::{Result, TaskError},
+};
 
 /// Encodes a tag string to a filesystem-safe path component.
 ///
@@ -80,8 +85,10 @@ fn migrate_tag_paths(root: &Path, vcs: &GitBackend) -> Result<()> {
         let old = entry?.path();
         let name = old.file_name().and_then(|n| n.to_str()).unwrap_or("");
         // Migrate both literal @/# (original format) and %40/%23 (intermediate format).
-        if !name.starts_with('@') && !name.starts_with('#')
-            && !name.starts_with("%40") && !name.starts_with("%23")
+        if !name.starts_with('@')
+            && !name.starts_with('#')
+            && !name.starts_with("%40")
+            && !name.starts_with("%23")
         {
             continue;
         }
@@ -102,8 +109,9 @@ fn migrate_tag_paths(root: &Path, vcs: &GitBackend) -> Result<()> {
         if old.is_file() {
             to_stage.push(old.clone());
             to_stage.push(new.clone());
-            std::fs::rename(&old, &new)
-                .map_err(|e| TaskError::Other(format!("migrate tag path {}: {e}", old.display())))?;
+            std::fs::rename(&old, &new).map_err(|e| {
+                TaskError::Other(format!("migrate tag path {}: {e}", old.display()))
+            })?;
         } else if old.is_dir() {
             let old_files = collect_toml_files(&old);
             for old_file in &old_files {
@@ -117,7 +125,10 @@ fn migrate_tag_paths(root: &Path, vcs: &GitBackend) -> Result<()> {
     }
 
     if !to_stage.is_empty() {
-        vcs.commit(&to_stage, "next: migrate tag paths to __context__/__resource__ encoding")?;
+        vcs.commit(
+            &to_stage,
+            "next: migrate tag paths to __context__/__resource__ encoding",
+        )?;
     }
     Ok(())
 }
@@ -206,7 +217,8 @@ pub fn task_path(root: &Path, task: &Task) -> PathBuf {
 /// path is safe on all platforms and renders correctly in Forgejo:
 /// `@home/kitchen` → `<root>/tags/__context__home/kitchen.toml`.
 pub fn tag_meta_path(root: &Path, tag: &str) -> PathBuf {
-    root.join("tags").join(format!("{}.toml", encode_tag_path(tag)))
+    root.join("tags")
+        .join(format!("{}.toml", encode_tag_path(tag)))
 }
 
 /// Returns the path to the repository's committed scoring config,
@@ -231,7 +243,10 @@ pub fn load_scoring(root: &Path) -> crate::core::scoring::ScoringConfig {
     match toml::from_str(&content) {
         Ok(cfg) => cfg,
         Err(e) => {
-            tracing::warn!("failed to parse {}: {e}; using default scoring", path.display());
+            tracing::warn!(
+                "failed to parse {}: {e}; using default scoring",
+                path.display()
+            );
             ScoringConfig::default()
         }
     }

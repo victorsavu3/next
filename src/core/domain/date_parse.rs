@@ -1,7 +1,7 @@
 use chrono::{Local, NaiveDate, NaiveTime, TimeZone};
 use interim::{parse_date_string, Dialect};
 
-use crate::core::error::{TaskError, Result};
+use crate::core::error::{Result, TaskError};
 
 /// Parses a date expression into a [`NaiveDate`].
 ///

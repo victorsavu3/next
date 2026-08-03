@@ -24,7 +24,11 @@ pub enum SyncOutcome {
 /// pushes (unless `pull_only`). On pull conflicts, returns early without
 /// pushing and without rebuilding the cache (the working tree holds the
 /// conflict markers for the user to resolve).
-pub fn sync(ctx: &mut TaskRepository, push_only: bool, pull_only: bool) -> anyhow::Result<SyncOutcome> {
+pub fn sync(
+    ctx: &mut TaskRepository,
+    push_only: bool,
+    pull_only: bool,
+) -> anyhow::Result<SyncOutcome> {
     if !push_only {
         match ctx.vcs.pull()? {
             PullResult::Clean => {
@@ -135,7 +139,12 @@ pub fn pull_if_stale(ctx: &mut TaskRepository, opts: &StaleOpts) -> PullStatus {
     let root = ctx.repo_root.clone();
     if let Ok(state) = sync_state::load(&root) {
         if let Some(last) = state.last_pull {
-            if opts.now.signed_duration_since(last).to_std().is_ok_and(|elapsed| elapsed < opts.staleness) {
+            if opts
+                .now
+                .signed_duration_since(last)
+                .to_std()
+                .is_ok_and(|elapsed| elapsed < opts.staleness)
+            {
                 return PullStatus::Fresh;
             }
         }
@@ -193,7 +202,10 @@ mod stale_tests {
         assert_eq!(pull_if_stale(&mut ctx, &opts), PullStatus::Disabled);
         // No sync state should have been written: last_pull stays unset.
         let state = sync_state::load(&ctx.repo_root).unwrap();
-        assert!(state.last_pull.is_none(), "disabled must not touch sync state");
+        assert!(
+            state.last_pull.is_none(),
+            "disabled must not touch sync state"
+        );
     }
 
     #[test]
@@ -225,6 +237,9 @@ mod stale_tests {
         }
         // Must NOT have recorded a pull on failure.
         let state = sync_state::load(&ctx.repo_root).unwrap();
-        assert!(state.last_pull.is_none(), "failed pull must not record last_pull");
+        assert!(
+            state.last_pull.is_none(),
+            "failed pull must not record last_pull"
+        );
     }
 }

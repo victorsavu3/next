@@ -32,7 +32,12 @@ fn clone_instance(remote: &Path, name: &str) -> Instance {
     let root = dir.path().join(name);
     common::git(
         dir.path(),
-        &["clone", "--quiet", &format!("file://{}", remote.display()), root.to_str().unwrap()],
+        &[
+            "clone",
+            "--quiet",
+            &format!("file://{}", remote.display()),
+            root.to_str().unwrap(),
+        ],
     );
     common::git(&root, &["config", "user.email", &format!("{name}@test")]);
     common::git(&root, &["config", "user.name", name]);
@@ -104,7 +109,10 @@ fn snapshot(store: &dyn Store) -> BTreeMap<uuid::Uuid, (String, String, bool)> {
         map.insert(t.id, (t.title.clone(), format!("{:?}", t.status), false));
     }
     let archived = store
-        .query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() })
+        .query_tasks(&TaskQuery {
+            archived: true,
+            ..TaskQuery::unpaginated()
+        })
         .unwrap();
     for t in archived.items {
         let clash = map.insert(t.id, (t.title.clone(), format!("{:?}", t.status), true));
@@ -122,7 +130,11 @@ fn assert_converged(
     label: &str,
 ) -> BTreeMap<uuid::Uuid, (String, String, bool)> {
     let reference = snapshot(instances[0].repo.store());
-    assert_eq!(reference.len(), expected_total, "{label}: task count on instance 0");
+    assert_eq!(
+        reference.len(),
+        expected_total,
+        "{label}: task count on instance 0"
+    );
     for (i, inst) in instances.iter().enumerate().skip(1) {
         assert_eq!(
             snapshot(inst.repo.store()),
@@ -132,11 +144,9 @@ fn assert_converged(
     }
     for (i, inst) in instances.iter().enumerate() {
         // Rebuild from the checkout into a fresh database file.
-        let inner = next::core::storage::TomlStore::open(
-            inst.root.clone(),
-            inst.root.join("state.toml"),
-        )
-        .unwrap();
+        let inner =
+            next::core::storage::TomlStore::open(inst.root.clone(), inst.root.join("state.toml"))
+                .unwrap();
         let vcs = next::core::storage::GitBackend::open(&inst.root).unwrap();
         let head = next::core::store::VcsBackend::head_hash(&vcs).unwrap();
         let db = inst.root.join(format!(".next-verify-{label}.db"));
@@ -156,14 +166,22 @@ fn parallel_instances_converge_without_loss() {
     // clone starts from the same config (auto off: passes run explicitly at
     // controlled points; the auto path is covered in test_archive.rs).
     let remote_dir = TempDir::new().unwrap();
-    common::git(remote_dir.path(), &["init", "--bare", "--quiet", "-b", "main"]);
+    common::git(
+        remote_dir.path(),
+        &["init", "--bare", "--quiet", "-b", "main"],
+    );
     let remote = remote_dir.path().to_path_buf();
     {
         let seed_dir = TempDir::new().unwrap();
         let seed = seed_dir.path().join("seed");
         common::git(
             seed_dir.path(),
-            &["clone", "--quiet", &format!("file://{}", remote.display()), seed.to_str().unwrap()],
+            &[
+                "clone",
+                "--quiet",
+                &format!("file://{}", remote.display()),
+                seed.to_str().unwrap(),
+            ],
         );
         common::git(&seed, &["config", "user.email", "seed@test"]);
         common::git(&seed, &["config", "user.name", "seed"]);
@@ -181,8 +199,9 @@ fn parallel_instances_converge_without_loss() {
 
     const N: usize = 3;
     const ITERATIONS: usize = 4;
-    let mut instances: Vec<Instance> =
-        (0..N).map(|i| clone_instance(&remote, &format!("inst{i}"))).collect();
+    let mut instances: Vec<Instance> = (0..N)
+        .map(|i| clone_instance(&remote, &format!("inst{i}")))
+        .collect();
 
     let mut total_tasks = 0usize;
     let mut per_instance_created: Vec<Vec<Task>> = vec![Vec::new(); N];
@@ -191,7 +210,8 @@ fn parallel_instances_converge_without_loss() {
         // ── Parallel mutation phase ──────────────────────────────────────
         // Every instance adds, edits, and completes concurrently in its own
         // clone (local commits only — like real offline work).
-        let old_when = NaiveDate::from_ymd_opt(2025, 6 + round as u32 % 2, 1 + round as u32).unwrap();
+        let old_when =
+            NaiveDate::from_ymd_opt(2025, 6 + round as u32 % 2, 1 + round as u32).unwrap();
         let handles: Vec<_> = instances
             .into_iter()
             .enumerate()
@@ -265,7 +285,10 @@ fn parallel_instances_converge_without_loss() {
             1 => {
                 // One instance archives; the rest learn via reconcile.
                 let outcome = run_archive_pass(&mut instances[0].repo, TODAY()).unwrap();
-                assert!(outcome.archived > 0, "round 1 must archive the backdated dones");
+                assert!(
+                    outcome.archived > 0,
+                    "round 1 must archive the backdated dones"
+                );
                 converge(&mut instances);
                 assert_converged(&mut instances, total_tasks, "round1-archived");
             }
@@ -297,7 +320,10 @@ fn parallel_instances_converge_without_loss() {
                 let archived_id = instances[0]
                     .repo
                     .store()
-                    .query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() })
+                    .query_tasks(&TaskQuery {
+                        archived: true,
+                        ..TaskQuery::unpaginated()
+                    })
                     .unwrap()
                     .items[0]
                     .id;
@@ -305,7 +331,10 @@ fn parallel_instances_converge_without_loss() {
                 let inst = &mut instances[n - 1];
                 apply_edits(
                     archived_id,
-                    EditTaskParams { notes: Some("resurrected across instances".into()), ..Default::default() },
+                    EditTaskParams {
+                        notes: Some("resurrected across instances".into()),
+                        ..Default::default()
+                    },
                     TODAY(),
                     &inst.root.clone(),
                     &mut *inst.repo.store,
@@ -314,7 +343,10 @@ fn parallel_instances_converge_without_loss() {
                 .unwrap();
                 converge(&mut instances);
                 let corpus = assert_converged(&mut instances, total_tasks, "round2-resurrect");
-                assert!(!corpus[&archived_id].2, "resurrected task is active everywhere");
+                assert!(
+                    !corpus[&archived_id].2,
+                    "resurrected task is active everywhere"
+                );
             }
             _ => {}
         }
@@ -337,5 +369,8 @@ fn parallel_instances_converge_without_loss() {
         }
     }
     let archived_total = corpus.values().filter(|v| v.2).count();
-    assert!(archived_total > 0, "archive passes must have archived something");
+    assert!(
+        archived_total > 0,
+        "archive passes must have archived something"
+    );
 }

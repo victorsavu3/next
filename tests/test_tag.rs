@@ -1,8 +1,8 @@
 mod common;
 
-use next::core::store::Store as _;
 use next::cli::commands::{add, tag};
 use next::core::domain::task::Priority;
+use next::core::store::Store as _;
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -142,9 +142,18 @@ fn tag_description_survives_store_reload() {
 #[test]
 fn tag_describe_hierarchical_tag() {
     let mut env = common::setup();
-    tag::run(describe("@home/kitchen", "Tasks in the kitchen"), &mut env.ctx).unwrap();
+    tag::run(
+        describe("@home/kitchen", "Tasks in the kitchen"),
+        &mut env.ctx,
+    )
+    .unwrap();
 
-    let desc = env.ctx.repo.store.get_tag_description("@home/kitchen").unwrap();
+    let desc = env
+        .ctx
+        .repo
+        .store
+        .get_tag_description("@home/kitchen")
+        .unwrap();
     assert_eq!(desc.as_deref(), Some("Tasks in the kitchen"));
 }
 
@@ -157,8 +166,14 @@ fn list_tag_descriptions_returns_all() {
 
     let all = env.ctx.repo.store.list_tag_descriptions().unwrap();
     assert_eq!(all.get("@work").map(String::as_str), Some("Work tasks"));
-    assert_eq!(all.get("#printer").map(String::as_str), Some("Office printer"));
-    assert_eq!(all.get("python").map(String::as_str), Some("Python projects"));
+    assert_eq!(
+        all.get("#printer").map(String::as_str),
+        Some("Office printer")
+    );
+    assert_eq!(
+        all.get("python").map(String::as_str),
+        Some("Python projects")
+    );
     assert_eq!(all.len(), 3);
 }
 
@@ -553,7 +568,11 @@ fn legacy_description_file_reads_as_tag_meta() {
     // Write a legacy single-field TOML file directly (using encoded path).
     let tags_dir = env.ctx.repo.repo_root.join("tags");
     fs::create_dir_all(&tags_dir).unwrap();
-    fs::write(tags_dir.join("__context__work.toml"), "description = \"Office tasks\"\n").unwrap();
+    fs::write(
+        tags_dir.join("__context__work.toml"),
+        "description = \"Office tasks\"\n",
+    )
+    .unwrap();
 
     let meta = env.ctx.repo.store.get_tag_meta("@work").unwrap().unwrap();
     assert_eq!(meta.description.as_deref(), Some("Office tasks"));
@@ -561,4 +580,3 @@ fn legacy_description_file_reads_as_tag_meta() {
     assert!(meta.data.is_empty());
     assert!(meta.priority.is_none());
 }
-

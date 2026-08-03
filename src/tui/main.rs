@@ -41,7 +41,9 @@ fn parse_args(args: &[String]) -> anyhow::Result<Args> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--repo" => {
-                let p = it.next().ok_or_else(|| anyhow::anyhow!("--repo requires a path"))?;
+                let p = it
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--repo requires a path"))?;
                 repo = Some(PathBuf::from(p));
             }
             "--config" => {

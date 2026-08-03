@@ -111,12 +111,18 @@ pub fn rename(ctx: &mut AppContext, args: RenameArgs) -> anyhow::Result<()> {
         crate::core::tag_rename::rename_tag(&mut ctx.repo, &args.old, &args.new, args.merge)?;
 
     if outcome.is_empty() {
-        println!("Nothing to rename: no task, metadata or state references {}.", args.old);
+        println!(
+            "Nothing to rename: no task, metadata or state references {}.",
+            args.old
+        );
         return Ok(());
     }
 
     println!("Renamed {} to {}.", args.old, args.new);
-    println!("  tasks:     {} active, {} archived", outcome.active_tasks, outcome.archived_tasks);
+    println!(
+        "  tasks:     {} active, {} archived",
+        outcome.active_tasks, outcome.archived_tasks
+    );
     if !outcome.segments.is_empty() {
         println!("  segments:  {}", outcome.segments.join(", "));
     }
@@ -210,7 +216,12 @@ pub fn set_priority(ctx: &mut AppContext, args: SetPriorityArgs) -> anyhow::Resu
         vcs.commit(&[tag_path], &format!("next: tag set-priority {}", args.tag))?;
         Ok(())
     })?;
-    tracing::info!(cmd = "tag", "set priority for {} = {}", args.tag, args.priority);
+    tracing::info!(
+        cmd = "tag",
+        "set priority for {} = {}",
+        args.tag,
+        args.priority
+    );
     Ok(())
 }
 
@@ -227,7 +238,10 @@ pub fn clear_priority(ctx: &mut AppContext, args: ClearPriorityArgs) -> anyhow::
         } else {
             store.set_tag_meta(&args.tag, meta)?;
         }
-        vcs.commit(&[tag_path], &format!("next: tag clear-priority {}", args.tag))?;
+        vcs.commit(
+            &[tag_path],
+            &format!("next: tag clear-priority {}", args.tag),
+        )?;
         Ok(())
     })?;
     tracing::info!(cmd = "tag", "cleared priority for {}", args.tag);
@@ -241,7 +255,10 @@ pub fn set_no_time_urgency(ctx: &mut AppContext, args: NoTimeUrgencyArgs) -> any
         meta.no_time_urgency = true;
         store.set_tag_meta(&args.tag, meta)?;
         let tag_path = crate::core::storage::tag_meta_path(root, &args.tag);
-        vcs.commit(&[tag_path], &format!("next: tag set-no-time-urgency {}", args.tag))?;
+        vcs.commit(
+            &[tag_path],
+            &format!("next: tag set-no-time-urgency {}", args.tag),
+        )?;
         Ok(())
     })?;
     tracing::info!(cmd = "tag", "set no-time-urgency for {}", args.tag);
@@ -261,7 +278,10 @@ pub fn clear_no_time_urgency(ctx: &mut AppContext, args: NoTimeUrgencyArgs) -> a
         } else {
             store.set_tag_meta(&args.tag, meta)?;
         }
-        vcs.commit(&[tag_path], &format!("next: tag clear-no-time-urgency {}", args.tag))?;
+        vcs.commit(
+            &[tag_path],
+            &format!("next: tag clear-no-time-urgency {}", args.tag),
+        )?;
         Ok(())
     })?;
     tracing::info!(cmd = "tag", "cleared no-time-urgency for {}", args.tag);

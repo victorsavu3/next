@@ -223,7 +223,10 @@ fn add_auto_applies_active_context_when_no_context_tag() {
     let mut env = common::setup();
 
     // Set @work as the active context.
-    let state = GlobalState { active_contexts: vec!["@work".to_string()], ..Default::default() };
+    let state = GlobalState {
+        active_contexts: vec!["@work".to_string()],
+        ..Default::default()
+    };
     env.ctx.repo.store.save_state(&state).unwrap();
 
     add::run(args("No-context task"), &mut env.ctx).unwrap();
@@ -241,17 +244,30 @@ fn add_does_not_auto_apply_when_context_tag_already_present() {
     use next::core::domain::state::GlobalState;
     let mut env = common::setup();
 
-    let state = GlobalState { active_contexts: vec!["@work".to_string()], ..Default::default() };
+    let state = GlobalState {
+        active_contexts: vec!["@work".to_string()],
+        ..Default::default()
+    };
     env.ctx.repo.store.save_state(&state).unwrap();
 
     add::run(
-        add::Args { tags: vec!["@home".to_string()], ..args("Home task") },
+        add::Args {
+            tags: vec!["@home".to_string()],
+            ..args("Home task")
+        },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
 
     let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
-    assert!(task.tags.contains(&"@home".to_string()), "explicit tag kept");
-    assert!(!task.tags.contains(&"@work".to_string()), "@work must not be auto-applied when user already has a context tag");
+    assert!(
+        task.tags.contains(&"@home".to_string()),
+        "explicit tag kept"
+    );
+    assert!(
+        !task.tags.contains(&"@work".to_string()),
+        "@work must not be auto-applied when user already has a context tag"
+    );
 }
 
 #[test]

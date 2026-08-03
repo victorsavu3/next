@@ -30,11 +30,7 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     run_with_writer(args, ctx, &mut io::stdout())
 }
 
-pub fn run_with_writer(
-    args: Args,
-    ctx: &AppContext,
-    out: &mut dyn Write,
-) -> anyhow::Result<()> {
+pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> anyhow::Result<()> {
     let all_tasks = ctx.repo.store().list_tasks()?;
 
     let closed_tasks: Option<Vec<Task>> = if args.closed {
@@ -56,10 +52,7 @@ pub fn run_with_writer(
         } else if let Some(ref closed) = closed_tasks {
             closed.iter().collect()
         } else {
-            all_tasks
-                .iter()
-                .filter(|t| t.is_active())
-                .collect()
+            all_tasks.iter().filter(|t| t.is_active()).collect()
         };
         writeln!(out, "{}", serde_json::to_string_pretty(&tasks)?)?;
         return Ok(());

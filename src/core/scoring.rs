@@ -44,24 +44,60 @@ pub const DEFAULT_TAG_MEDIUM: f64 = 0.0;
 pub const DEFAULT_TAG_HIGH: f64 = 1.0;
 pub const DEFAULT_STARTED_BONUS: f64 = 4.0;
 
-fn default_due_overdue_base() -> f64 { DEFAULT_DUE_OVERDUE_BASE }
-fn default_due_overdue_per_day() -> f64 { DEFAULT_DUE_OVERDUE_PER_DAY }
-fn default_due_week_base() -> f64 { DEFAULT_DUE_WEEK_BASE }
-fn default_due_week_per_day() -> f64 { DEFAULT_DUE_WEEK_PER_DAY }
-fn default_due_month_base() -> f64 { DEFAULT_DUE_MONTH_BASE }
-fn default_due_month_per_day() -> f64 { DEFAULT_DUE_MONTH_PER_DAY }
-fn default_priority_low() -> f64 { DEFAULT_PRIORITY_LOW }
-fn default_priority_medium() -> f64 { DEFAULT_PRIORITY_MEDIUM }
-fn default_priority_high() -> f64 { DEFAULT_PRIORITY_HIGH }
-fn default_project_low() -> f64 { DEFAULT_PROJECT_LOW }
-fn default_project_medium() -> f64 { DEFAULT_PROJECT_MEDIUM }
-fn default_project_high() -> f64 { DEFAULT_PROJECT_HIGH }
-fn default_age_per_day() -> f64 { DEFAULT_AGE_PER_DAY }
-fn default_age_max() -> f64 { DEFAULT_AGE_MAX }
-fn default_tag_low() -> f64 { DEFAULT_TAG_LOW }
-fn default_tag_medium() -> f64 { DEFAULT_TAG_MEDIUM }
-fn default_tag_high() -> f64 { DEFAULT_TAG_HIGH }
-fn default_started_bonus() -> f64 { DEFAULT_STARTED_BONUS }
+fn default_due_overdue_base() -> f64 {
+    DEFAULT_DUE_OVERDUE_BASE
+}
+fn default_due_overdue_per_day() -> f64 {
+    DEFAULT_DUE_OVERDUE_PER_DAY
+}
+fn default_due_week_base() -> f64 {
+    DEFAULT_DUE_WEEK_BASE
+}
+fn default_due_week_per_day() -> f64 {
+    DEFAULT_DUE_WEEK_PER_DAY
+}
+fn default_due_month_base() -> f64 {
+    DEFAULT_DUE_MONTH_BASE
+}
+fn default_due_month_per_day() -> f64 {
+    DEFAULT_DUE_MONTH_PER_DAY
+}
+fn default_priority_low() -> f64 {
+    DEFAULT_PRIORITY_LOW
+}
+fn default_priority_medium() -> f64 {
+    DEFAULT_PRIORITY_MEDIUM
+}
+fn default_priority_high() -> f64 {
+    DEFAULT_PRIORITY_HIGH
+}
+fn default_project_low() -> f64 {
+    DEFAULT_PROJECT_LOW
+}
+fn default_project_medium() -> f64 {
+    DEFAULT_PROJECT_MEDIUM
+}
+fn default_project_high() -> f64 {
+    DEFAULT_PROJECT_HIGH
+}
+fn default_age_per_day() -> f64 {
+    DEFAULT_AGE_PER_DAY
+}
+fn default_age_max() -> f64 {
+    DEFAULT_AGE_MAX
+}
+fn default_tag_low() -> f64 {
+    DEFAULT_TAG_LOW
+}
+fn default_tag_medium() -> f64 {
+    DEFAULT_TAG_MEDIUM
+}
+fn default_tag_high() -> f64 {
+    DEFAULT_TAG_HIGH
+}
+fn default_started_bonus() -> f64 {
+    DEFAULT_STARTED_BONUS
+}
 
 /// Weights used in the urgency scoring formula. All fields are optional in the
 /// config file; omitted fields keep their default.
@@ -251,7 +287,12 @@ pub fn project_factor(parent_priority: Option<&Priority>, w: &ScoringConfig) -> 
 /// Grows linearly with age (days since creation) up to `age_max`.
 /// Returns 0.0 when age scoring is disabled for the task (long-term or future start date)
 /// or when no git creation date is available.
-pub fn age_factor(task: &Task, created_at: Option<DateTime<Utc>>, today: NaiveDate, w: &ScoringConfig) -> f64 {
+pub fn age_factor(
+    task: &Task,
+    created_at: Option<DateTime<Utc>>,
+    today: NaiveDate,
+    w: &ScoringConfig,
+) -> f64 {
     if task.age_scoring_disabled(today) {
         return 0.0;
     }
@@ -279,7 +320,11 @@ pub fn tag_factor(tags: &[String], tag_metas: &HashMap<String, TagMeta>, w: &Sco
 
 /// Started-state contribution: a flat bonus when the task is in the `Started` state.
 pub fn started_factor(status: &Status, w: &ScoringConfig) -> f64 {
-    if *status == Status::Started { w.started_bonus } else { 0.0 }
+    if *status == Status::Started {
+        w.started_bonus
+    } else {
+        0.0
+    }
 }
 
 /// True for the two terminal states, `Done` and `Cancelled`.
@@ -324,10 +369,17 @@ pub fn score(
     let parent_tags = parent.map_or(0.0, |p| tag_factor(&p.tags, tag_metas, w));
     let created_at = task_dates.get(&task.id).map(|d| d.created_at);
 
-    (if no_time { 0.0 } else { due_factor(task.due, today, w) })
-        + priority_factor(&task.priority, w)
+    (if no_time {
+        0.0
+    } else {
+        due_factor(task.due, today, w)
+    }) + priority_factor(&task.priority, w)
         + project_factor(parent.map(|p| &p.priority), w)
-        + (if no_time { 0.0 } else { age_factor(task, created_at, today, w) })
+        + (if no_time {
+            0.0
+        } else {
+            age_factor(task, created_at, today, w)
+        })
         + own_tags
         + parent_tags
         + started_factor(&task.status, w)
@@ -352,16 +404,35 @@ pub fn score_with_breakdown(
 
     let no_time = tag_no_time_urgency(&task.tags, tag_metas);
     let created_at = task_dates.get(&task.id).map(|d| d.created_at);
-    let due       = if no_time { 0.0 } else { due_factor(task.due, today, w) };
-    let priority  = priority_factor(&task.priority, w);
-    let project   = project_factor(parent.map(|p| &p.priority), w);
-    let age       = if no_time { 0.0 } else { age_factor(task, created_at, today, w) };
-    let tags      = tag_factor(&task.tags, tag_metas, w);
+    let due = if no_time {
+        0.0
+    } else {
+        due_factor(task.due, today, w)
+    };
+    let priority = priority_factor(&task.priority, w);
+    let project = project_factor(parent.map(|p| &p.priority), w);
+    let age = if no_time {
+        0.0
+    } else {
+        age_factor(task, created_at, today, w)
+    };
+    let tags = tag_factor(&task.tags, tag_metas, w);
     let parent_tags = parent.map_or(0.0, |p| tag_factor(&p.tags, tag_metas, w));
-    let started   = started_factor(&task.status, w);
+    let started = started_factor(&task.status, w);
     let adjustment = task.score_adjustment;
     let total = due + priority + project + age + tags + parent_tags + started + adjustment;
-    ScoreBreakdown { due, priority, project, age, tags, parent_tags, started, adjustment, total, no_time_urgency: no_time }
+    ScoreBreakdown {
+        due,
+        priority,
+        project,
+        age,
+        tags,
+        parent_tags,
+        started,
+        adjustment,
+        total,
+        no_time_urgency: no_time,
+    }
 }
 
 /// Scores each task in `tasks`, sorts by score descending (most urgent first),
@@ -449,7 +520,10 @@ mod tests {
     fn due_factor_due_in_one_day() {
         let tomorrow = today() + chrono::Duration::days(1);
         // days=1: 6.0 + (7-1)*0.8 = 6.0 + 4.8 = 10.8
-        assert_eq!(due_factor(Some(tomorrow), today(), &weights()), 6.0 + 6.0 * 0.8);
+        assert_eq!(
+            due_factor(Some(tomorrow), today(), &weights()),
+            6.0 + 6.0 * 0.8
+        );
     }
 
     #[test]
@@ -550,7 +624,10 @@ mod tests {
     // --- tag_factor ---
 
     fn meta_with_priority(p: Priority) -> TagMeta {
-        TagMeta { priority: Some(p), ..Default::default() }
+        TagMeta {
+            priority: Some(p),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -611,7 +688,14 @@ mod tests {
     #[test]
     fn score_no_due_medium_priority_no_parent() {
         let task = Task::new("simple task");
-        let s = score(&task, None, &HashMap::new(), today(), &weights(), &HashMap::new());
+        let s = score(
+            &task,
+            None,
+            &HashMap::new(),
+            today(),
+            &weights(),
+            &HashMap::new(),
+        );
         // priority_medium=1.0, no due, no parent, age=0 (no git dates)
         assert!((s - 1.0).abs() < 0.01);
     }
@@ -635,7 +719,14 @@ mod tests {
     fn score_adjustment_applied() {
         let mut task = Task::new("boosted");
         task.score_adjustment = 5.0;
-        let s = score(&task, None, &HashMap::new(), today(), &weights(), &HashMap::new());
+        let s = score(
+            &task,
+            None,
+            &HashMap::new(),
+            today(),
+            &weights(),
+            &HashMap::new(),
+        );
         assert!((s - 6.0).abs() < 0.01); // 1.0 (medium) + 5.0 (adj) + 0 (age)
     }
 
@@ -643,7 +734,14 @@ mod tests {
     fn score_started_bonus_applied() {
         let mut task = Task::new("in progress");
         task.mark_started();
-        let s = score(&task, None, &HashMap::new(), today(), &weights(), &HashMap::new());
+        let s = score(
+            &task,
+            None,
+            &HashMap::new(),
+            today(),
+            &weights(),
+            &HashMap::new(),
+        );
         // 1.0 (medium) + 4.0 (started) + 0 (age, no git dates)
         assert!((s - 5.0).abs() < 0.01);
     }
@@ -683,7 +781,14 @@ mod tests {
         let normal = Task::new("normal");
 
         let all = vec![normal.clone(), urgent.clone()];
-        let scored = score_and_sort(vec![normal, urgent], &all, today(), &weights(), &HashMap::new(), &HashMap::new());
+        let scored = score_and_sort(
+            vec![normal, urgent],
+            &all,
+            today(),
+            &weights(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
 
         assert_eq!(scored[0].task.title, "urgent");
         assert!(scored[0].score > scored[1].score);
@@ -700,11 +805,26 @@ mod tests {
         let orphan = Task::new("no parent");
 
         let all = vec![parent.clone(), child.clone(), orphan.clone()];
-        let scored = score_and_sort(vec![child, orphan], &all, today(), &weights(), &HashMap::new(), &HashMap::new());
+        let scored = score_and_sort(
+            vec![child, orphan],
+            &all,
+            today(),
+            &weights(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
 
         // child gets +0.5 from high-priority parent; orphan gets +0
-        let child_score = scored.iter().find(|s| s.task.title == "child task").unwrap().score;
-        let orphan_score = scored.iter().find(|s| s.task.title == "no parent").unwrap().score;
+        let child_score = scored
+            .iter()
+            .find(|s| s.task.title == "child task")
+            .unwrap()
+            .score;
+        let orphan_score = scored
+            .iter()
+            .find(|s| s.task.title == "no parent")
+            .unwrap()
+            .score;
         assert!(child_score > orphan_score);
     }
 
@@ -720,10 +840,22 @@ mod tests {
             .with_timezone(&chrono::Utc);
         // Provide a git creation date far in the past so age would normally be capped.
         let mut dates: HashMap<Uuid, TaskDates> = HashMap::new();
-        dates.insert(task.id, TaskDates { created_at: old_ts, updated_at: old_ts });
+        dates.insert(
+            task.id,
+            TaskDates {
+                created_at: old_ts,
+                updated_at: old_ts,
+            },
+        );
 
         let mut metas = HashMap::new();
-        metas.insert("wishlist".to_string(), TagMeta { no_time_urgency: true, ..Default::default() });
+        metas.insert(
+            "wishlist".to_string(),
+            TagMeta {
+                no_time_urgency: true,
+                ..Default::default()
+            },
+        );
 
         let s = score(&task, None, &dates, today(), &weights(), &metas);
         // Only priority_factor(medium)=1.0 contributes; due and age are zeroed.
@@ -755,10 +887,25 @@ mod tests {
         metas.insert("@work".to_string(), meta_with_priority(Priority::High));
 
         let all = vec![parent.clone(), child.clone(), orphan.clone()];
-        let scored = score_and_sort(vec![child, orphan], &all, today(), &weights(), &metas, &HashMap::new());
+        let scored = score_and_sort(
+            vec![child, orphan],
+            &all,
+            today(),
+            &weights(),
+            &metas,
+            &HashMap::new(),
+        );
 
-        let child_score = scored.iter().find(|s| s.task.title == "child task").unwrap().score;
-        let orphan_score = scored.iter().find(|s| s.task.title == "no parent").unwrap().score;
+        let child_score = scored
+            .iter()
+            .find(|s| s.task.title == "child task")
+            .unwrap()
+            .score;
+        let orphan_score = scored
+            .iter()
+            .find(|s| s.task.title == "no parent")
+            .unwrap()
+            .score;
         // child gets +1.0 from parent's @work tag
         assert!((child_score - orphan_score - 1.0).abs() < 0.01);
     }
@@ -782,7 +929,13 @@ mod tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
         let mut dates = HashMap::new();
-        dates.insert(task.id, TaskDates { created_at: old_ts, updated_at: old_ts });
+        dates.insert(
+            task.id,
+            TaskDates {
+                created_at: old_ts,
+                updated_at: old_ts,
+            },
+        );
 
         (task, metas, dates)
     }
@@ -792,7 +945,10 @@ mod tests {
         // Baseline for the two tests below: this fixture really does score.
         let (task, metas, dates) = loaded_task("loaded");
         let s = score(&task, None, &dates, today(), &weights(), &metas);
-        assert!(s > 20.0, "expected a large score for the open fixture, got {s}");
+        assert!(
+            s > 20.0,
+            "expected a large score for the open fixture, got {s}"
+        );
     }
 
     #[test]
@@ -823,7 +979,14 @@ mod tests {
         task.mark_started();
         task.mark_done(today());
 
-        let s = score(&task, Some(&parent), &HashMap::new(), today(), &weights(), &metas);
+        let s = score(
+            &task,
+            Some(&parent),
+            &HashMap::new(),
+            today(),
+            &weights(),
+            &metas,
+        );
         assert_eq!(s, 0.0);
     }
 
@@ -878,9 +1041,19 @@ mod tests {
 
         let input = vec![first.clone(), second.clone(), third.clone()];
         let all = input.clone();
-        let scored = score_and_sort(input, &all, today(), &weights(), &HashMap::new(), &HashMap::new());
+        let scored = score_and_sort(
+            input,
+            &all,
+            today(),
+            &weights(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
 
-        assert_eq!(titles(&scored), ["closed first", "closed second", "closed third"]);
+        assert_eq!(
+            titles(&scored),
+            ["closed first", "closed second", "closed third"]
+        );
         assert!(scored.iter().all(|s| s.score == 0.0));
     }
 
@@ -902,7 +1075,14 @@ mod tests {
 
         let input = vec![done_high, medium_open, cancelled, started_open];
         let all = input.clone();
-        let scored = score_and_sort(input, &all, today(), &weights(), &HashMap::new(), &HashMap::new());
+        let scored = score_and_sort(
+            input,
+            &all,
+            today(),
+            &weights(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
 
         assert_eq!(
             titles(&scored),
@@ -931,7 +1111,12 @@ mod tests {
         let factors = bd.nonzero_factors();
         assert_eq!(
             factors,
-            vec![("due", 12.0), ("priority", 1.0), ("age", 0.5), ("adj", -2.0)]
+            vec![
+                ("due", 12.0),
+                ("priority", 1.0),
+                ("age", 0.5),
+                ("adj", -2.0)
+            ]
         );
     }
 

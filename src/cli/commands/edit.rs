@@ -1,8 +1,8 @@
-use chrono::Local;
-use crate::core::recurrence::parse_recurrence;
 use crate::core::domain::{date_parse::parse_date, tag, task::Recurrence};
+use crate::core::recurrence::parse_recurrence;
 use crate::core::recurrence::parse_snap;
 use crate::core::service::{apply_edits, validate_url, EditTaskParams};
+use chrono::Local;
 
 use crate::{core::resolve::resolve_task_id, AppContext};
 
@@ -138,7 +138,9 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let start = if args.clear_start {
         None
     } else {
-        args.start.map(|expr| parse_date(&expr, today)).transpose()?
+        args.start
+            .map(|expr| parse_date(&expr, today))
+            .transpose()?
     };
 
     // Validate URL before building params (so we can report errors early).
@@ -169,7 +171,9 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
             tag::validate_tag(t).map_err(|e| anyhow::anyhow!(e))?;
             remove_tags.push(t.to_owned());
         } else {
-            anyhow::bail!("unrecognised trailing argument {token:?} — use +tag to add or -tag to remove");
+            anyhow::bail!(
+                "unrecognised trailing argument {token:?} — use +tag to add or -tag to remove"
+            );
         }
     }
 
@@ -251,7 +255,12 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&task)?);
     } else {
         println!("edited [{}] {}", &task.id.to_string()[..8], task.title);
-        tracing::info!(cmd = "edit", "[{}] {}", &task.id.to_string()[..8], task.title);
+        tracing::info!(
+            cmd = "edit",
+            "[{}] {}",
+            &task.id.to_string()[..8],
+            task.title
+        );
     }
     Ok(())
 }

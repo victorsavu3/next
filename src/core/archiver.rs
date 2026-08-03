@@ -57,7 +57,11 @@ fn eligible_ids(
     let live_series: HashSet<Uuid> = active
         .iter()
         .filter(|t| t.is_active())
-        .filter_map(|t| t.recurrence_id.or(Some(t.id)).filter(|_| t.recurrence.is_some()))
+        .filter_map(|t| {
+            t.recurrence_id
+                .or(Some(t.id))
+                .filter(|_| t.recurrence.is_some())
+        })
         .collect();
 
     let mut eligible: HashSet<Uuid> = active
@@ -130,8 +134,7 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
             .iter()
             .filter_map(|t| {
                 let hex = t.id.simple().to_string();
-                let filename =
-                    crate::core::storage::filenames::generate_filename(t);
+                let filename = crate::core::storage::filenames::generate_filename(t);
                 let filename = filename.as_str();
                 walk.get(&hex[..8])
                     .or_else(|| walk.get(filename))
@@ -139,8 +142,10 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
                     .map(|d| (t.id, d.clone()))
             })
             .collect();
-        let updated: HashMap<Uuid, NaiveDate> =
-            dates.iter().map(|(id, d)| (*id, d.updated_at.date_naive())).collect();
+        let updated: HashMap<Uuid, NaiveDate> = dates
+            .iter()
+            .map(|(id, d)| (*id, d.updated_at.date_naive()))
+            .collect();
 
         let eligible = eligible_ids(&active, &updated, &config, today);
         if eligible.is_empty() {
@@ -173,7 +178,10 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
                 .completed_at
                 .or_else(|| updated.get(&task.id).copied())
                 .expect("eligibility guarantees a reference date");
-            by_month.entry((reference.year(), reference.month())).or_default().push(task);
+            by_month
+                .entry((reference.year(), reference.month()))
+                .or_default()
+                .push(task);
         }
 
         let existing = segment_paths(repo_root)?;
@@ -192,7 +200,10 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
             let highest = |paths: &mut dyn Iterator<Item = &str>| -> Option<u32> {
                 paths
                     .filter_map(|rel| {
-                        rel.strip_prefix(&month_prefix)?.strip_suffix(".toml")?.parse().ok()
+                        rel.strip_prefix(&month_prefix)?
+                            .strip_suffix(".toml")?
+                            .parse()
+                            .ok()
                     })
                     .max()
             };
@@ -208,12 +219,21 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
             };
             let month_anchor =
                 NaiveDate::from_ymd_opt(year, month, 1).expect("valid month from date");
-            let mut entries = read_segment(&repo_root.join(segment_rel_path(month_anchor, seg_no)))?;
+            let mut entries =
+                read_segment(&repo_root.join(segment_rel_path(month_anchor, seg_no)))?;
 
             for task in tasks {
                 if entries.len() >= config.segment_max_tasks {
                     // Seal the current segment and start the next one.
-                    flush_segment(store, repo_root, month_anchor, seg_no, &entries, &mut commit_paths, &mut outcome)?;
+                    flush_segment(
+                        store,
+                        repo_root,
+                        month_anchor,
+                        seg_no,
+                        &entries,
+                        &mut commit_paths,
+                        &mut outcome,
+                    )?;
                     seg_no += 1;
                     entries = Vec::new();
                 }
@@ -225,7 +245,15 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
                 });
                 outcome.archived += 1;
             }
-            flush_segment(store, repo_root, month_anchor, seg_no, &entries, &mut commit_paths, &mut outcome)?;
+            flush_segment(
+                store,
+                repo_root,
+                month_anchor,
+                seg_no,
+                &entries,
+                &mut commit_paths,
+                &mut outcome,
+            )?;
         }
 
         outcome.segments.sort();
@@ -238,7 +266,9 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
         prune_phase(store, vcs, repo_root, &config, today, &mut outcome)?;
         Ok(outcome)
     })
-    .map_err(|e| crate::core::error::TaskError::Other(format!("archive pass in {}: {e}", root.display())))
+    .map_err(|e| {
+        crate::core::error::TaskError::Other(format!("archive pass in {}: {e}", root.display()))
+    })
 }
 
 /// The cold-tier prune: checkout segments whose newest completion is older
@@ -268,13 +298,16 @@ fn prune_phase(
         if newest.is_none_or(|d| d >= cutoff) {
             continue;
         }
-        let Some(blob) = crate::core::storage::git_backend::blob_id_at_head(repo_root, &rel)
-        else {
+        let Some(blob) = crate::core::storage::git_backend::blob_id_at_head(repo_root, &rel) else {
             // Not in HEAD (dirty or never committed) — skip; a later pass
             // prunes it once committed.
             continue;
         };
-        manifest_lines.push(PrunedSegment { path: rel.clone(), blob, tasks: entries.len() });
+        manifest_lines.push(PrunedSegment {
+            path: rel.clone(),
+            blob,
+            tasks: entries.len(),
+        });
         std::fs::remove_file(&abs)
             .map_err(|e| crate::core::error::TaskError::Other(format!("prune {rel}: {e}")))?;
         store.note_cold_segment(&rel)?;
@@ -293,7 +326,10 @@ fn prune_phase(
     outcome.pruned.sort();
     vcs.commit(
         &commit_paths,
-        &format!("next: prune {} segment(s) to cold tier", outcome.pruned.len()),
+        &format!(
+            "next: prune {} segment(s) to cold tier",
+            outcome.pruned.len()
+        ),
     )?;
     Ok(())
 }
@@ -342,11 +378,14 @@ pub fn resurrect_if_archived(
             })?;
         crate::core::storage::archive::parse_segment(&content)?
     };
-    let pos = entries.iter().position(|e| e.task.id == id).ok_or_else(|| {
-        crate::core::error::TaskError::Other(format!(
-            "cache row for {id} points at {rel}, but the segment has no such entry"
-        ))
-    })?;
+    let pos = entries
+        .iter()
+        .position(|e| e.task.id == id)
+        .ok_or_else(|| {
+            crate::core::error::TaskError::Other(format!(
+                "cache row for {id} points at {rel}, but the segment has no such entry"
+            ))
+        })?;
     let removed = entries.remove(pos);
 
     // Order matters: flip the row first (so it no longer lives at the
@@ -431,15 +470,25 @@ mod tests {
         // Closed instance still carrying the rule, with NO active successor:
         // it is the series head and must stay.
         let mut head = done_on("Series head", d(2025, 6, 1));
-        head.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
+        head.recurrence = Some(Recurrence::Completion {
+            interval_days: 7,
+            snap: None,
+        });
 
-        let got =
-            eligible_ids(&[head.clone()], &HashMap::new(), &ArchiveConfig::default(), TODAY());
+        let got = eligible_ids(
+            &[head.clone()],
+            &HashMap::new(),
+            &ArchiveConfig::default(),
+            TODAY(),
+        );
         assert!(!got.contains(&head.id));
 
         // With an active successor in the same series, the old instance goes.
         let mut successor = Task::new("Next instance");
-        successor.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
+        successor.recurrence = Some(Recurrence::Completion {
+            interval_days: 7,
+            snap: None,
+        });
         successor.recurrence_id = Some(head.id);
         let mut old = head.clone();
         old.recurrence_id = None; // first instance: series id defaults to its own id

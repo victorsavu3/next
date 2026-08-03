@@ -46,11 +46,11 @@ fn large_repository_lifecycle() {
     // threshold (one of them past the prune threshold, one month big enough
     // to seal a segment), two recent — plus 600 open.
     let months: [(NaiveDate, usize); 5] = [
-        (d(2025, 3, 1), 200),  // ancient → archives, then prunes
+        (d(2025, 3, 1), 200),   // ancient → archives, then prunes
         (d(2025, 10, 1), 1100), // old → archives into 2 segments (cap 1000)
-        (d(2025, 12, 1), 100), // old → archives
-        (d(2026, 6, 1), 60),   // recent → stays active tier
-        (d(2026, 7, 1), 40),   // recent → stays active tier
+        (d(2025, 12, 1), 100),  // old → archives
+        (d(2026, 6, 1), 60),    // recent → stays active tier
+        (d(2026, 7, 1), 40),    // recent → stays active tier
     ];
     let mut done_old = 0usize;
     let mut done_recent = 0usize;
@@ -84,7 +84,8 @@ fn large_repository_lifecycle() {
 
     // A second store opened now simulates another machine that will learn
     // about the pass purely through the incremental reconcile.
-    let inner = next::core::storage::TomlStore::open(root.clone(), root.join("state.toml")).unwrap();
+    let inner =
+        next::core::storage::TomlStore::open(root.clone(), root.join("state.toml")).unwrap();
     let vcs = next::core::storage::GitBackend::open(&root).unwrap();
     let head = next::core::store::VcsBackend::head_hash(&vcs).unwrap();
     let mut other =
@@ -108,7 +109,10 @@ fn large_repository_lifecycle() {
     let store = repo.store();
     assert_eq!(store.list_tasks().unwrap().len(), 600 + done_recent);
     let archived = store
-        .query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() })
+        .query_tasks(&TaskQuery {
+            archived: true,
+            ..TaskQuery::unpaginated()
+        })
         .unwrap();
     assert_eq!(archived.total as usize, done_old);
 
@@ -144,7 +148,10 @@ fn large_repository_lifecycle() {
     assert_eq!(other.list_tasks().unwrap().len(), 600 + done_recent);
     assert_eq!(
         other
-            .query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() })
+            .query_tasks(&TaskQuery {
+                archived: true,
+                ..TaskQuery::unpaginated()
+            })
             .unwrap()
             .total as usize,
         done_old
@@ -189,36 +196,63 @@ fn resurrection_and_rearchive_cycles() {
     for cycle in 1..=3 {
         // Archive (and prune — the month is past the cold threshold).
         let outcome = run_archive_pass(&mut env.ctx.repo, TODAY()).unwrap();
-        assert_eq!(outcome.archived, if cycle == 1 { 2 } else { 1 }, "cycle {cycle}");
-        assert!(outcome.pruned.contains(&seg.to_string()), "cycle {cycle} prunes");
-        assert!(!root.join(seg).exists(), "cycle {cycle}: segment left the checkout");
+        assert_eq!(
+            outcome.archived,
+            if cycle == 1 { 2 } else { 1 },
+            "cycle {cycle}"
+        );
+        assert!(
+            outcome.pruned.contains(&seg.to_string()),
+            "cycle {cycle} prunes"
+        );
+        assert!(
+            !root.join(seg).exists(),
+            "cycle {cycle}: segment left the checkout"
+        );
 
         // Resurrect from the cold tier by editing.
         let edited = apply_edits(
             cycler.id,
-            EditTaskParams { notes: Some(format!("cycle {cycle}")), ..Default::default() },
+            EditTaskParams {
+                notes: Some(format!("cycle {cycle}")),
+                ..Default::default()
+            },
             TODAY(),
             &root,
             &mut *env.ctx.repo.store,
             &*env.ctx.repo.vcs,
         )
         .unwrap();
-        assert_eq!(edited.notes.as_deref(), Some(format!("cycle {cycle}").as_str()));
+        assert_eq!(
+            edited.notes.as_deref(),
+            Some(format!("cycle {cycle}").as_str())
+        );
 
         // Exactly one copy anywhere: active tier has it, the restored
         // segment holds only the bystander.
         let store = env.ctx.repo.store();
         assert_eq!(
-            store.query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+            store
+                .query_tasks(&TaskQuery {
+                    archived: true,
+                    ..TaskQuery::unpaginated()
+                })
+                .unwrap()
+                .total,
             1,
             "cycle {cycle}: only the bystander stays archived"
         );
         let entries = next::core::storage::archive::read_segment(&root.join(seg)).unwrap();
         assert_eq!(entries.len(), 1, "cycle {cycle}");
         assert_eq!(entries[0].task.id, bystander.id, "cycle {cycle}");
-        assert!(store.get_task_by_slug("cycler").unwrap().is_some(), "cycle {cycle}");
+        assert!(
+            store.get_task_by_slug("cycler").unwrap().is_some(),
+            "cycle {cycle}"
+        );
         assert_eq!(
-            store.task_dates().unwrap()[&cycler.id].created_at.timestamp(),
+            store.task_dates().unwrap()[&cycler.id]
+                .created_at
+                .timestamp(),
             created_at.timestamp(),
             "cycle {cycle}: creation date survives the round trip"
         );
@@ -229,11 +263,18 @@ fn resurrection_and_rearchive_cycles() {
     let outcome = run_archive_pass(&mut env.ctx.repo, TODAY()).unwrap();
     let store = env.ctx.repo.store();
     let archived_total = store
-        .query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() })
+        .query_tasks(&TaskQuery {
+            archived: true,
+            ..TaskQuery::unpaginated()
+        })
         .unwrap()
         .total;
     let active_total = store.list_tasks().unwrap().len() as u64;
-    assert_eq!(active_total + archived_total, 2, "no duplicates after cycling: {outcome:?}");
+    assert_eq!(
+        active_total + archived_total,
+        2,
+        "no duplicates after cycling: {outcome:?}"
+    );
 
     // The manifest never accumulated stale state: one line per path at most
     // is live, and the cache can be rebuilt from scratch identically.
@@ -249,10 +290,14 @@ fn resurrection_and_rearchive_cycles() {
         )
     };
     assert_eq!(
-        fresh.list_tasks().unwrap().len() as u64 + fresh
-            .query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() })
-            .unwrap()
-            .total,
+        fresh.list_tasks().unwrap().len() as u64
+            + fresh
+                .query_tasks(&TaskQuery {
+                    archived: true,
+                    ..TaskQuery::unpaginated()
+                })
+                .unwrap()
+                .total,
         2,
         "fresh rebuild agrees with the live cache"
     );

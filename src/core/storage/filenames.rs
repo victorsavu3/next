@@ -108,14 +108,24 @@ mod tests {
         task.slug = None;
         let name = generate_filename(&task);
         // Must start with the title slug.
-        assert!(name.starts_with("buy-groceries-"), "unexpected filename: {name}");
+        assert!(
+            name.starts_with("buy-groceries-"),
+            "unexpected filename: {name}"
+        );
         // Must end with .toml.
         assert!(name.ends_with(".toml"), "unexpected filename: {name}");
         // The UUID suffix is 8 hex chars between the last '-' and '.toml'.
         let stem = name.strip_suffix(".toml").unwrap();
         let suffix = stem.rsplit('-').next().unwrap();
-        assert_eq!(suffix.len(), 8, "uuid suffix should be 8 chars, got: {suffix}");
-        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()), "suffix not hex: {suffix}");
+        assert_eq!(
+            suffix.len(),
+            8,
+            "uuid suffix should be 8 chars, got: {suffix}"
+        );
+        assert!(
+            suffix.chars().all(|c| c.is_ascii_hexdigit()),
+            "suffix not hex: {suffix}"
+        );
     }
 
     #[test]
@@ -123,7 +133,10 @@ mod tests {
         let task = Task::new("Fix bug");
         let name = generate_filename(&task);
         let expected_uuid8 = &task.id.to_string().replace('-', "")[..8];
-        assert!(name.contains(expected_uuid8), "filename {name} should contain uuid8 {expected_uuid8}");
+        assert!(
+            name.contains(expected_uuid8),
+            "filename {name} should contain uuid8 {expected_uuid8}"
+        );
     }
 
     #[test]
@@ -133,14 +146,20 @@ mod tests {
         assert_ne!(t1.id, t2.id);
         let n1 = generate_filename(&t1);
         let n2 = generate_filename(&t2);
-        assert_ne!(n1, n2, "two tasks with same title should get different filenames");
+        assert_ne!(
+            n1, n2,
+            "two tasks with same title should get different filenames"
+        );
     }
 
     #[test]
     fn filename_title_with_special_chars() {
         let task = Task::new("Fix: crash in parser!");
         let name = generate_filename(&task);
-        assert!(name.starts_with("fix-crash-in-parser-"), "unexpected filename: {name}");
+        assert!(
+            name.starts_with("fix-crash-in-parser-"),
+            "unexpected filename: {name}"
+        );
     }
 
     // ------------------------------------------------------------------

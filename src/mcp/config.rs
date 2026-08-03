@@ -85,7 +85,10 @@ fn load_file_config(path: &Path) -> McpFileConfig {
     match toml::from_str::<McpFileConfig>(&content) {
         Ok(cfg) => cfg,
         Err(e) => {
-            eprintln!("warning: failed to parse config file {}: {e}", path.display());
+            eprintln!(
+                "warning: failed to parse config file {}: {e}",
+                path.display()
+            );
             McpFileConfig::default()
         }
     }
@@ -124,7 +127,8 @@ fn resolve_secret(
     env_ref: Option<String>,
     config_path: &Path,
 ) -> anyhow::Result<Option<String>> {
-    let sources = u8::from(inline.is_some()) + u8::from(file.is_some()) + u8::from(env_ref.is_some());
+    let sources =
+        u8::from(inline.is_some()) + u8::from(file.is_some()) + u8::from(env_ref.is_some());
     if sources > 1 {
         anyhow::bail!(
             "at most one of `{name}`, `{name}_file`, `{name}_env` may be set (in {})",
@@ -198,7 +202,10 @@ pub struct McpConfig {
 
 /// Returns the first non-empty `Some` value from `env_var`, then `file_val`.
 fn env_or_file_str(env_var: &str, file_val: Option<String>) -> Option<String> {
-    std::env::var(env_var).ok().filter(|s| !s.is_empty()).or(file_val)
+    std::env::var(env_var)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or(file_val)
 }
 
 /// Parses a boolean env var that defaults to `true` and treats
@@ -213,7 +220,8 @@ fn parse_bool_default_true(raw: Option<&str>) -> bool {
 /// Parses a `u64` seconds env var, falling back to `default` when unset, empty,
 /// or unparseable.
 fn parse_secs_or(raw: Option<&str>, default: u64) -> u64 {
-    raw.and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(default)
+    raw.and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(default)
 }
 
 impl McpConfig {
@@ -241,10 +249,12 @@ impl McpConfig {
             file.bearer_token_env,
             &path,
         )?
-        .ok_or_else(|| anyhow::anyhow!(
-            "NEXT_BEARER_TOKEN is required (set the env var, or bearer_token/\
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "NEXT_BEARER_TOKEN is required (set the env var, or bearer_token/\
              bearer_token_file/bearer_token_env in config.toml)"
-        ))?;
+            )
+        })?;
         if bearer_token.is_empty() {
             anyhow::bail!("NEXT_BEARER_TOKEN / bearer_token must not be empty");
         }
@@ -258,20 +268,22 @@ impl McpConfig {
             &path,
         )?;
 
-        let repo_path = std::env::var("NEXT_REPO_PATH").ok()
+        let repo_path = std::env::var("NEXT_REPO_PATH")
+            .ok()
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
             .or(file.repo_path)
             .unwrap_or_else(|| PathBuf::from("/data/tasks"));
 
-        let bind_addr: SocketAddr = std::env::var("NEXT_BIND_ADDR").ok()
+        let bind_addr: SocketAddr = std::env::var("NEXT_BIND_ADDR")
+            .ok()
             .filter(|s| !s.is_empty())
             .or(file.bind_addr)
             .unwrap_or_else(|| "0.0.0.0:3000".to_owned())
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid bind address: {e}"))?;
 
-        let git_url  = env_or_file_str("NEXT_GIT_URL",  file.git.url);
+        let git_url = env_or_file_str("NEXT_GIT_URL", file.git.url);
         let git_user = env_or_file_str("NEXT_GIT_USER", file.git.user);
         let git_token = secret_with_env_override(
             "NEXT_GIT_TOKEN",
@@ -282,7 +294,7 @@ impl McpConfig {
             &path,
         )?;
 
-        let git_author_name  = env_or_file_str("NEXT_GIT_AUTHOR_NAME",  file.git.author_name);
+        let git_author_name = env_or_file_str("NEXT_GIT_AUTHOR_NAME", file.git.author_name);
         let git_author_email = env_or_file_str("NEXT_GIT_AUTHOR_EMAIL", file.git.author_email);
 
         let partial_clone = match std::env::var("NEXT_GIT_PARTIAL_CLONE") {
@@ -293,9 +305,14 @@ impl McpConfig {
         // ── sync_interval ────────────────────────────────────────────────────
         let sync_interval = match std::env::var("NEXT_SYNC_INTERVAL") {
             Ok(s) => {
-                let secs: u64 = s.parse()
-                    .map_err(|_| anyhow::anyhow!("NEXT_SYNC_INTERVAL must be a non-negative integer (seconds)"))?;
-                if secs == 0 { None } else { Some(Duration::from_secs(secs)) }
+                let secs: u64 = s.parse().map_err(|_| {
+                    anyhow::anyhow!("NEXT_SYNC_INTERVAL must be a non-negative integer (seconds)")
+                })?;
+                if secs == 0 {
+                    None
+                } else {
+                    Some(Duration::from_secs(secs))
+                }
             }
             Err(_) => match file.sync.interval_secs {
                 Some(0) => None,
@@ -320,8 +337,11 @@ impl McpConfig {
         let autopull = match std::env::var("NEXT_AUTOPULL")
             .ok()
             .filter(|s| !s.is_empty())
-            .or_else(|| std::env::var("NEXT_PULL_BEFORE_QUERY").ok().filter(|s| !s.is_empty()))
-        {
+            .or_else(|| {
+                std::env::var("NEXT_PULL_BEFORE_QUERY")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            }) {
             Some(ref s) => parse_bool_default_true(Some(s)),
             None => file.sync.autopull.unwrap_or(true),
         };
@@ -367,7 +387,10 @@ mod tests {
     #[test]
     fn autopull_falsey_values() {
         for v in ["0", "false", "no", "False", "NO", " false "] {
-            assert!(!parse_bool_default_true(Some(v)), "expected false for {v:?}");
+            assert!(
+                !parse_bool_default_true(Some(v)),
+                "expected false for {v:?}"
+            );
         }
     }
 
@@ -421,7 +444,10 @@ mod tests {
         assert_eq!(cfg.webhook_token.as_deref(), Some("wh"));
         assert_eq!(cfg.repo_path, Some(PathBuf::from("/repos/tasks")));
         assert_eq!(cfg.bind_addr.as_deref(), Some("127.0.0.1:4000"));
-        assert_eq!(cfg.git.url.as_deref(), Some("https://git.example.com/tasks.git"));
+        assert_eq!(
+            cfg.git.url.as_deref(),
+            Some("https://git.example.com/tasks.git")
+        );
         assert_eq!(cfg.git.user.as_deref(), Some("alice"));
         assert_eq!(cfg.git.token.as_deref(), Some("glpat-xxx"));
         assert_eq!(cfg.git.author_name.as_deref(), Some("bot"));
@@ -443,7 +469,10 @@ mod tests {
             token_file = "/run/secrets/git"
         "#;
         let cfg: McpFileConfig = toml::from_str(toml).unwrap();
-        assert_eq!(cfg.bearer_token_file, Some(PathBuf::from("/run/secrets/bearer")));
+        assert_eq!(
+            cfg.bearer_token_file,
+            Some(PathBuf::from("/run/secrets/bearer"))
+        );
         assert_eq!(cfg.webhook_token_env.as_deref(), Some("WEBHOOK_TOK"));
         assert_eq!(cfg.git.token_file, Some(PathBuf::from("/run/secrets/git")));
         assert!(cfg.bearer_token.is_none());
@@ -460,25 +489,34 @@ mod tests {
 
     #[test]
     fn autopull_accepts_old_pull_before_query_alias() {
-        let cfg: McpFileConfig =
-            toml::from_str("[sync]\npull_before_query = false").unwrap();
-        assert_eq!(cfg.sync.autopull, Some(false), "old key name must still parse");
+        let cfg: McpFileConfig = toml::from_str("[sync]\npull_before_query = false").unwrap();
+        assert_eq!(
+            cfg.sync.autopull,
+            Some(false),
+            "old key name must still parse"
+        );
     }
 
     #[test]
     fn sync_interval_zero_in_file_disables_sync() {
         // Simulates file having interval_secs = 0 and no env override.
         let file = McpFileConfig {
-            sync: SyncFileConfig { interval_secs: Some(0), ..Default::default() },
+            sync: SyncFileConfig {
+                interval_secs: Some(0),
+                ..Default::default()
+            },
             ..Default::default()
         };
         // Mirror the interval resolution logic from McpConfig::load().
         let interval: Option<Duration> = match file.sync.interval_secs {
             Some(0) => None,
             Some(s) => Some(Duration::from_secs(s)),
-            None    => Some(Duration::from_secs(86400)),
+            None => Some(Duration::from_secs(86400)),
         };
-        assert!(interval.is_none(), "interval_secs=0 should disable periodic sync");
+        assert!(
+            interval.is_none(),
+            "interval_secs=0 should disable periodic sync"
+        );
     }
 
     // ── path discovery ────────────────────────────────────────────────────────
@@ -486,8 +524,10 @@ mod tests {
     #[test]
     fn config_path_precedence_cli_over_env_over_default() {
         let env = |vars: &[(&str, &str)]| {
-            let owned: Vec<(String, String)> =
-                vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            let owned: Vec<(String, String)> = vars
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
             move |k: &str| owned.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.clone())
         };
 
@@ -495,7 +535,10 @@ mod tests {
         assert_eq!(
             resolve_config_path(
                 Some(PathBuf::from("/cli.toml")),
-                env(&[("NEXT_MCP_CONFIG", "/mcp.toml"), ("NEXT_CONFIG", "/old.toml")]),
+                env(&[
+                    ("NEXT_MCP_CONFIG", "/mcp.toml"),
+                    ("NEXT_CONFIG", "/old.toml")
+                ]),
             ),
             PathBuf::from("/cli.toml")
         );
@@ -503,7 +546,10 @@ mod tests {
         assert_eq!(
             resolve_config_path(
                 None,
-                env(&[("NEXT_MCP_CONFIG", "/mcp.toml"), ("NEXT_CONFIG", "/old.toml")]),
+                env(&[
+                    ("NEXT_MCP_CONFIG", "/mcp.toml"),
+                    ("NEXT_CONFIG", "/old.toml")
+                ]),
             ),
             PathBuf::from("/mcp.toml")
         );
@@ -524,7 +570,11 @@ mod tests {
     #[test]
     fn config_path_default_ends_with_next_mcp() {
         let p = config_path();
-        assert!(p.ends_with("next-mcp/config.toml"), "unexpected default path: {}", p.display());
+        assert!(
+            p.ends_with("next-mcp/config.toml"),
+            "unexpected default path: {}",
+            p.display()
+        );
     }
 
     #[test]
@@ -568,7 +618,11 @@ mod tests {
             Path::new("/cfg.toml"),
         )
         .unwrap();
-        assert_eq!(got.as_deref(), Some("file-tok"), "trailing newline must be stripped");
+        assert_eq!(
+            got.as_deref(),
+            Some("file-tok"),
+            "trailing newline must be stripped"
+        );
     }
 
     #[test]
@@ -582,8 +636,14 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("bearer_token_file"), "error should name the field: {err}");
-        assert!(err.contains("/cfg.toml"), "error should qualify with the config path: {err}");
+        assert!(
+            err.contains("bearer_token_file"),
+            "error should name the field: {err}"
+        );
+        assert!(
+            err.contains("/cfg.toml"),
+            "error should qualify with the config path: {err}"
+        );
     }
 
     #[test]
@@ -614,8 +674,14 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("is unset"), "error should say the var is unset: {err}");
-        assert!(err.contains("bearer_token_env"), "error should name the field: {err}");
+        assert!(
+            err.contains("is unset"),
+            "error should say the var is unset: {err}"
+        );
+        assert!(
+            err.contains("bearer_token_env"),
+            "error should name the field: {err}"
+        );
     }
 
     #[test]
@@ -629,8 +695,14 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("at most one"), "conflict should be reported: {err}");
-        assert!(err.contains("bearer_token"), "error should name the secret: {err}");
+        assert!(
+            err.contains("at most one"),
+            "conflict should be reported: {err}"
+        );
+        assert!(
+            err.contains("bearer_token"),
+            "error should name the secret: {err}"
+        );
     }
 
     #[test]

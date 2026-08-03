@@ -59,7 +59,11 @@ fn show(ctx: &mut AppContext, json: bool) -> anyhow::Result<()> {
         rows.sort_by_key(|(k, _)| *k);
         for (name, available) in rows {
             let tag = format!("#{name}");
-            let status = if *available { "available  " } else { "unavailable" };
+            let status = if *available {
+                "available  "
+            } else {
+                "unavailable"
+            };
             match descriptions.get(&tag) {
                 Some(desc) => println!("  {tag:<22} {status}  {desc}"),
                 None => println!("  {tag:<22} {status}"),
@@ -82,7 +86,11 @@ fn set(ctx: &mut AppContext, resource: String, availability: Availability) -> an
         Ok(())
     })?;
 
-    let label = if available { "available" } else { "unavailable" };
+    let label = if available {
+        "available"
+    } else {
+        "unavailable"
+    };
     println!("{resource} marked as {label}");
     tracing::info!(cmd = "resource", "{resource} marked as {label}");
     Ok(())

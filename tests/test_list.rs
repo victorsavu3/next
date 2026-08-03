@@ -1,9 +1,12 @@
 mod common;
 
 use chrono::Local;
-use next::core::{domain::filter, scoring::{self, ScoredTask}};
 use next::cli::commands::add;
 use next::core::FilterArgs;
+use next::core::{
+    domain::filter,
+    scoring::{self, ScoredTask},
+};
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -35,7 +38,14 @@ fn apply_filter(env: &mut common::TestEnv, tokens: Vec<String>) -> Vec<ScoredTas
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &filter_set, &state, today);
-    scoring::score_and_sort(filtered, &all, today, &env.ctx.repo.scoring, &std::collections::HashMap::new(), &std::collections::HashMap::new())
+    scoring::score_and_sort(
+        filtered,
+        &all,
+        today,
+        &env.ctx.repo.scoring,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+    )
 }
 
 #[test]
@@ -165,7 +175,14 @@ fn apply_filter_with_future(env: &mut common::TestEnv, include_future: bool) -> 
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &filter_set, &state, today);
-    scoring::score_and_sort(filtered, &all, today, &env.ctx.repo.scoring, &std::collections::HashMap::new(), &std::collections::HashMap::new())
+    scoring::score_and_sort(
+        filtered,
+        &all,
+        today,
+        &env.ctx.repo.scoring,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+    )
 }
 
 #[test]
@@ -183,8 +200,14 @@ fn future_start_task_hidden_by_default() {
 
     let tasks = apply_filter_with_future(&mut env, false);
     let titles: Vec<&str> = tasks.iter().map(|t| t.task.title.as_str()).collect();
-    assert!(titles.contains(&"Normal task"), "normal task must be visible");
-    assert!(!titles.contains(&"Future task"), "future-start task must be hidden by default");
+    assert!(
+        titles.contains(&"Normal task"),
+        "normal task must be visible"
+    );
+    assert!(
+        !titles.contains(&"Future task"),
+        "future-start task must be hidden by default"
+    );
 }
 
 #[test]
@@ -203,7 +226,10 @@ fn future_start_task_shown_with_future_flag() {
     let tasks = apply_filter_with_future(&mut env, true);
     let titles: Vec<&str> = tasks.iter().map(|t| t.task.title.as_str()).collect();
     assert!(titles.contains(&"Normal task"));
-    assert!(titles.contains(&"Future task"), "future-start task must appear with --future");
+    assert!(
+        titles.contains(&"Future task"),
+        "future-start task must appear with --future"
+    );
 }
 
 #[test]
@@ -220,7 +246,11 @@ fn task_with_start_today_is_visible() {
     .unwrap();
 
     let tasks = apply_filter_with_future(&mut env, false);
-    assert_eq!(tasks.len(), 1, "task starting today must be visible without --future");
+    assert_eq!(
+        tasks.len(),
+        1,
+        "task starting today must be visible without --future"
+    );
 }
 
 #[test]
@@ -259,7 +289,14 @@ fn all_flag_also_shows_future_start_tasks() {
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &filter_set, &state, today);
-    let tasks = scoring::score_and_sort(filtered, &all, today, &env.ctx.repo.scoring, &std::collections::HashMap::new(), &std::collections::HashMap::new());
+    let tasks = scoring::score_and_sort(
+        filtered,
+        &all,
+        today,
+        &env.ctx.repo.scoring,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+    );
     assert_eq!(tasks.len(), 1, "--all must reveal future-start tasks");
 }
 
@@ -326,20 +363,35 @@ fn project_filter_returns_descendants() {
 
     // Root task with slug "launch"
     add::run(
-        add::Args { slug: Some("launch".into()), ..add_args("Launch blog") },
+        add::Args {
+            slug: Some("launch".into()),
+            ..add_args("Launch blog")
+        },
         &mut env.ctx,
     )
     .unwrap();
-    let root = env.ctx.repo.store.get_task_by_slug("launch").unwrap().unwrap();
+    let root = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("launch")
+        .unwrap()
+        .unwrap();
 
     // Two direct children
     add::run(
-        add::Args { parent: Some(root.id.to_string()), ..add_args("Write copy") },
+        add::Args {
+            parent: Some(root.id.to_string()),
+            ..add_args("Write copy")
+        },
         &mut env.ctx,
     )
     .unwrap();
     add::run(
-        add::Args { parent: Some(root.id.to_string()), ..add_args("Design logo") },
+        add::Args {
+            parent: Some(root.id.to_string()),
+            ..add_args("Design logo")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -367,21 +419,43 @@ fn project_filter_includes_grandchildren() {
     let mut env = common::setup();
 
     add::run(
-        add::Args { slug: Some("project".into()), ..add_args("Root") },
+        add::Args {
+            slug: Some("project".into()),
+            ..add_args("Root")
+        },
         &mut env.ctx,
     )
     .unwrap();
-    let root = env.ctx.repo.store.get_task_by_slug("project").unwrap().unwrap();
+    let root = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("project")
+        .unwrap()
+        .unwrap();
 
     add::run(
-        add::Args { slug: Some("child".into()), parent: Some(root.id.to_string()), ..add_args("Child") },
+        add::Args {
+            slug: Some("child".into()),
+            parent: Some(root.id.to_string()),
+            ..add_args("Child")
+        },
         &mut env.ctx,
     )
     .unwrap();
-    let child = env.ctx.repo.store.get_task_by_slug("child").unwrap().unwrap();
+    let child = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("child")
+        .unwrap()
+        .unwrap();
 
     add::run(
-        add::Args { parent: Some(child.id.to_string()), ..add_args("Grandchild") },
+        add::Args {
+            parent: Some(child.id.to_string()),
+            ..add_args("Grandchild")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -426,20 +500,67 @@ fn apply_filter_all(env: &mut common::TestEnv, tokens: Vec<String>) -> Vec<Score
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
-    scoring::score_and_sort(filtered, &all, today, &env.ctx.repo.scoring, &std::collections::HashMap::new(), &std::collections::HashMap::new())
+    scoring::score_and_sort(
+        filtered,
+        &all,
+        today,
+        &env.ctx.repo.scoring,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+    )
 }
 
 #[test]
 fn parent_filter_excludes_sibling_subtrees() {
     let mut env = common::setup();
 
-    add::run(add::Args { slug: Some("alpha".into()), ..add_args("Alpha") }, &mut env.ctx).unwrap();
-    let alpha = env.ctx.repo.store.get_task_by_slug("alpha").unwrap().unwrap();
-    add::run(add::Args { parent: Some(alpha.id.to_string()), ..add_args("Alpha child") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("alpha".into()),
+            ..add_args("Alpha")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    let alpha = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("alpha")
+        .unwrap()
+        .unwrap();
+    add::run(
+        add::Args {
+            parent: Some(alpha.id.to_string()),
+            ..add_args("Alpha child")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
-    add::run(add::Args { slug: Some("beta".into()), ..add_args("Beta") }, &mut env.ctx).unwrap();
-    let beta = env.ctx.repo.store.get_task_by_slug("beta").unwrap().unwrap();
-    add::run(add::Args { parent: Some(beta.id.to_string()), ..add_args("Beta child") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("beta".into()),
+            ..add_args("Beta")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    let beta = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("beta")
+        .unwrap()
+        .unwrap();
+    add::run(
+        add::Args {
+            parent: Some(beta.id.to_string()),
+            ..add_args("Beta child")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     let tasks = apply_filter_all(&mut env, vec!["parent:alpha".into()]);
     let titles: Vec<&str> = tasks.iter().map(|t| t.task.title.as_str()).collect();
@@ -453,13 +574,36 @@ fn parent_filter_excludes_sibling_subtrees() {
 fn default_list_hides_parent_with_open_children() {
     let mut env = common::setup();
 
-    add::run(add::Args { slug: Some("parent".into()), ..add_args("Parent task") }, &mut env.ctx).unwrap();
-    let parent = env.ctx.repo.store.get_task_by_slug("parent").unwrap().unwrap();
-    add::run(add::Args { parent: Some(parent.id.to_string()), ..add_args("Child task") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("parent".into()),
+            ..add_args("Parent task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    let parent = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("parent")
+        .unwrap()
+        .unwrap();
+    add::run(
+        add::Args {
+            parent: Some(parent.id.to_string()),
+            ..add_args("Child task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     let tasks = apply_filter(&mut env, vec![]);
     let titles: Vec<&str> = tasks.iter().map(|t| t.task.title.as_str()).collect();
-    assert!(!titles.contains(&"Parent task"), "parent hidden while child is open");
+    assert!(
+        !titles.contains(&"Parent task"),
+        "parent hidden while child is open"
+    );
     assert!(titles.contains(&"Child task"), "child visible");
 }
 
@@ -467,32 +611,98 @@ fn default_list_hides_parent_with_open_children() {
 fn default_list_shows_parent_when_all_children_done() {
     let mut env = common::setup();
 
-    add::run(add::Args { slug: Some("parent".into()), ..add_args("Parent task") }, &mut env.ctx).unwrap();
-    let parent = env.ctx.repo.store.get_task_by_slug("parent").unwrap().unwrap();
     add::run(
-        add::Args { slug: Some("child".into()), parent: Some(parent.id.to_string()), ..add_args("Child task") },
+        add::Args {
+            slug: Some("parent".into()),
+            ..add_args("Parent task")
+        },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
+    let parent = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("parent")
+        .unwrap()
+        .unwrap();
+    add::run(
+        add::Args {
+            slug: Some("child".into()),
+            parent: Some(parent.id.to_string()),
+            ..add_args("Child task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     use next::cli::commands::done;
-    done::run(done::Args { id: "child".into(), completed_at: None, json: false }, &mut env.ctx).unwrap();
+    done::run(
+        done::Args {
+            id: "child".into(),
+            completed_at: None,
+            json: false,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     let tasks = apply_filter(&mut env, vec![]);
     let titles: Vec<&str> = tasks.iter().map(|t| t.task.title.as_str()).collect();
-    assert!(titles.contains(&"Parent task"), "parent visible once child is done");
+    assert!(
+        titles.contains(&"Parent task"),
+        "parent visible once child is done"
+    );
 }
 
 #[test]
 fn parent_filter_only_returns_active_descendants_by_default() {
     let mut env = common::setup();
 
-    add::run(add::Args { slug: Some("proj".into()), ..add_args("Project") }, &mut env.ctx).unwrap();
-    let proj = env.ctx.repo.store.get_task_by_slug("proj").unwrap().unwrap();
-    add::run(add::Args { slug: Some("open-child".into()), parent: Some(proj.id.to_string()), ..add_args("Open child") }, &mut env.ctx).unwrap();
-    add::run(add::Args { slug: Some("done-child".into()), parent: Some(proj.id.to_string()), ..add_args("Done child") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("proj".into()),
+            ..add_args("Project")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    let proj = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("proj")
+        .unwrap()
+        .unwrap();
+    add::run(
+        add::Args {
+            slug: Some("open-child".into()),
+            parent: Some(proj.id.to_string()),
+            ..add_args("Open child")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(
+        add::Args {
+            slug: Some("done-child".into()),
+            parent: Some(proj.id.to_string()),
+            ..add_args("Done child")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     use next::cli::commands::done;
-    done::run(done::Args { id: "done-child".into(), completed_at: None, json: false }, &mut env.ctx).unwrap();
+    done::run(
+        done::Args {
+            id: "done-child".into(),
+            completed_at: None,
+            json: false,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     // Without --all, done children are excluded even within the parent: scope.
     let today = chrono::Local::now().date_naive();
@@ -503,7 +713,10 @@ fn parent_filter_only_returns_active_descendants_by_default() {
     let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
     let titles: Vec<&str> = filtered.iter().map(|t| t.title.as_str()).collect();
     assert!(titles.contains(&"Open child"));
-    assert!(!titles.contains(&"Done child"), "done task excluded without --all");
+    assert!(
+        !titles.contains(&"Done child"),
+        "done task excluded without --all"
+    );
 }
 
 #[test]
@@ -513,7 +726,11 @@ fn list_renders_long_multibyte_title_without_panic() {
     // "byte index 45 is not a char boundary".
     let mut env = common::setup();
     add::run(add_args(&"é".repeat(60)), &mut env.ctx).unwrap();
-    add::run(add_args(&format!("Fête préparée {}", "🎉".repeat(30))), &mut env.ctx).unwrap();
+    add::run(
+        add_args(&format!("Fête préparée {}", "🎉".repeat(30))),
+        &mut env.ctx,
+    )
+    .unwrap();
 
     // Goes through render::render_task_list, which previously panicked.
     next::cli::commands::list::run(list_args_with_limit(None), &env.ctx).unwrap();

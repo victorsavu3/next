@@ -40,7 +40,10 @@ fn rebuild_cache(args: RebuildCacheArgs, ctx: &mut AppContext) -> anyhow::Result
     let count = ctx.repo.store.list_tasks()?.len();
 
     if args.json {
-        println!("{}", serde_json::json!({ "rebuilt": true, "active_tasks": count }));
+        println!(
+            "{}",
+            serde_json::json!({ "rebuilt": true, "active_tasks": count })
+        );
     } else {
         println!("Rebuilt the local cache ({count} active task(s)).");
     }

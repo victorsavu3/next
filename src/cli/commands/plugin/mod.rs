@@ -4,7 +4,10 @@
 //! updated.  Registrations live in the `[[plugin]]` section of the machine-local
 //! `state.toml` (not synced via git); see [`crate::core::plugin`].
 
-use crate::{core::{plugin::registry, resolve::resolve_task_id}, AppContext};
+use crate::{
+    core::{plugin::registry, resolve::resolve_task_id},
+    AppContext,
+};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -91,7 +94,12 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     match args.subcommand {
         PluginSubcommand::Register(a) => {
             registry::register(&root, &a.name, a.command.clone())?;
-            tracing::info!(cmd = "plugin", "registered {} -> {}", a.name, a.command.join(" "));
+            tracing::info!(
+                cmd = "plugin",
+                "registered {} -> {}",
+                a.name,
+                a.command.join(" ")
+            );
         }
         PluginSubcommand::Watch(a) => {
             let id = resolve_task_id(&*ctx.repo.store, &a.task)?;

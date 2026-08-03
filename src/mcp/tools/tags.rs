@@ -7,7 +7,6 @@ use crate::core::domain::task::Priority;
 use crate::core::storage;
 use crate::TaskRepository;
 
-
 /// Unified tag metadata tool.
 ///
 /// `action` values:
@@ -70,16 +69,23 @@ pub fn tag_catalog(ctx: &TaskRepository) -> anyhow::Result<TagCatalog> {
 
     let mut all_tags: BTreeSet<String> = BTreeSet::new();
     for task in &tasks {
-        for t in &task.tags { all_tags.insert(t.clone()); }
+        for t in &task.tags {
+            all_tags.insert(t.clone());
+        }
     }
-    for t in metas.keys() { all_tags.insert(t.clone()); }
+    for t in metas.keys() {
+        all_tags.insert(t.clone());
+    }
 
     let mut catalog = TagCatalog::default();
     for t in &all_tags {
         let meta = metas.get(t.as_str()).cloned().unwrap_or_default();
-        let entry = CatalogEntry { tag: t.clone(), meta };
+        let entry = CatalogEntry {
+            tag: t.clone(),
+            meta,
+        };
         match tag::classify(t) {
-            TagKind::Context  => catalog.contexts.push(entry),
+            TagKind::Context => catalog.contexts.push(entry),
             TagKind::Resource => catalog.resources.push(entry),
             TagKind::Freeform => catalog.freeform.push(entry),
         }
@@ -115,7 +121,10 @@ fn rename(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
         .get("new_tag")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: new_tag"))?;
-    let merge = params.get("merge").and_then(|v| v.as_bool()).unwrap_or(false);
+    let merge = params
+        .get("merge")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let outcome = crate::core::tag_rename::rename_tag(ctx, old, new, merge)?;
     Ok(json!({
@@ -284,24 +293,39 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         crate::core::test_git::init_test_repo(dir.path());
         let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let ctx =
+            TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 
     #[test]
     fn describe_and_show_tag() {
         let (_dir, mut ctx) = make_ctx();
-        manage_tag(&json!({ "action": "describe", "tag": "@work", "description": "Office tasks" }), &mut ctx).unwrap();
-        let (result, _) = manage_tag(&json!({ "action": "show", "tag": "@work" }), &mut ctx).unwrap();
+        manage_tag(
+            &json!({ "action": "describe", "tag": "@work", "description": "Office tasks" }),
+            &mut ctx,
+        )
+        .unwrap();
+        let (result, _) =
+            manage_tag(&json!({ "action": "show", "tag": "@work" }), &mut ctx).unwrap();
         assert_eq!(result["meta"]["description"], "Office tasks");
     }
 
     #[test]
     fn set_and_clear_priority() {
         let (_dir, mut ctx) = make_ctx();
-        manage_tag(&json!({ "action": "set_priority", "tag": "@work", "priority": "high" }), &mut ctx).unwrap();
-        manage_tag(&json!({ "action": "clear_priority", "tag": "@work" }), &mut ctx).unwrap();
-        let (result, _) = manage_tag(&json!({ "action": "show", "tag": "@work" }), &mut ctx).unwrap();
+        manage_tag(
+            &json!({ "action": "set_priority", "tag": "@work", "priority": "high" }),
+            &mut ctx,
+        )
+        .unwrap();
+        manage_tag(
+            &json!({ "action": "clear_priority", "tag": "@work" }),
+            &mut ctx,
+        )
+        .unwrap();
+        let (result, _) =
+            manage_tag(&json!({ "action": "show", "tag": "@work" }), &mut ctx).unwrap();
         assert!(result["meta"]["priority"].is_null());
     }
 
@@ -377,7 +401,10 @@ mod tests {
     fn rename_requires_new_tag() {
         let (_dir, mut ctx) = make_ctx();
         let err = manage_tag(&json!({ "action": "rename", "tag": "@work" }), &mut ctx).unwrap_err();
-        assert!(err.to_string().contains("new_tag"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("new_tag"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

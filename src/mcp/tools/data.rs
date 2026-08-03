@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 
-use crate::core::parse_value;
 use crate::core::domain::task::validate_key;
+use crate::core::parse_value;
 use crate::core::resolve::resolve_task_id;
 use crate::core::storage;
 use crate::TaskRepository;
@@ -20,11 +20,11 @@ pub fn manage_task_data(params: &Value, ctx: &mut TaskRepository) -> anyhow::Res
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: action"))?;
 
     match action {
-        "get"   => Ok((get(params, ctx)?, false)),
-        "list"  => Ok((list(params, ctx)?, false)),
-        "set"   => Ok((set(params, ctx)?, true)),
+        "get" => Ok((get(params, ctx)?, false)),
+        "list" => Ok((list(params, ctx)?, false)),
+        "set" => Ok((set(params, ctx)?, true)),
         "unset" => Ok((unset(params, ctx)?, true)),
-        other   => anyhow::bail!("unknown action {other:?}: expected get, list, set, unset"),
+        other => anyhow::bail!("unknown action {other:?}: expected get, list, set, unset"),
     }
 }
 
@@ -46,10 +46,12 @@ fn get(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let id = resolve_task_id(&*ctx.store, id_str)?;
     let task = ctx.store.get_task(id)?;
 
-    let value = task
-        .data
-        .get(key)
-        .ok_or_else(|| anyhow::anyhow!("task [{}] has no data key {key:?}", &task.id.to_string()[..8]))?;
+    let value = task.data.get(key).ok_or_else(|| {
+        anyhow::anyhow!(
+            "task [{}] has no data key {key:?}",
+            &task.id.to_string()[..8]
+        )
+    })?;
 
     Ok(value.clone())
 }
@@ -82,7 +84,10 @@ fn set(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
 
         let task_path = storage::task_path(root, &task);
         store.save_task(&task)?;
-        vcs.commit(&[task_path], &format!("next: data set {} on {}", key, task.title))?;
+        vcs.commit(
+            &[task_path],
+            &format!("next: data set {} on {}", key, task.title),
+        )?;
         Ok(task.id)
     })?;
     ctx.record_task_event("data", task_id);
@@ -104,13 +109,19 @@ fn unset(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
         let mut task = store.get_task(id)?;
 
         if !task.data.contains_key(key) {
-            anyhow::bail!("task [{}] has no data key {key:?}", &task.id.to_string()[..8]);
+            anyhow::bail!(
+                "task [{}] has no data key {key:?}",
+                &task.id.to_string()[..8]
+            );
         }
         task.data.remove(key);
 
         let task_path = storage::task_path(root, &task);
         store.save_task(&task)?;
-        vcs.commit(&[task_path], &format!("next: data unset {} on {}", key, task.title))?;
+        vcs.commit(
+            &[task_path],
+            &format!("next: data unset {} on {}", key, task.title),
+        )?;
         Ok(task.id)
     })?;
     ctx.record_task_event("data", task_id);
@@ -128,7 +139,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         crate::core::test_git::init_test_repo(dir.path());
         let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let ctx =
+            TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 
@@ -138,7 +150,9 @@ mod tests {
         let task = Task::new(title.to_owned());
         let path = storage::task_path(&ctx.repo_root, &task);
         ctx.store.save_task(&task).unwrap();
-        ctx.vcs.commit(&[path], &format!("next: add {title}")).unwrap();
+        ctx.vcs
+            .commit(&[path], &format!("next: add {title}"))
+            .unwrap();
         task.id.to_string()
     }
 
@@ -147,17 +161,33 @@ mod tests {
         let (_dir, mut ctx) = make_ctx();
         let id = add_task_raw("Test task", &mut ctx);
 
-        let (_, is_mut) = manage_task_data(&json!({ "action": "set", "id": id, "key": "score", "value": "42" }), &mut ctx).unwrap();
+        let (_, is_mut) = manage_task_data(
+            &json!({ "action": "set", "id": id, "key": "score", "value": "42" }),
+            &mut ctx,
+        )
+        .unwrap();
         assert!(is_mut);
 
-        let (val, _) = manage_task_data(&json!({ "action": "get", "id": id, "key": "score" }), &mut ctx).unwrap();
+        let (val, _) = manage_task_data(
+            &json!({ "action": "get", "id": id, "key": "score" }),
+            &mut ctx,
+        )
+        .unwrap();
         assert_eq!(val, 42);
 
         let (all, _) = manage_task_data(&json!({ "action": "list", "id": id }), &mut ctx).unwrap();
         assert_eq!(all["score"], 42);
 
-        manage_task_data(&json!({ "action": "unset", "id": id, "key": "score" }), &mut ctx).unwrap();
-        let err = manage_task_data(&json!({ "action": "get", "id": id, "key": "score" }), &mut ctx).unwrap_err();
+        manage_task_data(
+            &json!({ "action": "unset", "id": id, "key": "score" }),
+            &mut ctx,
+        )
+        .unwrap();
+        let err = manage_task_data(
+            &json!({ "action": "get", "id": id, "key": "score" }),
+            &mut ctx,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("no data key"));
     }
 
@@ -165,7 +195,11 @@ mod tests {
     fn unset_missing_key_errors() {
         let (_dir, mut ctx) = make_ctx();
         let id = add_task_raw("Test", &mut ctx);
-        let err = manage_task_data(&json!({ "action": "unset", "id": id, "key": "nope" }), &mut ctx).unwrap_err();
+        let err = manage_task_data(
+            &json!({ "action": "unset", "id": id, "key": "nope" }),
+            &mut ctx,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("no data key"));
     }
 
@@ -179,7 +213,10 @@ mod tests {
             &mut ctx,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("too long"), "expected 'too long' in: {err}");
+        assert!(
+            err.to_string().contains("too long"),
+            "expected 'too long' in: {err}"
+        );
     }
 
     #[test]
@@ -191,7 +228,10 @@ mod tests {
             &mut ctx,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("invalid character"), "expected 'invalid character' in: {err}");
+        assert!(
+            err.to_string().contains("invalid character"),
+            "expected 'invalid character' in: {err}"
+        );
     }
 
     #[test]
@@ -203,7 +243,10 @@ mod tests {
             &mut ctx,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("invalid character"), "expected 'invalid character' in: {err}");
+        assert!(
+            err.to_string().contains("invalid character"),
+            "expected 'invalid character' in: {err}"
+        );
     }
 
     #[test]
@@ -215,7 +258,10 @@ mod tests {
             &mut ctx,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("invalid character"), "expected 'invalid character' in: {err}");
+        assert!(
+            err.to_string().contains("invalid character"),
+            "expected 'invalid character' in: {err}"
+        );
     }
 
     #[test]

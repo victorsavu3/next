@@ -17,8 +17,8 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
+use tui_input::Input;
 use tui_textarea::TextArea;
 
 use crate::core::domain::date_parse::parse_date;
@@ -197,7 +197,10 @@ impl EditForm {
                 String::new(),
                 snap_to_str(snap),
             ),
-            Some(Recurrence::Completion { interval_days, snap }) => (
+            Some(Recurrence::Completion {
+                interval_days,
+                snap,
+            }) => (
                 RecurMode::Completion,
                 String::new(),
                 interval_days.to_string(),
@@ -211,8 +214,11 @@ impl EditForm {
         let mut notes = TextArea::from(task.notes.clone().unwrap_or_default().lines());
         notes.set_cursor_line_style(ratatui::style::Style::default());
 
-        let data: BTreeMap<String, serde_json::Value> =
-            task.data.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let data: BTreeMap<String, serde_json::Value> = task
+            .data
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
 
         let score_adjustment = if task.score_adjustment == 0.0 {
             String::new()
@@ -635,7 +641,11 @@ impl EditForm {
     fn build_recurrence(&self, today: NaiveDate) -> anyhow::Result<(Option<Recurrence>, bool)> {
         let snap = {
             let s = self.recur_snap.value().trim();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         };
         match self.recur_mode {
             RecurMode::None => Ok((None, true)),
@@ -648,18 +658,16 @@ impl EditForm {
                 // otherwise anchor on start/due/today (mirrors the CLI).
                 let anchor = match &self.orig_recurrence {
                     Some(Recurrence::Schedule { anchor, .. }) => *anchor,
-                    _ => self
-                        .resolved_anchor_date(today)
-                        .unwrap_or(today),
+                    _ => self.resolved_anchor_date(today).unwrap_or(today),
                 };
                 let rec = parse_recurrence(Some(rule.to_owned()), None, snap, anchor)?;
                 Ok((rec, false))
             }
             RecurMode::Completion => {
                 let raw = self.recur_completion.value().trim();
-                let interval: u32 = raw
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("completion interval must be a positive integer"))?;
+                let interval: u32 = raw.parse().map_err(|_| {
+                    anyhow::anyhow!("completion interval must be a positive integer")
+                })?;
                 let rec = parse_recurrence(None, Some(interval), snap, today)?;
                 Ok((rec, false))
             }
@@ -706,13 +714,11 @@ fn snap_to_str(snap: &Option<crate::core::domain::task::Snap>) -> String {
     match snap {
         None => String::new(),
         Some(Snap::NextWorkday) => "next-workday".to_owned(),
-        Some(Snap::NextWeekday { weekday }) => {
-            ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-                .get(*weekday as usize)
-                .copied()
-                .unwrap_or("mon")
-                .to_owned()
-        }
+        Some(Snap::NextWeekday { weekday }) => ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+            .get(*weekday as usize)
+            .copied()
+            .unwrap_or("mon")
+            .to_owned(),
         Some(Snap::DayOfMonth { day }) => format!("dom:{day}"),
     }
 }
@@ -903,7 +909,10 @@ mod tests {
     #[test]
     fn recurrence_none_clears() {
         let mut task = Task::new("Title");
-        task.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 7,
+            snap: None,
+        });
         let mut form = EditForm::from_task(&task, vec![]);
         form.recur_mode = RecurMode::None;
         let p = form.to_edit_params(today()).unwrap();
@@ -925,7 +934,9 @@ mod tests {
         form.recur_rule = Input::new("FREQ=WEEKLY;BYDAY=TU".to_owned());
         let p = form.to_edit_params(today()).unwrap();
         match p.recurrence {
-            Some(Recurrence::Schedule { rrule, anchor: a, .. }) => {
+            Some(Recurrence::Schedule {
+                rrule, anchor: a, ..
+            }) => {
                 assert_eq!(rrule, "FREQ=WEEKLY;BYDAY=TU");
                 assert_eq!(a, anchor, "existing anchor must be preserved");
             }
@@ -944,7 +955,11 @@ mod tests {
         let p = form.to_edit_params(today()).unwrap();
         match p.recurrence {
             Some(Recurrence::Schedule { anchor, .. }) => {
-                assert_eq!(anchor, d(2026, 9, 10), "new rule anchors on the form due date");
+                assert_eq!(
+                    anchor,
+                    d(2026, 9, 10),
+                    "new rule anchors on the form due date"
+                );
             }
             other => panic!("expected schedule, got {other:?}"),
         }
@@ -959,7 +974,10 @@ mod tests {
         form.recur_snap = Input::new("friday".to_owned());
         let p = form.to_edit_params(today()).unwrap();
         match p.recurrence {
-            Some(Recurrence::Completion { interval_days, snap }) => {
+            Some(Recurrence::Completion {
+                interval_days,
+                snap,
+            }) => {
                 assert_eq!(interval_days, 14);
                 assert_eq!(snap, Some(Snap::NextWeekday { weekday: 4 }));
             }
@@ -993,7 +1011,10 @@ mod tests {
         assert_eq!(changes.len(), 3);
         assert_eq!(changes[0], ("drop".to_owned(), None));
         assert_eq!(changes[1], ("keep".to_owned(), Some(serde_json::json!(2))));
-        assert_eq!(changes[2], ("new".to_owned(), Some(serde_json::json!(true))));
+        assert_eq!(
+            changes[2],
+            ("new".to_owned(), Some(serde_json::json!(true)))
+        );
     }
 
     #[test]
@@ -1066,9 +1087,12 @@ mod tests {
         let known = vec!["@work".into(), "@home".into(), "@hobby".into()];
         let mut form = EditForm::from_task(&task, known);
         press(&mut form, KeyCode::Enter); // enter Add mode
-        // Type 'h' — should match @home and @hobby.
+                                          // Type 'h' — should match @home and @hobby.
         press(&mut form, KeyCode::Char('h'));
-        assert_eq!(form.tag_suggestions, vec!["@home".to_owned(), "@hobby".to_owned()]);
+        assert_eq!(
+            form.tag_suggestions,
+            vec!["@home".to_owned(), "@hobby".to_owned()]
+        );
     }
 
     #[test]
@@ -1088,7 +1112,7 @@ mod tests {
         let known = vec!["@work".into(), "@home".into()];
         let mut form = EditForm::from_task(&task, known);
         press(&mut form, KeyCode::Enter); // enter Add mode
-        // Down once to select @home (index 1).
+                                          // Down once to select @home (index 1).
         press(&mut form, KeyCode::Down);
         press(&mut form, KeyCode::Enter); // commit
         assert_eq!(form.tags, vec!["@home".to_owned()]);
@@ -1100,7 +1124,7 @@ mod tests {
         let task = Task::new("T");
         let mut form = EditForm::from_task(&task, vec![]);
         press(&mut form, KeyCode::Enter); // enter Add mode
-        // Type a new tag not in known_tags.
+                                          // Type a new tag not in known_tags.
         press(&mut form, KeyCode::Char('@'));
         press(&mut form, KeyCode::Char('a'));
         press(&mut form, KeyCode::Char('i'));

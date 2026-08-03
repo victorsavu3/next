@@ -191,9 +191,7 @@ pub fn validate_tag(tag: &str) -> Result<(), String> {
 /// as [`validate_tag`].
 pub fn validate_context_tag(tag: &str) -> Result<(), String> {
     if !tag.starts_with('@') {
-        return Err(format!(
-            "context tags must start with '@', got: {tag:?}"
-        ));
+        return Err(format!("context tags must start with '@', got: {tag:?}"));
     }
     validate_tag(tag)
 }
@@ -204,9 +202,7 @@ pub fn validate_context_tag(tag: &str) -> Result<(), String> {
 /// as [`validate_tag`].
 pub fn validate_resource_tag(tag: &str) -> Result<(), String> {
     if !tag.starts_with('#') {
-        return Err(format!(
-            "resource tags must start with '#', got: {tag:?}"
-        ));
+        return Err(format!("resource tags must start with '#', got: {tag:?}"));
     }
     validate_tag(tag)
 }
@@ -322,10 +318,7 @@ mod tests {
 
     #[test]
     fn ancestors_three_segments() {
-        assert_eq!(
-            ancestors("a/b/c"),
-            vec!["a", "a/b", "a/b/c"]
-        );
+        assert_eq!(ancestors("a/b/c"), vec!["a", "a/b", "a/b/c"]);
     }
 
     #[test]
@@ -335,7 +328,10 @@ mod tests {
 
     #[test]
     fn ancestors_resource_tag() {
-        assert_eq!(ancestors("#office/printer"), vec!["#office", "#office/printer"]);
+        assert_eq!(
+            ancestors("#office/printer"),
+            vec!["#office", "#office/printer"]
+        );
     }
 
     #[test]

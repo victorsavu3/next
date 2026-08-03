@@ -113,7 +113,11 @@ impl IssueSource for ForgejoApi {
 /// Converts a `forgejo-api` issue into our decoupled [`ForgejoIssue`].
 fn convert_issue(issue: forgejo_api::structs::Issue) -> ForgejoIssue {
     // `state` is an enum; its Debug rendering is "Open"/"Closed".
-    let state = match issue.state.as_ref().map(|s| format!("{s:?}").to_lowercase()) {
+    let state = match issue
+        .state
+        .as_ref()
+        .map(|s| format!("{s:?}").to_lowercase())
+    {
         Some(ref s) if s == "closed" => IssueState::Closed,
         _ => IssueState::Open,
     };

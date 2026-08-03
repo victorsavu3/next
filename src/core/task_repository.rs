@@ -11,7 +11,11 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use crate::core::{plugin::TaskEvent, scoring::{ScoringConfig, TaskDates}, Store, VcsBackend};
+use crate::core::{
+    plugin::TaskEvent,
+    scoring::{ScoringConfig, TaskDates},
+    Store, VcsBackend,
+};
 
 pub struct TaskRepository {
     pub store: Box<dyn Store>,
@@ -43,7 +47,9 @@ impl TaskRepository {
             vcs,
             repo_root,
             task_events: Vec::new(),
-            plugin_origin: std::env::var("NEXT_PLUGIN_ORIGIN").ok().filter(|s| !s.is_empty()),
+            plugin_origin: std::env::var("NEXT_PLUGIN_ORIGIN")
+                .ok()
+                .filter(|s| !s.is_empty()),
         }
     }
 
@@ -85,7 +91,10 @@ impl TaskRepository {
     /// Served from the store's date index (maintained incrementally by the
     /// cache from git history) — no git walk per call. Returns an empty map
     /// when the store has no dates (fresh repo without commits).
-    pub fn task_git_dates_for(&self, tasks: &[crate::core::domain::task::Task]) -> HashMap<Uuid, TaskDates> {
+    pub fn task_git_dates_for(
+        &self,
+        tasks: &[crate::core::domain::task::Task],
+    ) -> HashMap<Uuid, TaskDates> {
         let mut all = self.store.task_dates().unwrap_or_default();
         tasks
             .iter()

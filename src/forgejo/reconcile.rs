@@ -76,7 +76,10 @@ pub fn sync(
             match decide(issue.state, task.map(|t| t.status.clone())) {
                 Action::CreateTask => {
                     if dry_run {
-                        println!("[dry-run] create task for {repo_full}#{} {:?}", issue.number, issue.title);
+                        println!(
+                            "[dry-run] create task for {repo_full}#{} {:?}",
+                            issue.number, issue.title
+                        );
                     } else {
                         tasks.create_from_issue(issue, &mapping.context, &repo_full)?;
                     }
@@ -85,7 +88,10 @@ pub fn sync(
                 Action::MarkTaskDone => {
                     let id = task.expect("task present for MarkTaskDone").id;
                     if dry_run {
-                        println!("[dry-run] mark task {id} done ({repo_full}#{} closed)", issue.number);
+                        println!(
+                            "[dry-run] mark task {id} done ({repo_full}#{} closed)",
+                            issue.number
+                        );
                     } else {
                         tasks.mark_done(id)?;
                     }
@@ -93,7 +99,10 @@ pub fn sync(
                 }
                 Action::CloseIssue => {
                     if dry_run {
-                        println!("[dry-run] close issue {repo_full}#{} (task resolved)", issue.number);
+                        println!(
+                            "[dry-run] close issue {repo_full}#{} (task resolved)",
+                            issue.number
+                        );
                     } else {
                         issues.set_closed(owner, repo, issue.number, true)?;
                     }
@@ -163,7 +172,12 @@ mod tests {
         fn list_linked(&self, _repo: &str) -> Result<Vec<Task>> {
             Ok(self.linked.clone())
         }
-        fn create_from_issue(&mut self, issue: &ForgejoIssue, _ctx: &str, _repo: &str) -> Result<Uuid> {
+        fn create_from_issue(
+            &mut self,
+            issue: &ForgejoIssue,
+            _ctx: &str,
+            _repo: &str,
+        ) -> Result<Uuid> {
             self.created.borrow_mut().push(issue.number);
             Ok(Uuid::new_v4())
         }
@@ -196,12 +210,18 @@ mod tests {
     }
 
     fn mapping() -> Vec<Mapping> {
-        vec![Mapping { repo: "victor/x".into(), context: "@ai/x".into() }]
+        vec![Mapping {
+            repo: "victor/x".into(),
+            context: "@ai/x".into(),
+        }]
     }
 
     #[test]
     fn sync_imports_open_issue_without_task() {
-        let issues = FakeIssues { issues: vec![issue(1, IssueState::Open)], closed: RefCell::default() };
+        let issues = FakeIssues {
+            issues: vec![issue(1, IssueState::Open)],
+            closed: RefCell::default(),
+        };
         let mut tasks = FakeTasks::default();
         let s = sync(&issues, &mut tasks, &mapping(), false).unwrap();
         assert_eq!(s.created, 1);
@@ -210,8 +230,14 @@ mod tests {
 
     #[test]
     fn sync_closes_task_when_issue_closed() {
-        let issues = FakeIssues { issues: vec![issue(7, IssueState::Closed)], closed: RefCell::default() };
-        let mut tasks = FakeTasks { linked: vec![linked_task(7, Status::Open)], ..Default::default() };
+        let issues = FakeIssues {
+            issues: vec![issue(7, IssueState::Closed)],
+            closed: RefCell::default(),
+        };
+        let mut tasks = FakeTasks {
+            linked: vec![linked_task(7, Status::Open)],
+            ..Default::default()
+        };
         let s = sync(&issues, &mut tasks, &mapping(), false).unwrap();
         assert_eq!(s.tasks_closed, 1);
         assert_eq!(tasks.done.borrow().len(), 1);
@@ -219,8 +245,14 @@ mod tests {
 
     #[test]
     fn sync_closes_issue_when_task_done() {
-        let issues = FakeIssues { issues: vec![issue(9, IssueState::Open)], closed: RefCell::default() };
-        let mut tasks = FakeTasks { linked: vec![linked_task(9, Status::Done)], ..Default::default() };
+        let issues = FakeIssues {
+            issues: vec![issue(9, IssueState::Open)],
+            closed: RefCell::default(),
+        };
+        let mut tasks = FakeTasks {
+            linked: vec![linked_task(9, Status::Done)],
+            ..Default::default()
+        };
         let s = sync(&issues, &mut tasks, &mapping(), false).unwrap();
         assert_eq!(s.issues_closed, 1);
         assert_eq!(*issues.closed.borrow(), vec![9]);
@@ -233,9 +265,16 @@ mod tests {
             closed: RefCell::default(),
         };
         // issue 2 already imported and still open → nothing.
-        let mut tasks = FakeTasks { linked: vec![linked_task(2, Status::Open)], ..Default::default() };
+        let mut tasks = FakeTasks {
+            linked: vec![linked_task(2, Status::Open)],
+            ..Default::default()
+        };
         let s = sync(&issues, &mut tasks, &mapping(), false).unwrap();
-        assert_eq!(s, Summary::default(), "no actions for closed-unimported or consistent pairs");
+        assert_eq!(
+            s,
+            Summary::default(),
+            "no actions for closed-unimported or consistent pairs"
+        );
     }
 
     #[test]
@@ -244,7 +283,10 @@ mod tests {
             issues: vec![issue(1, IssueState::Open), issue(2, IssueState::Open)],
             closed: RefCell::default(),
         };
-        let mut tasks = FakeTasks { linked: vec![linked_task(2, Status::Done)], ..Default::default() };
+        let mut tasks = FakeTasks {
+            linked: vec![linked_task(2, Status::Done)],
+            ..Default::default()
+        };
         let s = sync(&issues, &mut tasks, &mapping(), true).unwrap();
         assert_eq!(s.created, 1);
         assert_eq!(s.issues_closed, 1);

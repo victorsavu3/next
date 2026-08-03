@@ -214,7 +214,11 @@ pub fn build_items(
     roots.sort_by(|a, b| a.title.cmp(&b.title));
 
     if roots.is_empty() {
-        return TreeBuild { items: Vec::new(), section_ids: Vec::new(), task_section: HashMap::new() };
+        return TreeBuild {
+            items: Vec::new(),
+            section_ids: Vec::new(),
+            task_section: HashMap::new(),
+        };
     }
 
     // ── Context grouping ──────────────────────────────────────────────────────
@@ -233,7 +237,10 @@ pub fn build_items(
     for root in &roots {
         let ctx_tags = tag::deepest_context_tags(&root.tags);
         // Pick the primary section: alphabetically first deepest tag, or "No context".
-        let section_name = ctx_tags.into_iter().next().unwrap_or_else(|| "No context".to_string());
+        let section_name = ctx_tags
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "No context".to_string());
         sections.entry(section_name).or_default().push(root);
     }
 
@@ -262,30 +269,29 @@ pub fn build_items(
     for (name, tasks) in &sections {
         let sid = section_uuid(name);
         section_ids.push(sid);
-        let child_items: Vec<TreeItem<'static, Uuid>> = tasks
-            .iter()
-            .map(|t| build_node(t, &children_map))
-            .collect();
+        let child_items: Vec<TreeItem<'static, Uuid>> =
+            tasks.iter().map(|t| build_node(t, &children_map)).collect();
         items.push(
-            TreeItem::new(sid, section_line(name), child_items)
-                .expect("section UUID collision"),
+            TreeItem::new(sid, section_line(name), child_items).expect("section UUID collision"),
         );
     }
 
     if let Some(tasks) = no_ctx {
         let sid = section_uuid("No context");
         section_ids.push(sid);
-        let child_items: Vec<TreeItem<'static, Uuid>> = tasks
-            .iter()
-            .map(|t| build_node(t, &children_map))
-            .collect();
+        let child_items: Vec<TreeItem<'static, Uuid>> =
+            tasks.iter().map(|t| build_node(t, &children_map)).collect();
         items.push(
             TreeItem::new(sid, section_line("No context"), child_items)
                 .expect("No context UUID collision"),
         );
     }
 
-    TreeBuild { items, section_ids, task_section }
+    TreeBuild {
+        items,
+        section_ids,
+        task_section,
+    }
 }
 
 /// Given the visible tree `items` and the id of the node about to be deleted,
@@ -309,8 +315,9 @@ pub fn neighbor_after_delete(items: &[TreeItem<'_, Uuid>], target: Uuid) -> Opti
         for (i, item) in siblings.iter().enumerate() {
             if *item.identifier() == target {
                 // Next sibling, else previous sibling.
-                if let Some(sib) =
-                    siblings.get(i + 1).or_else(|| i.checked_sub(1).map(|p| &siblings[p]))
+                if let Some(sib) = siblings
+                    .get(i + 1)
+                    .or_else(|| i.checked_sub(1).map(|p| &siblings[p]))
                 {
                     let mut path = ancestors.to_vec();
                     path.push(*sib.identifier());
@@ -339,10 +346,11 @@ fn build_node(task: &Task, children: &HashMap<Uuid, Vec<&Task>>) -> TreeItem<'st
         Some(kids) if !kids.is_empty() => {
             let mut sorted: Vec<&Task> = kids.clone();
             sorted.sort_by(|a, b| a.title.cmp(&b.title));
-            let child_items: Vec<TreeItem<'static, Uuid>> =
-                sorted.into_iter().map(|c| build_node(c, children)).collect();
-            TreeItem::new(task.id, text, child_items)
-                .expect("duplicate task id in tree children")
+            let child_items: Vec<TreeItem<'static, Uuid>> = sorted
+                .into_iter()
+                .map(|c| build_node(c, children))
+                .collect();
+            TreeItem::new(task.id, text, child_items).expect("duplicate task id in tree children")
         }
         _ => TreeItem::new_leaf(task.id, text),
     }
@@ -352,7 +360,9 @@ fn build_node(task: &Task, children: &HashMap<Uuid, Vec<&Task>>) -> TreeItem<'st
 fn section_line(name: &str) -> Line<'static> {
     Line::from(vec![Span::styled(
         format!("── {name} ──"),
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
     )])
 }
 
@@ -361,7 +371,12 @@ fn node_line(task: &Task) -> Line<'static> {
     let (glyph, glyph_style) = match task.status {
         Status::Open => ("○", Style::default()),
         Status::Started => ("▶", Style::default().fg(Color::Green)),
-        Status::Done => ("✓", Style::default().fg(Color::Green).add_modifier(Modifier::DIM)),
+        Status::Done => (
+            "✓",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::DIM),
+        ),
         Status::Cancelled => (
             "✗",
             Style::default().add_modifier(Modifier::DIM | Modifier::CROSSED_OUT),
@@ -370,7 +385,9 @@ fn node_line(task: &Task) -> Line<'static> {
     let short = task.id.to_string().replace('-', "")[..8].to_owned();
 
     let title_style = match task.status {
-        Status::Done => Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+        Status::Done => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
         Status::Cancelled => Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM | Modifier::CROSSED_OUT),
@@ -380,7 +397,10 @@ fn node_line(task: &Task) -> Line<'static> {
     Line::from(vec![
         Span::styled(glyph, glyph_style),
         Span::raw(" "),
-        Span::styled(format!("[{short}] "), Style::default().add_modifier(Modifier::DIM)),
+        Span::styled(
+            format!("[{short}] "),
+            Style::default().add_modifier(Modifier::DIM),
+        ),
         Span::styled(task.title.clone(), title_style),
     ])
 }
@@ -411,11 +431,17 @@ mod tests {
     }
 
     fn all_filter() -> FilterSet {
-        FilterSet { disable_implicit: true, ..FilterSet::default() }
+        FilterSet {
+            disable_implicit: true,
+            ..FilterSet::default()
+        }
     }
 
     /// Find a task item anywhere in the tree (searches all sections' subtrees).
-    fn find_task<'a>(items: &'a [TreeItem<'a, Uuid>], task_id: Uuid) -> Option<&'a TreeItem<'a, Uuid>> {
+    fn find_task<'a>(
+        items: &'a [TreeItem<'a, Uuid>],
+        task_id: Uuid,
+    ) -> Option<&'a TreeItem<'a, Uuid>> {
         for item in items {
             if *item.identifier() == task_id {
                 return Some(item);
@@ -432,7 +458,13 @@ mod tests {
         let root = Task::new("root".to_owned());
         let child = child_of("child", root.id);
         let other = Task::new("other".to_owned());
-        let build = build_items(&[root, child, other], &all_filter(), &no_state(), today(), false);
+        let build = build_items(
+            &[root, child, other],
+            &all_filter(),
+            &no_state(),
+            today(),
+            false,
+        );
         // Both root tasks land in a single "No context" section.
         assert_eq!(build.items.len(), 1, "expected one section");
         let section = &build.items[0];
@@ -479,11 +511,21 @@ mod tests {
         let mut parent = Task::new("done parent".to_owned());
         parent.mark_done(today());
         let child = child_of("active child", parent.id);
-        let build = build_items(&[parent, child.clone()], &no_filter(), &no_state(), today(), false);
+        let build = build_items(
+            &[parent, child.clone()],
+            &no_filter(),
+            &no_state(),
+            today(),
+            false,
+        );
         // Only the child is visible, promoted to root inside "No context".
         assert_eq!(build.items.len(), 1, "one section");
         let section = &build.items[0];
-        assert_eq!(section.children().len(), 1, "child promoted to section root");
+        assert_eq!(
+            section.children().len(),
+            1,
+            "child promoted to section root"
+        );
         assert_eq!(*section.children()[0].identifier(), child.id);
     }
 
@@ -554,7 +596,13 @@ mod tests {
             ..Default::default()
         };
 
-        let build = build_items(&[work_task.clone(), home_task.clone()], &no_filter(), &state, today(), true);
+        let build = build_items(
+            &[work_task.clone(), home_task.clone()],
+            &no_filter(),
+            &state,
+            today(),
+            true,
+        );
 
         // Only @work is visible → one "@work" section, one task inside.
         assert_eq!(build.items.len(), 1, "only @work task should be visible");
@@ -611,7 +659,11 @@ mod tests {
             true,
         );
 
-        assert_eq!(build.items.len(), 1, "only done @work task should be visible");
+        assert_eq!(
+            build.items.len(),
+            1,
+            "only done @work task should be visible"
+        );
         assert_eq!(build.items[0].children().len(), 1);
         assert_eq!(*build.items[0].children()[0].identifier(), done_work.id);
     }
@@ -693,8 +745,14 @@ mod tests {
             false,
         );
 
-        assert_eq!(build.task_section.get(&work_task.id), Some(&section_uuid("@work")));
-        assert_eq!(build.task_section.get(&plain.id), Some(&section_uuid("No context")));
+        assert_eq!(
+            build.task_section.get(&work_task.id),
+            Some(&section_uuid("@work"))
+        );
+        assert_eq!(
+            build.task_section.get(&plain.id),
+            Some(&section_uuid("No context"))
+        );
     }
 
     // ── neighbor_after_delete ─────────────────────────────────────────────────
@@ -713,7 +771,11 @@ mod tests {
             false,
         );
         let path = neighbor_after_delete(&build.items, b.id).unwrap();
-        assert_eq!(path.last(), Some(&c.id), "deleting b should target next sibling c");
+        assert_eq!(
+            path.last(),
+            Some(&c.id),
+            "deleting b should target next sibling c"
+        );
     }
 
     #[test]
@@ -729,7 +791,11 @@ mod tests {
             false,
         );
         let path = neighbor_after_delete(&build.items, c.id).unwrap();
-        assert_eq!(path.last(), Some(&b.id), "deleting last sibling targets previous");
+        assert_eq!(
+            path.last(),
+            Some(&b.id),
+            "deleting last sibling targets previous"
+        );
     }
 
     #[test]
@@ -744,7 +810,11 @@ mod tests {
             false,
         );
         let path = neighbor_after_delete(&build.items, child.id).unwrap();
-        assert_eq!(path.last(), Some(&parent.id), "only child targets its parent");
+        assert_eq!(
+            path.last(),
+            Some(&parent.id),
+            "only child targets its parent"
+        );
     }
 
     #[test]

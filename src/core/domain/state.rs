@@ -101,7 +101,7 @@ mod tests {
         let s = state_with_resources(&[("office/printer", false)]);
         assert!(!s.is_resource_available("#office/printer"));
         assert!(s.is_resource_available("#office/desk")); // sibling unaffected
-        assert!(s.is_resource_available("#office"));      // parent unaffected
+        assert!(s.is_resource_available("#office")); // parent unaffected
     }
 
     #[test]

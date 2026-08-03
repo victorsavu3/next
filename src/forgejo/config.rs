@@ -60,11 +60,19 @@ pub fn load() -> Result<Config> {
 
 /// Loads and validates the config from `path` (separated for testing).
 pub fn load_from(path: &Path) -> Result<Config> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("read config {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
     let cfg: Config = toml::from_str(&text).context("parse next-forgejo config")?;
-    anyhow::ensure!(!cfg.forgejo_url.is_empty(), "forgejo_url not set in {}", path.display());
-    anyhow::ensure!(!cfg.forgejo_token.is_empty(), "forgejo_token not set in {}", path.display());
+    anyhow::ensure!(
+        !cfg.forgejo_url.is_empty(),
+        "forgejo_url not set in {}",
+        path.display()
+    );
+    anyhow::ensure!(
+        !cfg.forgejo_token.is_empty(),
+        "forgejo_token not set in {}",
+        path.display()
+    );
     Ok(cfg)
 }
 
@@ -101,7 +109,10 @@ mod tests {
         assert_eq!(cfg.forgejo_url, "https://forgejo.example.com");
         assert_eq!(cfg.next_repo, Some(PathBuf::from("/home/u/tasks")));
         assert_eq!(cfg.mappings.len(), 2);
-        assert_eq!(cfg.mappings[0].owner_repo().unwrap(), ("victor", "task-manager"));
+        assert_eq!(
+            cfg.mappings[0].owner_repo().unwrap(),
+            ("victor", "task-manager")
+        );
         assert_eq!(cfg.mappings[1].context, "@ai/forgejo_claude");
     }
 
@@ -124,9 +135,15 @@ mod tests {
 
     #[test]
     fn bad_repo_format_errors() {
-        let m = Mapping { repo: "noslash".into(), context: "@x".into() };
+        let m = Mapping {
+            repo: "noslash".into(),
+            context: "@x".into(),
+        };
         assert!(m.owner_repo().is_err());
-        let m2 = Mapping { repo: "owner/".into(), context: "@x".into() };
+        let m2 = Mapping {
+            repo: "owner/".into(),
+            context: "@x".into(),
+        };
         assert!(m2.owner_repo().is_err());
     }
 }

@@ -28,8 +28,22 @@ fn add_args(title: &str) -> add::Args {
 #[test]
 fn rebuild_cache_preserves_active_tasks() {
     let mut env = common::setup();
-    add::run(add::Args { slug: Some("a".into()), ..add_args("Task A") }, &mut env.ctx).unwrap();
-    add::run(add::Args { slug: Some("b".into()), ..add_args("Task B") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("a".into()),
+            ..add_args("Task A")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(
+        add::Args {
+            slug: Some("b".into()),
+            ..add_args("Task B")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     assert_eq!(env.ctx.repo.store.list_tasks().unwrap().len(), 2);
 

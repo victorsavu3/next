@@ -2,12 +2,12 @@ mod common;
 
 use chrono::Local;
 use next::cli::commands::{add, cancel, done, start};
-use next::core::FilterArgs;
-use next::core::listing;
-use next::core::{domain::filter, scoring};
-use next::core::scoring::ScoredTask;
 use next::core::domain::tag::TagMeta;
 use next::core::domain::task::Priority;
+use next::core::listing;
+use next::core::scoring::ScoredTask;
+use next::core::FilterArgs;
+use next::core::{domain::filter, scoring};
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -41,7 +41,14 @@ fn score_all(env: &mut common::TestEnv) -> Vec<ScoredTask> {
     let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = filter::apply(all.clone(), &filter_set, &state, today);
     let tag_metas = env.ctx.repo.store.list_tag_metas().unwrap();
-    scoring::score_and_sort(filtered, &all, today, &env.ctx.repo.scoring, &tag_metas, &std::collections::HashMap::new())
+    scoring::score_and_sort(
+        filtered,
+        &all,
+        today,
+        &env.ctx.repo.scoring,
+        &tag_metas,
+        &std::collections::HashMap::new(),
+    )
 }
 
 fn titles(tasks: &[ScoredTask]) -> Vec<&str> {
@@ -59,7 +66,8 @@ fn repository_loads_scoring_from_config_file() {
 
     // Absent file → built-in defaults.
     let (store, vcs) = next::core::storage::open(dir.path().to_path_buf()).unwrap();
-    let repo = next::TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+    let repo =
+        next::TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
     assert_eq!(repo.scoring, ScoringConfig::default(), "no file → defaults");
 
     // A partial file overrides only the named weight; the rest stay default.
@@ -68,8 +76,12 @@ fn repository_loads_scoring_from_config_file() {
     std::fs::write(config_dir.join("scoring.toml"), "priority_high = 9.0\n").unwrap();
 
     let (store, vcs) = next::core::storage::open(dir.path().to_path_buf()).unwrap();
-    let repo = next::TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
-    assert_eq!(repo.scoring.priority_high, 9.0, "weight from config/scoring.toml must win");
+    let repo =
+        next::TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+    assert_eq!(
+        repo.scoring.priority_high, 9.0,
+        "weight from config/scoring.toml must win"
+    );
     assert_eq!(
         repo.scoring.priority_low,
         ScoringConfig::default().priority_low,
@@ -86,9 +98,13 @@ fn high_priority_ranks_above_medium() {
     let mut env = common::setup();
     add::run(add_args("Medium task"), &mut env.ctx).unwrap();
     add::run(
-        add::Args { priority: Some("high".into()), ..add_args("High task") },
+        add::Args {
+            priority: Some("high".into()),
+            ..add_args("High task")
+        },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
@@ -102,9 +118,13 @@ fn low_priority_ranks_below_medium() {
     let mut env = common::setup();
     add::run(add_args("Medium task"), &mut env.ctx).unwrap();
     add::run(
-        add::Args { priority: Some("low".into()), ..add_args("Low task") },
+        add::Args {
+            priority: Some("low".into()),
+            ..add_args("Low task")
+        },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
@@ -123,15 +143,22 @@ fn due_today_ranks_above_no_due_date() {
     add::run(add_args("No due"), &mut env.ctx).unwrap();
     let today = Local::now().date_naive().to_string();
     add::run(
-        add::Args { due: Some(today), ..add_args("Due today") },
+        add::Args {
+            due: Some(today),
+            ..add_args("Due today")
+        },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
     let due_pos = t.iter().position(|&s| s == "Due today").unwrap();
     let no_due_pos = t.iter().position(|&s| s == "No due").unwrap();
-    assert!(due_pos < no_due_pos, "task due today should outrank task with no due date");
+    assert!(
+        due_pos < no_due_pos,
+        "task due today should outrank task with no due date"
+    );
 }
 
 #[test]
@@ -141,8 +168,22 @@ fn overdue_task_ranks_above_due_tomorrow() {
     let yesterday = (Local::now().date_naive() - Duration::days(1)).to_string();
     let tomorrow = (Local::now().date_naive() + Duration::days(1)).to_string();
 
-    add::run(add::Args { due: Some(tomorrow), ..add_args("Due tomorrow") }, &mut env.ctx).unwrap();
-    add::run(add::Args { due: Some(yesterday), ..add_args("Overdue") }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            due: Some(tomorrow),
+            ..add_args("Due tomorrow")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(
+        add::Args {
+            due: Some(yesterday),
+            ..add_args("Overdue")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
@@ -158,9 +199,30 @@ fn overdue_task_ranks_above_due_tomorrow() {
 #[test]
 fn started_task_ranks_above_equivalent_open() {
     let mut env = common::setup();
-    add::run(add::Args { slug: Some("open".into()), ..add_args("Open task") }, &mut env.ctx).unwrap();
-    add::run(add::Args { slug: Some("started".into()), ..add_args("Started task") }, &mut env.ctx).unwrap();
-    start::run(start::Args { id: "started".into(), json: false }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("open".into()),
+            ..add_args("Open task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(
+        add::Args {
+            slug: Some("started".into()),
+            ..add_args("Started task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    start::run(
+        start::Args {
+            id: "started".into(),
+            json: false,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
@@ -181,34 +243,75 @@ fn child_of_high_priority_parent_outranks_child_of_low_priority_parent() {
     // but we want to test child scoring, so use started status to make it
     // a leaf (no children yet when we run score_all).
     add::run(
-        add::Args { slug: Some("hi-parent".into()), priority: Some("high".into()), ..add_args("High parent") },
+        add::Args {
+            slug: Some("hi-parent".into()),
+            priority: Some("high".into()),
+            ..add_args("High parent")
+        },
         &mut env.ctx,
-    ).unwrap();
-    let hi = env.ctx.repo.store.get_task_by_slug("hi-parent").unwrap().unwrap();
+    )
+    .unwrap();
+    let hi = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("hi-parent")
+        .unwrap()
+        .unwrap();
     add::run(
-        add::Args { slug: Some("hi-child".into()), parent: Some(hi.id.to_string()), ..add_args("Child of high") },
+        add::Args {
+            slug: Some("hi-child".into()),
+            parent: Some(hi.id.to_string()),
+            ..add_args("Child of high")
+        },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
 
     add::run(
-        add::Args { slug: Some("lo-parent".into()), priority: Some("low".into()), ..add_args("Low parent") },
+        add::Args {
+            slug: Some("lo-parent".into()),
+            priority: Some("low".into()),
+            ..add_args("Low parent")
+        },
         &mut env.ctx,
-    ).unwrap();
-    let lo = env.ctx.repo.store.get_task_by_slug("lo-parent").unwrap().unwrap();
+    )
+    .unwrap();
+    let lo = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("lo-parent")
+        .unwrap()
+        .unwrap();
     add::run(
-        add::Args { slug: Some("lo-child".into()), parent: Some(lo.id.to_string()), ..add_args("Child of low") },
+        add::Args {
+            slug: Some("lo-child".into()),
+            parent: Some(lo.id.to_string()),
+            ..add_args("Child of low")
+        },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Both parents are hidden (they have open children). Score only the children.
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
-    assert!(!t.contains(&"High parent"), "parent hidden while children open");
-    assert!(!t.contains(&"Low parent"), "parent hidden while children open");
+    assert!(
+        !t.contains(&"High parent"),
+        "parent hidden while children open"
+    );
+    assert!(
+        !t.contains(&"Low parent"),
+        "parent hidden while children open"
+    );
 
     let hi_pos = t.iter().position(|&s| s == "Child of high").unwrap();
     let lo_pos = t.iter().position(|&s| s == "Child of low").unwrap();
-    assert!(hi_pos < lo_pos, "child of high-priority parent should outrank child of low-priority parent");
+    assert!(
+        hi_pos < lo_pos,
+        "child of high-priority parent should outrank child of low-priority parent"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -221,19 +324,29 @@ fn high_priority_tag_boosts_task_rank() {
 
     add::run(add_args("Plain task"), &mut env.ctx).unwrap();
     add::run(
-        add::Args { tags: vec!["urgent".into()], ..add_args("Urgent task") },
+        add::Args {
+            tags: vec!["urgent".into()],
+            ..add_args("Urgent task")
+        },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Give the tag high priority in the store.
-    let meta = TagMeta { priority: Some(Priority::High), ..Default::default() };
+    let meta = TagMeta {
+        priority: Some(Priority::High),
+        ..Default::default()
+    };
     env.ctx.repo.store.set_tag_meta("urgent", meta).unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
     let urg = t.iter().position(|&s| s == "Urgent task").unwrap();
     let plain = t.iter().position(|&s| s == "Plain task").unwrap();
-    assert!(urg < plain, "task with high-priority tag should outrank plain task");
+    assert!(
+        urg < plain,
+        "task with high-priority tag should outrank plain task"
+    );
 }
 
 #[test]
@@ -242,18 +355,28 @@ fn low_priority_tag_penalises_task_rank() {
 
     add::run(add_args("Plain task"), &mut env.ctx).unwrap();
     add::run(
-        add::Args { tags: vec!["someday".into()], ..add_args("Someday task") },
+        add::Args {
+            tags: vec!["someday".into()],
+            ..add_args("Someday task")
+        },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
 
-    let meta = TagMeta { priority: Some(Priority::Low), ..Default::default() };
+    let meta = TagMeta {
+        priority: Some(Priority::Low),
+        ..Default::default()
+    };
     env.ctx.repo.store.set_tag_meta("someday", meta).unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
     let sm = t.iter().position(|&s| s == "Someday task").unwrap();
     let plain = t.iter().position(|&s| s == "Plain task").unwrap();
-    assert!(sm > plain, "task with low-priority tag should rank below plain task");
+    assert!(
+        sm > plain,
+        "task with low-priority tag should rank below plain task"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -266,15 +389,22 @@ fn positive_score_adjustment_moves_task_up() {
 
     add::run(add_args("Normal task"), &mut env.ctx).unwrap();
     add::run(
-        add::Args { adjust: Some(10.0), ..add_args("Boosted task") },
+        add::Args {
+            adjust: Some(10.0),
+            ..add_args("Boosted task")
+        },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
     let boosted = t.iter().position(|&s| s == "Boosted task").unwrap();
     let normal = t.iter().position(|&s| s == "Normal task").unwrap();
-    assert!(boosted < normal, "task with positive score_adjustment should outrank a normal task");
+    assert!(
+        boosted < normal,
+        "task with positive score_adjustment should outrank a normal task"
+    );
 }
 
 #[test]
@@ -283,15 +413,22 @@ fn negative_score_adjustment_moves_task_down() {
 
     add::run(add_args("Normal task"), &mut env.ctx).unwrap();
     add::run(
-        add::Args { adjust: Some(-10.0), ..add_args("Penalised task") },
+        add::Args {
+            adjust: Some(-10.0),
+            ..add_args("Penalised task")
+        },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
     let penalised = t.iter().position(|&s| s == "Penalised task").unwrap();
     let normal = t.iter().position(|&s| s == "Normal task").unwrap();
-    assert!(penalised > normal, "task with large negative adjustment should rank below a normal task");
+    assert!(
+        penalised > normal,
+        "task with large negative adjustment should rank below a normal task"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -306,9 +443,13 @@ fn no_time_urgency_tag_suppresses_overdue_factor() {
     // Overdue task with no special tag.
     let yesterday = (Local::now().date_naive() - Duration::days(3)).to_string();
     add::run(
-        add::Args { due: Some(yesterday.clone()), ..add_args("Overdue normal") },
+        add::Args {
+            due: Some(yesterday.clone()),
+            ..add_args("Overdue normal")
+        },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Same overdue date, but tagged with @wishlist which has no_time_urgency.
     add::run(
@@ -318,9 +459,13 @@ fn no_time_urgency_tag_suppresses_overdue_factor() {
             ..add_args("Overdue wishlist")
         },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
 
-    let meta = TagMeta { no_time_urgency: true, ..Default::default() };
+    let meta = TagMeta {
+        no_time_urgency: true,
+        ..Default::default()
+    };
     env.ctx.repo.store.set_tag_meta("wishlist", meta).unwrap();
 
     let ranked = score_all(&mut env);
@@ -339,19 +484,32 @@ fn low_priority_tag_reduces_score_by_one() {
 
     add::run(add_args("Plain task"), &mut env.ctx).unwrap();
     add::run(
-        add::Args { tags: vec!["wishlist".into()], ..add_args("Wishlist task") },
+        add::Args {
+            tags: vec!["wishlist".into()],
+            ..add_args("Wishlist task")
+        },
         &mut env.ctx,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Tag with low priority → tag_low default = -1.0; combined with priority_medium=1.0 → base 0.
-    let meta = TagMeta { priority: Some(Priority::Low), ..Default::default() };
+    let meta = TagMeta {
+        priority: Some(Priority::Low),
+        ..Default::default()
+    };
     env.ctx.repo.store.set_tag_meta("wishlist", meta).unwrap();
 
     let ranked = score_all(&mut env);
     // Plain task score ≈ 1.0 (medium priority + small age).
     // Wishlist score ≈ 0.0 (1.0 - 1.0) + tiny age ≈ small positive.
-    let plain = ranked.iter().find(|t| t.task.title == "Plain task").unwrap();
-    let wish = ranked.iter().find(|t| t.task.title == "Wishlist task").unwrap();
+    let plain = ranked
+        .iter()
+        .find(|t| t.task.title == "Plain task")
+        .unwrap();
+    let wish = ranked
+        .iter()
+        .find(|t| t.task.title == "Wishlist task")
+        .unwrap();
     assert!(
         plain.score > wish.score,
         "plain task ({:.3}) should score higher than wishlist task ({:.3})",
@@ -368,14 +526,39 @@ fn low_priority_tag_reduces_score_by_one() {
 fn done_task_does_not_appear_in_scored_list() {
     let mut env = common::setup();
 
-    add::run(add::Args { slug: Some("open".into()), ..add_args("Open task") }, &mut env.ctx).unwrap();
-    add::run(add::Args { slug: Some("finished".into()), ..add_args("Done task") }, &mut env.ctx).unwrap();
-    done::run(done::Args { id: "finished".into(), completed_at: None, json: false }, &mut env.ctx).unwrap();
+    add::run(
+        add::Args {
+            slug: Some("open".into()),
+            ..add_args("Open task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(
+        add::Args {
+            slug: Some("finished".into()),
+            ..add_args("Done task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    done::run(
+        done::Args {
+            id: "finished".into(),
+            completed_at: None,
+            json: false,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     let ranked = score_all(&mut env);
     let t = titles(&ranked);
     assert!(t.contains(&"Open task"));
-    assert!(!t.contains(&"Done task"), "done task must not appear in default scored list");
+    assert!(
+        !t.contains(&"Done task"),
+        "done task must not appear in default scored list"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -386,7 +569,10 @@ fn done_task_does_not_appear_in_scored_list() {
 /// and the scored/sorted result, so a test can compare the two.
 fn closed_listing(env: &mut common::TestEnv) -> (Vec<String>, Vec<ScoredTask>) {
     let today = Local::now().date_naive();
-    let filter_args = FilterArgs { closed: true, ..Default::default() };
+    let filter_args = FilterArgs {
+        closed: true,
+        ..Default::default()
+    };
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.repo.store.get_state().unwrap();
     let candidates = listing::load_candidates(env.ctx.repo.store(), &filter_set).unwrap();
@@ -415,17 +601,38 @@ fn closed_listing_keeps_store_query_order() {
 
     // Deliberately close them in an order that does not match their scores.
     for (slug, title, priority, adjust, completed) in [
-        ("oldest", "Oldest done", Some("high".to_string()), None, "2026-01-01"),
+        (
+            "oldest",
+            "Oldest done",
+            Some("high".to_string()),
+            None,
+            "2026-01-01",
+        ),
         ("middle", "Middle done", None, Some(50.0), "2026-03-01"),
-        ("newest", "Newest done", Some("low".to_string()), None, "2026-05-01"),
+        (
+            "newest",
+            "Newest done",
+            Some("low".to_string()),
+            None,
+            "2026-05-01",
+        ),
     ] {
         add::run(
-            add::Args { slug: Some(slug.into()), priority, adjust, ..add_args(title) },
+            add::Args {
+                slug: Some(slug.into()),
+                priority,
+                adjust,
+                ..add_args(title)
+            },
             &mut env.ctx,
         )
         .unwrap();
         done::run(
-            done::Args { id: slug.into(), completed_at: Some(completed.into()), json: false },
+            done::Args {
+                id: slug.into(),
+                completed_at: Some(completed.into()),
+                json: false,
+            },
             &mut env.ctx,
         )
         .unwrap();
@@ -438,8 +645,15 @@ fn closed_listing_keeps_store_query_order() {
         ["Newest done", "Middle done", "Oldest done"],
         "store query order is most recent completion first"
     );
-    assert_eq!(titles(&scored), store_order, "scoring must not reorder closed tasks");
-    assert!(scored.iter().all(|s| s.score == 0.0), "closed tasks all score 0");
+    assert_eq!(
+        titles(&scored),
+        store_order,
+        "scoring must not reorder closed tasks"
+    );
+    assert!(
+        scored.iter().all(|s| s.score == 0.0),
+        "closed tasks all score 0"
+    );
 }
 
 /// A started task that is then cancelled keeps neither its started bonus nor
@@ -458,8 +672,22 @@ fn cancelled_task_scores_zero() {
         &mut env.ctx,
     )
     .unwrap();
-    start::run(start::Args { id: "dropped".into(), json: false }, &mut env.ctx).unwrap();
-    cancel::run(cancel::Args { id: "dropped".into(), json: false }, &mut env.ctx).unwrap();
+    start::run(
+        start::Args {
+            id: "dropped".into(),
+            json: false,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    cancel::run(
+        cancel::Args {
+            id: "dropped".into(),
+            json: false,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     let (_, scored) = closed_listing(&mut env);
     assert_eq!(titles(&scored), ["Dropped task"]);

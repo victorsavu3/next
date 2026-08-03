@@ -1,5 +1,5 @@
-use chrono::Local;
 use crate::core::scoring;
+use chrono::Local;
 
 use crate::{core::resolve::resolve_task_id, AppContext};
 
@@ -27,7 +27,14 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     dated.extend(parent.clone());
     let task_dates = ctx.repo.task_git_dates_for(&dated);
 
-    let bd = scoring::score_with_breakdown(&task, parent.as_ref(), &task_dates, today, &ctx.repo.scoring, &tag_metas);
+    let bd = scoring::score_with_breakdown(
+        &task,
+        parent.as_ref(),
+        &task_dates,
+        today,
+        &ctx.repo.scoring,
+        &tag_metas,
+    );
 
     if args.json {
         let children = ctx
@@ -38,12 +45,15 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
                 ..crate::core::TaskQuery::unpaginated()
             })?
             .items;
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "task": task,
-            "score": bd.total,
-            "score_breakdown": bd,
-            "children": children,
-        }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "task": task,
+                "score": bd.total,
+                "score_breakdown": bd,
+                "children": children,
+            }))?
+        );
         return Ok(());
     }
 

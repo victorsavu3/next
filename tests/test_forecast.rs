@@ -96,7 +96,10 @@ fn forecast_empty_when_no_due_dates() {
 fn forecast_shows_tasks_due_within_horizon() {
     let mut env = common::setup();
     add::run(
-        add::Args { due: Some(due_in(5)), ..add_args("Due soon") },
+        add::Args {
+            due: Some(due_in(5)),
+            ..add_args("Due soon")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -110,7 +113,10 @@ fn forecast_shows_tasks_due_within_horizon() {
 fn forecast_excludes_tasks_beyond_horizon() {
     let mut env = common::setup();
     add::run(
-        add::Args { due: Some(due_in(200)), ..add_args("Far future task") },
+        add::Args {
+            due: Some(due_in(200)),
+            ..add_args("Far future task")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -122,12 +128,18 @@ fn forecast_excludes_tasks_beyond_horizon() {
 fn forecast_json_output() {
     let mut env = common::setup();
     add::run(
-        add::Args { due: Some(due_in(3)), ..add_args("JSON forecast task") },
+        add::Args {
+            due: Some(due_in(3)),
+            ..add_args("JSON forecast task")
+        },
         &mut env.ctx,
     )
     .unwrap();
     forecast::run(
-        forecast::Args { json: true, ..forecast_args(Some(30)) },
+        forecast::Args {
+            json: true,
+            ..forecast_args(Some(30))
+        },
         &env.ctx,
     )
     .unwrap();
@@ -137,7 +149,10 @@ fn forecast_json_output() {
 fn forecast_overdue_task_included() {
     let mut env = common::setup();
     add::run(
-        add::Args { due: Some(due_in(-3)), ..add_args("Overdue task") },
+        add::Args {
+            due: Some(due_in(-3)),
+            ..add_args("Overdue task")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -191,12 +206,19 @@ fn weekly_schedule_projects_multiple_occurrences_in_horizon() {
     let projected = projected_dates(&env, Some(90), "Weekly review");
     // due+3 is the concrete instance; projections are due+10, due+17, … up to
     // today+90. With base = today+3: today+10, +17, … +87 → floor(87/7)=12.
-    assert_eq!(projected.len(), 12, "expected 12 projected weekly occurrences");
+    assert_eq!(
+        projected.len(),
+        12,
+        "expected 12 projected weekly occurrences"
+    );
     // First two projected occurrences are exactly one and two weeks out from due.
     assert_eq!(projected[0], today() + Duration::days(10));
     assert_eq!(projected[1], today() + Duration::days(17));
     // The concrete instance itself is present and NOT projected.
-    assert_eq!(concrete_dates(&env, Some(90), "Weekly review"), vec![today() + Duration::days(3)]);
+    assert_eq!(
+        concrete_dates(&env, Some(90), "Weekly review"),
+        vec![today() + Duration::days(3)]
+    );
     // All projected dates lie within the horizon.
     let cutoff = today() + Duration::days(90);
     assert!(projected.iter().all(|d| *d <= cutoff));
@@ -243,8 +265,14 @@ fn projection_stops_at_horizon() {
     // A short 20-day horizon: base = today+1, projections at +8, +15 (not +22).
     let projected = projected_dates(&env, Some(20), "Weekly stop");
     let cutoff = today() + Duration::days(20);
-    assert!(projected.iter().all(|d| *d <= cutoff), "nothing beyond the horizon");
-    assert_eq!(projected, vec![today() + Duration::days(8), today() + Duration::days(15)]);
+    assert!(
+        projected.iter().all(|d| *d <= cutoff),
+        "nothing beyond the horizon"
+    );
+    assert_eq!(
+        projected,
+        vec![today() + Duration::days(8), today() + Duration::days(15)]
+    );
 }
 
 #[test]
@@ -253,14 +281,20 @@ fn completion_recurring_task_is_projected_assuming_done_asap() {
     let due = today() + Duration::days(5);
     let mut task = Task::new("Water plants");
     task.due = Some(due);
-    task.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
+    task.recurrence = Some(Recurrence::Completion {
+        interval_days: 7,
+        snap: None,
+    });
     save(&mut env, &task);
 
     // The current instance shows as a concrete entry.
     assert_eq!(concrete_dates(&env, Some(90), "Water plants"), vec![due]);
     // Projected entries assume completion on the due date; first projection = due + 7.
     let projected = projected_dates(&env, Some(90), "Water plants");
-    assert!(!projected.is_empty(), "completion series should now project");
+    assert!(
+        !projected.is_empty(),
+        "completion series should now project"
+    );
     assert_eq!(projected[0], due + Duration::days(7));
     // Subsequent projections advance by interval_days each step.
     for w in projected.windows(2) {
@@ -272,13 +306,19 @@ fn completion_recurring_task_is_projected_assuming_done_asap() {
 fn non_recurring_due_task_appears_as_concrete_only() {
     let mut env = common::setup();
     add::run(
-        add::Args { due: Some(due_in(10)), ..add_args("One-off") },
+        add::Args {
+            due: Some(due_in(10)),
+            ..add_args("One-off")
+        },
         &mut env.ctx,
     )
     .unwrap();
 
     assert!(projected_dates(&env, Some(90), "One-off").is_empty());
-    assert_eq!(concrete_dates(&env, Some(90), "One-off"), vec![today() + Duration::days(10)]);
+    assert_eq!(
+        concrete_dates(&env, Some(90), "One-off"),
+        vec![today() + Duration::days(10)]
+    );
 }
 
 #[test]
@@ -309,7 +349,10 @@ fn projected_entries_are_marked_distinct_from_concrete() {
     save(&mut env, &task);
 
     let (entries, _) = forecast::build_entries(&forecast_args(Some(40)), &env.ctx).unwrap();
-    let mine: Vec<_> = entries.iter().filter(|e| e.title == "Marker check").collect();
+    let mine: Vec<_> = entries
+        .iter()
+        .filter(|e| e.title == "Marker check")
+        .collect();
     // Exactly one concrete (the current instance) plus several projected ones.
     let concrete = mine.iter().filter(|e| !e.projected).count();
     let projected = mine.iter().filter(|e| e.projected).count();
@@ -327,13 +370,21 @@ fn projection_respects_snap() {
     let mut env = common::setup();
     // Weekly series snapped to the next Monday. Every projected date must land
     // on a Monday regardless of the raw occurrence weekday.
-    let task = schedule_task("Snapped weekly", "FREQ=WEEKLY", 1, Some(Snap::NextWeekday { weekday: 0 }));
+    let task = schedule_task(
+        "Snapped weekly",
+        "FREQ=WEEKLY",
+        1,
+        Some(Snap::NextWeekday { weekday: 0 }),
+    );
     save(&mut env, &task);
 
     use chrono::{Datelike, Weekday};
     let projected = projected_dates(&env, Some(60), "Snapped weekly");
     assert!(!projected.is_empty());
-    assert!(projected.iter().all(|d| d.weekday() == Weekday::Mon), "all snapped to Monday");
+    assert!(
+        projected.iter().all(|d| d.weekday() == Weekday::Mon),
+        "all snapped to Monday"
+    );
 }
 
 #[test]
@@ -342,7 +393,10 @@ fn forecast_typoed_flag_in_filter_tokens_rejected() {
     // error clearly instead of being misread as a tag exclusion.
     let env = common::setup();
     let err = forecast::run(
-        forecast::Args { tokens: vec!["--jsn".to_string()], ..forecast_args(None) },
+        forecast::Args {
+            tokens: vec!["--jsn".to_string()],
+            ..forecast_args(None)
+        },
         &env.ctx,
     )
     .unwrap_err();

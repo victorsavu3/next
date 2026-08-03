@@ -1,7 +1,7 @@
 mod common;
 
-use std::fs;
 use next::cli::commands::init;
+use std::fs;
 
 fn run(dir: &std::path::Path) -> anyhow::Result<()> {
     init::run(init::Args {}, dir)
@@ -11,14 +11,20 @@ fn run(dir: &std::path::Path) -> anyhow::Result<()> {
 fn init_creates_git_repo() {
     let dir = tempfile::tempdir().unwrap();
     run(dir.path()).unwrap();
-    assert!(dir.path().join(".git").exists(), ".git must exist after init");
+    assert!(
+        dir.path().join(".git").exists(),
+        ".git must exist after init"
+    );
 }
 
 #[test]
 fn init_creates_tasks_dir() {
     let dir = tempfile::tempdir().unwrap();
     run(dir.path()).unwrap();
-    assert!(dir.path().join("tasks").is_dir(), "tasks/ must exist after init");
+    assert!(
+        dir.path().join("tasks").is_dir(),
+        "tasks/ must exist after init"
+    );
 }
 
 #[test]
@@ -57,7 +63,10 @@ fn init_does_not_clobber_existing_scoring_config() {
     run(dir.path()).unwrap();
 
     let content = fs::read_to_string(&path).unwrap();
-    assert_eq!(content, "priority_high = 9.0\n", "existing scoring config must be preserved");
+    assert_eq!(
+        content, "priority_high = 9.0\n",
+        "existing scoring config must be preserved"
+    );
 }
 
 #[test]
@@ -69,7 +78,11 @@ fn init_is_idempotent() {
 
     let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
     let db_lines: Vec<&str> = content.lines().filter(|l| l.trim() == ".next.db").collect();
-    assert_eq!(db_lines.len(), 1, ".next.db must appear exactly once in .gitignore");
+    assert_eq!(
+        db_lines.len(),
+        1,
+        ".next.db must appear exactly once in .gitignore"
+    );
 }
 
 #[test]
@@ -83,9 +96,18 @@ fn init_preserves_existing_gitignore_content() {
     run(dir.path()).unwrap();
 
     let content = fs::read_to_string(&gitignore).unwrap();
-    assert!(content.contains("target/"), "existing entries must be preserved");
-    assert!(content.contains("*.log"), "existing entries must be preserved");
-    assert!(content.contains(".next.db"), ".next.db entry must be appended");
+    assert!(
+        content.contains("target/"),
+        "existing entries must be preserved"
+    );
+    assert!(
+        content.contains("*.log"),
+        "existing entries must be preserved"
+    );
+    assert!(
+        content.contains(".next.db"),
+        ".next.db entry must be appended"
+    );
 }
 
 #[test]
@@ -130,17 +152,34 @@ fn init_then_add_task_works() {
     let (store, vcs) = next::core::storage::open(dir.path().to_path_buf()).unwrap();
     let mut ctx = next::AppContext {
         config: next::Config::default(),
-        repo: next::TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf()),
+        repo: next::TaskRepository::with_parts(
+            Box::new(store),
+            Box::new(vcs),
+            dir.path().to_path_buf(),
+        ),
     };
 
     use next::cli::commands::add;
     add::run(
         add::Args {
             title: "First task".into(),
-            due: None, start: None, priority: None, slug: None,
-            assignee: None, tags: vec![], parent: None, blocked_by: vec![],
-            description: None, url: None, notes: None, recur_schedule: None,
-            recur_completion: None, recur_snap: None, long_term: false, adjust: None, json: false,
+            due: None,
+            start: None,
+            priority: None,
+            slug: None,
+            assignee: None,
+            tags: vec![],
+            parent: None,
+            blocked_by: vec![],
+            description: None,
+            url: None,
+            notes: None,
+            recur_schedule: None,
+            recur_completion: None,
+            recur_snap: None,
+            long_term: false,
+            adjust: None,
+            json: false,
         },
         &mut ctx,
     )

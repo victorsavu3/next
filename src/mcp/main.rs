@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use next::mcp::{
     config::McpConfig,
     git_init::clone_or_open,
-    server::{AppState, build_router},
+    server::{build_router, AppState},
     sync_manager::{spawn_deferred_sync, spawn_periodic_sync},
 };
 use next::TaskRepository;

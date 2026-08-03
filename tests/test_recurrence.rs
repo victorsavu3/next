@@ -101,8 +101,14 @@ fn recur_every_workday_spawns_next_on_workday() {
     let tasks = all_tasks(&env);
     assert_eq!(tasks.len(), 2, "expected 2 tasks (done + new)");
 
-    let new_task = tasks.iter().find(|t| t.status == Status::Open).expect("no open task");
-    let date = new_task.due.or(new_task.start).expect("no date on new task");
+    let new_task = tasks
+        .iter()
+        .find(|t| t.status == Status::Open)
+        .expect("no open task");
+    let date = new_task
+        .due
+        .or(new_task.start)
+        .expect("no date on new task");
     assert!(
         !matches!(date.weekday(), Weekday::Sat | Weekday::Sun),
         "spawned task is on a weekend: {date}"
@@ -140,7 +146,11 @@ fn recur_monthly_start_1st_due_3rd() {
     let due = new_task.due.expect("new task has no due date");
     assert_eq!(start.day(), 1, "start day should be 1st");
     assert_eq!(due.day(), 3, "due day should be 3rd");
-    assert_eq!((due - start).num_days(), 2, "start-to-due offset should be 2 days");
+    assert_eq!(
+        (due - start).num_days(),
+        2,
+        "start-to-due offset should be 2 days"
+    );
     // Should be in a future month
     assert!(
         start > NaiveDate::from_ymd_opt(2026, 6, 3).unwrap(),
@@ -174,9 +184,20 @@ fn recur_completion_1_week_saturday_snap() {
         .find(|t| t.status == Status::Open)
         .expect("no open task");
 
-    let date = new_task.due.or(new_task.start).expect("no date on new task");
-    assert_eq!(date.weekday(), Weekday::Sat, "expected Saturday, got {}", date.weekday());
-    assert!(date >= today + Duration::days(7), "due date should be >= today + 7d");
+    let date = new_task
+        .due
+        .or(new_task.start)
+        .expect("no date on new task");
+    assert_eq!(
+        date.weekday(),
+        Weekday::Sat,
+        "expected Saturday, got {}",
+        date.weekday()
+    );
+    assert!(
+        date >= today + Duration::days(7),
+        "due date should be >= today + 7d"
+    );
 }
 
 /// 4. Completion-based 2-week interval with Saturday snap.
@@ -205,9 +226,20 @@ fn recur_completion_2_weeks_saturday_snap() {
         .find(|t| t.status == Status::Open)
         .expect("no open task");
 
-    let date = new_task.due.or(new_task.start).expect("no date on new task");
-    assert_eq!(date.weekday(), Weekday::Sat, "expected Saturday, got {}", date.weekday());
-    assert!(date >= today + Duration::days(14), "due date should be >= today + 14d");
+    let date = new_task
+        .due
+        .or(new_task.start)
+        .expect("no date on new task");
+    assert_eq!(
+        date.weekday(),
+        Weekday::Sat,
+        "expected Saturday, got {}",
+        date.weekday()
+    );
+    assert!(
+        date >= today + Duration::days(14),
+        "due date should be >= today + 14d"
+    );
 }
 
 /// 5. Quarterly recurring task on 1st of the month.
@@ -299,9 +331,14 @@ fn recur_series_linked_by_recurrence_id() {
         .iter()
         .find(|t| t.status == Status::Open)
         .expect("no open task");
-    let rec_id = new_task.recurrence_id.expect("new task has no recurrence_id");
+    let rec_id = new_task
+        .recurrence_id
+        .expect("new task has no recurrence_id");
     // recurrence_id should point to the original task (since it had none, it uses its own id)
-    assert_eq!(rec_id, original_id, "recurrence_id should equal the original task's id");
+    assert_eq!(
+        rec_id, original_id,
+        "recurrence_id should equal the original task's id"
+    );
 }
 
 /// 8. 30-day completion interval, no snap — due date is exactly today + 30.
@@ -329,7 +366,10 @@ fn recur_completion_no_snap_interval_days() {
         .find(|t| t.status == Status::Open)
         .expect("no open task");
 
-    let date = new_task.due.or(new_task.start).expect("no date on new task");
+    let date = new_task
+        .due
+        .or(new_task.start)
+        .expect("no date on new task");
     assert_eq!(date, today + Duration::days(30), "due should be today + 30");
 }
 
@@ -350,7 +390,10 @@ fn recur_cancel_does_not_spawn() {
     .unwrap();
 
     cancel::run(
-        cancel::Args { id: "cancel-me".into(), json: false },
+        cancel::Args {
+            id: "cancel-me".into(),
+            json: false,
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -376,7 +419,11 @@ fn done_non_recurring_task_does_not_spawn() {
     done::run(done_args("one-off"), &mut env.ctx).unwrap();
 
     let tasks = all_tasks(&env);
-    assert_eq!(tasks.len(), 1, "no extra task should be created for non-recurring");
+    assert_eq!(
+        tasks.len(),
+        1,
+        "no extra task should be created for non-recurring"
+    );
     assert_eq!(tasks[0].status, Status::Done);
 }
 
@@ -403,7 +450,10 @@ fn recur_spawned_task_has_no_slug() {
         .iter()
         .find(|t| t.status == Status::Open)
         .expect("no open task");
-    assert!(new_task.slug.is_none(), "spawned task must not carry the parent's slug");
+    assert!(
+        new_task.slug.is_none(),
+        "spawned task must not carry the parent's slug"
+    );
 }
 
 /// Completing the spawned task produces a 3rd instance (chain of spawns).
@@ -465,10 +515,17 @@ fn recur_double_done_spawns_exactly_one_instance() {
 
     // Second done on the same (now Done) task → errors, spawns nothing.
     let err = done::run(done_args(&id), &mut env.ctx).unwrap_err();
-    assert!(err.to_string().contains("already done"), "unexpected error: {err}");
+    assert!(
+        err.to_string().contains("already done"),
+        "unexpected error: {err}"
+    );
 
     let tasks = all_tasks(&env);
-    assert_eq!(tasks.len(), 2, "second done must not spawn a duplicate instance");
+    assert_eq!(
+        tasks.len(),
+        2,
+        "second done must not spawn a duplicate instance"
+    );
     let open: Vec<_> = tasks.iter().filter(|t| t.status == Status::Open).collect();
     assert_eq!(open.len(), 1, "still exactly one open instance");
 }
@@ -500,7 +557,10 @@ fn backward_compat_rule_alias_loads() {
         .unwrap()
         .expect("task should be found");
     assert_eq!(task.title, "Legacy recurring task");
-    assert!(task.recurrence.is_some(), "recurrence should survive store reload");
+    assert!(
+        task.recurrence.is_some(),
+        "recurrence should survive store reload"
+    );
 }
 
 /// 9. Any spawned schedule-based task has start or due strictly after today.
@@ -530,8 +590,14 @@ fn recur_schedule_next_occurrence_is_in_future() {
         .find(|t| t.status == Status::Open)
         .expect("no open task");
 
-    let date = new_task.due.or(new_task.start).expect("no date on new task");
-    assert!(date > today, "spawned schedule task's date {date} should be after today {today}");
+    let date = new_task
+        .due
+        .or(new_task.start)
+        .expect("no date on new task");
+    assert!(
+        date > today,
+        "spawned schedule task's date {date} should be after today {today}"
+    );
 }
 
 /// Snap round-trips through TOML serialization (NextWeekday, NextWorkday, DayOfMonth).
@@ -559,7 +625,10 @@ fn recur_snap_round_trips_toml() {
     assert!(
         matches!(
             t.recurrence,
-            Some(Recurrence::Completion { snap: Some(Snap::NextWeekday { weekday: 5 }), .. })
+            Some(Recurrence::Completion {
+                snap: Some(Snap::NextWeekday { weekday: 5 }),
+                ..
+            })
         ),
         "NextWeekday snap should round-trip"
     );
@@ -580,7 +649,13 @@ fn recur_snap_round_trips_toml() {
     let (fresh2, _) = next::core::storage::open(env.ctx.repo.repo_root.clone()).unwrap();
     let t2 = fresh2.get_task_by_slug("workday-task").unwrap().unwrap();
     assert!(
-        matches!(t2.recurrence, Some(Recurrence::Completion { snap: Some(Snap::NextWorkday), .. })),
+        matches!(
+            t2.recurrence,
+            Some(Recurrence::Completion {
+                snap: Some(Snap::NextWorkday),
+                ..
+            })
+        ),
         "NextWorkday snap should round-trip"
     );
 }
@@ -600,7 +675,13 @@ fn recur_edit_rule_preserves_anchor() {
     )
     .unwrap();
 
-    let before = env.ctx.repo.store.get_task_by_slug("monthly").unwrap().unwrap();
+    let before = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("monthly")
+        .unwrap()
+        .unwrap();
     let original_anchor = match &before.recurrence {
         Some(Recurrence::Schedule { anchor, .. }) => *anchor,
         _ => panic!("expected schedule recurrence"),
@@ -643,15 +724,27 @@ fn recur_edit_rule_preserves_anchor() {
     )
     .unwrap();
 
-    let after = env.ctx.repo.store.get_task_by_slug("monthly").unwrap().unwrap();
+    let after = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("monthly")
+        .unwrap()
+        .unwrap();
     let new_anchor = match &after.recurrence {
         Some(Recurrence::Schedule { anchor, rrule, .. }) => {
-            assert_eq!(rrule, "FREQ=MONTHLY;BYMONTHDAY=15", "rrule should be updated");
+            assert_eq!(
+                rrule, "FREQ=MONTHLY;BYMONTHDAY=15",
+                "rrule should be updated"
+            );
             *anchor
         }
         _ => panic!("expected schedule recurrence after edit"),
     };
-    assert_eq!(original_anchor, new_anchor, "anchor must not change when editing the rule");
+    assert_eq!(
+        original_anchor, new_anchor,
+        "anchor must not change when editing the rule"
+    );
 }
 
 /// Clearing the recurrence removes the rule and recurrence_id.
@@ -668,9 +761,21 @@ fn recur_clear_recurrence_removes_rule() {
     )
     .unwrap();
 
-    let before = env.ctx.repo.store.get_task_by_slug("clearme").unwrap().unwrap();
-    assert!(before.recurrence.is_some(), "should have recurrence before clear");
-    assert!(before.recurrence_id.is_some(), "should have recurrence_id before clear");
+    let before = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("clearme")
+        .unwrap()
+        .unwrap();
+    assert!(
+        before.recurrence.is_some(),
+        "should have recurrence before clear"
+    );
+    assert!(
+        before.recurrence_id.is_some(),
+        "should have recurrence_id before clear"
+    );
 
     edit::run(
         edit::Args {
@@ -708,9 +813,18 @@ fn recur_clear_recurrence_removes_rule() {
     )
     .unwrap();
 
-    let after = env.ctx.repo.store.get_task_by_slug("clearme").unwrap().unwrap();
+    let after = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("clearme")
+        .unwrap()
+        .unwrap();
     assert!(after.recurrence.is_none(), "recurrence should be cleared");
-    assert!(after.recurrence_id.is_none(), "recurrence_id should be cleared");
+    assert!(
+        after.recurrence_id.is_none(),
+        "recurrence_id should be cleared"
+    );
 }
 
 /// recurrence_id is set on the first instance when adding a recurring task.
@@ -727,7 +841,13 @@ fn recur_first_instance_has_recurrence_id() {
     )
     .unwrap();
 
-    let task = env.ctx.repo.store.get_task_by_slug("first-instance").unwrap().unwrap();
+    let task = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("first-instance")
+        .unwrap()
+        .unwrap();
     assert_eq!(
         task.recurrence_id,
         Some(task.id),
@@ -744,11 +864,11 @@ fn recur_add_rejects_malformed_rrule() {
     // Note: FREQ=HOURLY and positional BYDAY (e.g. BYDAY=1MO) are now valid
     // per RFC 5545 and accepted by the rrule crate.
     let bad_rules = [
-        "",                           // empty string
-        "hello",                      // garbage (no '=')
-        "INTERVAL=2",                 // missing FREQ
-        "FREQ=DAILY;INTERVAL=0",      // INTERVAL must be >= 1 (custom guard)
-        "FREQ=MONTHLY;BYMONTHDAY=0",  // BYMONTHDAY=0 is invalid per RFC 5545
+        "",                          // empty string
+        "hello",                     // garbage (no '=')
+        "INTERVAL=2",                // missing FREQ
+        "FREQ=DAILY;INTERVAL=0",     // INTERVAL must be >= 1 (custom guard)
+        "FREQ=MONTHLY;BYMONTHDAY=0", // BYMONTHDAY=0 is invalid per RFC 5545
     ];
 
     for rule in bad_rules {
@@ -786,10 +906,19 @@ fn recur_add_accepts_valid_rrule_unchanged() {
     )
     .unwrap();
 
-    let task = env.ctx.repo.store.get_task_by_slug("valid-rule").unwrap().unwrap();
+    let task = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("valid-rule")
+        .unwrap()
+        .unwrap();
     match &task.recurrence {
         Some(Recurrence::Schedule { rrule, .. }) => {
-            assert_eq!(rrule, "FREQ=WEEKLY;BYDAY=MO,FR", "valid rule must round-trip unchanged");
+            assert_eq!(
+                rrule, "FREQ=WEEKLY;BYDAY=MO,FR",
+                "valid rule must round-trip unchanged"
+            );
         }
         other => panic!("expected schedule recurrence, got {other:?}"),
     }
@@ -818,13 +947,25 @@ fn recur_edit_rejects_malformed_rrule() {
         },
         &mut env.ctx,
     );
-    assert!(result.is_err(), "edit should reject malformed rrule at edit time");
+    assert!(
+        result.is_err(),
+        "edit should reject malformed rrule at edit time"
+    );
 
     // The original valid rule must be preserved.
-    let task = env.ctx.repo.store.get_task_by_slug("editme").unwrap().unwrap();
+    let task = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("editme")
+        .unwrap()
+        .unwrap();
     match &task.recurrence {
         Some(Recurrence::Schedule { rrule, .. }) => {
-            assert_eq!(rrule, "FREQ=MONTHLY;BYMONTHDAY=1", "original rule must be unchanged");
+            assert_eq!(
+                rrule, "FREQ=MONTHLY;BYMONTHDAY=1",
+                "original rule must be unchanged"
+            );
         }
         other => panic!("expected schedule recurrence, got {other:?}"),
     }
@@ -845,7 +986,12 @@ fn recur_invalid_rule_error_is_not_deferred_to_done() {
     );
     assert!(add_result.is_err(), "invalid rule must fail at add time");
     assert!(
-        env.ctx.repo.store.get_task_by_slug("deferred").unwrap().is_none(),
+        env.ctx
+            .repo
+            .store
+            .get_task_by_slug("deferred")
+            .unwrap()
+            .is_none(),
         "no task should exist, so the error cannot be deferred to done"
     );
 }

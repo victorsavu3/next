@@ -35,6 +35,11 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     ctx.repo.record_task_event("delete", id);
 
     println!("deleted [{}] {}", &task.id.to_string()[..8], task.title);
-    tracing::info!(cmd = "delete", "[{}] {}", &task.id.to_string()[..8], task.title);
+    tracing::info!(
+        cmd = "delete",
+        "[{}] {}",
+        &task.id.to_string()[..8],
+        task.title
+    );
     Ok(())
 }

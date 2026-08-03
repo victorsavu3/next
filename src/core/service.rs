@@ -11,7 +11,10 @@ use uuid::Uuid;
 
 use crate::{
     core::{
-        domain::{tag, task::{Recurrence, Status, Task}},
+        domain::{
+            tag,
+            task::{Recurrence, Status, Task},
+        },
         error::TaskError,
         recurrence::spawn_next,
         resolve::resolve_task_id,
@@ -217,8 +220,7 @@ pub fn create_task(
     }
 
     for blocker_ref in &params.blocked_by {
-        task.blocked_by
-            .push(resolve_task_id(store, blocker_ref)?);
+        task.blocked_by.push(resolve_task_id(store, blocker_ref)?);
     }
 
     if let Some(recurrence) = params.recurrence {
@@ -310,8 +312,7 @@ pub fn apply_edits(
 
     // Editing an archived task pulls it back into the active tier first;
     // the touched segment joins this edit's commit.
-    let resurrected_segment =
-        crate::core::archiver::resurrect_if_archived(store, repo_root, id)?;
+    let resurrected_segment = crate::core::archiver::resurrect_if_archived(store, repo_root, id)?;
 
     let mut task = store.get_task(id)?;
 
@@ -442,7 +443,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         crate::core::test_git::init_test_repo(dir.path());
         let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let ctx =
+            TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 
@@ -525,7 +527,10 @@ mod tests {
             &*ctx.vcs,
         )
         .unwrap();
-        assert!(task.tags.contains(&"@work".to_owned()), "context tag should be injected");
+        assert!(
+            task.tags.contains(&"@work".to_owned()),
+            "context tag should be injected"
+        );
     }
 
     #[test]
@@ -581,7 +586,10 @@ mod tests {
         assert_eq!(completed.status, Status::Done);
         assert_eq!(completed.completed_at, Some(today()));
         // The recorded date must survive a round-trip through the store.
-        assert_eq!(ctx.store.get_task(task.id).unwrap().completed_at, Some(today()));
+        assert_eq!(
+            ctx.store.get_task(task.id).unwrap().completed_at,
+            Some(today())
+        );
     }
 
     #[test]

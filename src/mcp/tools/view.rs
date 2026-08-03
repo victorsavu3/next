@@ -35,7 +35,11 @@ pub fn get_forecast(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<
     let tokens: Vec<String> = params
         .get("filter_tokens")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
         .unwrap_or_default();
 
     let filter_args = FilterArgs::parse(tokens);
@@ -46,7 +50,11 @@ pub fn get_forecast(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<
         let ctx_tags: Vec<String> = params
             .get("context")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
             .unwrap_or_default();
         filter_set.context_override = Some(ctx_tags);
     }
@@ -58,7 +66,14 @@ pub fn get_forecast(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<
     let filtered = filter::apply(candidates.clone(), &filter_set, &state, today);
     let pool = crate::core::listing::extend_with_parents(&*ctx.store, candidates)?;
     let task_dates = ctx.task_git_dates_for(&pool);
-    let scored = scoring::score_and_sort(filtered, &pool, today, &ctx.scoring, &tag_metas, &task_dates);
+    let scored = scoring::score_and_sort(
+        filtered,
+        &pool,
+        today,
+        &ctx.scoring,
+        &tag_metas,
+        &task_dates,
+    );
 
     let cutoff = today + chrono::Duration::days(horizon as i64);
 
@@ -107,7 +122,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         crate::core::test_git::init_test_repo(dir.path());
         let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let ctx =
+            TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 
@@ -157,9 +173,14 @@ mod tests {
         // 30-day horizon → the concrete instance plus 4 projected weekly occurrences.
         let result = get_forecast(&serde_json::json!({ "horizon_days": 30 }), &mut ctx).unwrap();
         let arr = result.as_array().unwrap();
-        let projected: Vec<_> = arr.iter().filter(|e| e["projected"] == serde_json::json!(true)).collect();
+        let projected: Vec<_> = arr
+            .iter()
+            .filter(|e| e["projected"] == serde_json::json!(true))
+            .collect();
         assert_eq!(projected.len(), 4);
-        assert!(arr.iter().any(|e| e["projected"] == serde_json::json!(false)));
+        assert!(arr
+            .iter()
+            .any(|e| e["projected"] == serde_json::json!(false)));
     }
 
     #[test]
@@ -172,7 +193,10 @@ mod tests {
         // Completion-type recurrence: concrete instance + projected future occurrences.
         let mut completion = Task::new("Water plants".to_owned());
         completion.due = Some(today + chrono::Duration::days(2));
-        completion.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
+        completion.recurrence = Some(Recurrence::Completion {
+            interval_days: 7,
+            snap: None,
+        });
         let p1 = storage::task_path(&ctx.repo_root, &completion);
         ctx.store.save_task(&completion).unwrap();
         ctx.vcs.commit(&[p1], "next: add Water plants").unwrap();
@@ -193,11 +217,22 @@ mod tests {
         let result = get_forecast(&serde_json::json!({ "horizon_days": 30 }), &mut ctx).unwrap();
         let arr = result.as_array().unwrap();
         // Done task must not appear at all.
-        assert!(arr.iter().all(|e| e["title"] != serde_json::json!("Old review")));
+        assert!(arr
+            .iter()
+            .all(|e| e["title"] != serde_json::json!("Old review")));
         // Completion-type task: one concrete + projected occurrences (7-day interval, 30-day horizon).
-        let concrete: Vec<_> = arr.iter().filter(|e| e["projected"] == serde_json::json!(false)).collect();
-        let projected: Vec<_> = arr.iter().filter(|e| e["projected"] == serde_json::json!(true)).collect();
+        let concrete: Vec<_> = arr
+            .iter()
+            .filter(|e| e["projected"] == serde_json::json!(false))
+            .collect();
+        let projected: Vec<_> = arr
+            .iter()
+            .filter(|e| e["projected"] == serde_json::json!(true))
+            .collect();
         assert_eq!(concrete.len(), 1, "one concrete instance expected");
-        assert!(!projected.is_empty(), "projected occurrences expected for completion recurrence");
+        assert!(
+            !projected.is_empty(),
+            "projected occurrences expected for completion recurrence"
+        );
     }
 }

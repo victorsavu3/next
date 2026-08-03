@@ -103,7 +103,10 @@ fn run_one(repo_root: &Path, plugin: &Plugin, now: DateTime<Utc>) {
 
     tracing::info!("plugin {:?} sync: ok", plugin.name);
     if let Err(e) = sync_state::record_plugin_sync(repo_root, &plugin.name, now) {
-        tracing::warn!("plugin {:?} sync: failed to record last_sync: {e:#}", plugin.name);
+        tracing::warn!(
+            "plugin {:?} sync: failed to record last_sync: {e:#}",
+            plugin.name
+        );
     }
 }
 
@@ -178,7 +181,11 @@ mod tests {
         // A long interval + a recent last_sync → not due → last_sync unchanged.
         run_due_syncs(&root, 86400, earlier + chrono::Duration::seconds(5));
         let st = sync_state::load(&root).unwrap();
-        assert_eq!(st.plugins["ok"].last_sync, Some(earlier), "must not re-run when fresh");
+        assert_eq!(
+            st.plugins["ok"].last_sync,
+            Some(earlier),
+            "must not re-run when fresh"
+        );
     }
 
     #[test]
@@ -201,7 +208,12 @@ mod tests {
         registry::set_sync_command(&root, "off", vec!["true".to_owned()]).unwrap();
         registry::set_enabled(&root, "off", false).unwrap();
         // Enabled, but no sync command.
-        registry::register(&root, "nosync", vec!["next-forgejo".to_owned(), "hook".to_owned()]).unwrap();
+        registry::register(
+            &root,
+            "nosync",
+            vec!["next-forgejo".to_owned(), "hook".to_owned()],
+        )
+        .unwrap();
 
         run_due_syncs(&root, 3600, Utc::now());
         let st = sync_state::load(&root).unwrap();

@@ -2,17 +2,17 @@
 //! from [`App`] and never mutates it.
 
 use chrono::NaiveDate;
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::Frame;
 
 use crate::core::domain::task::{Priority, Recurrence, Status};
 use crate::core::scoring::ScoredTask;
 
-use super::VERSION;
 use super::app::{App, DetailData, Mode, View};
+use super::VERSION;
 
 /// Draws a full frame: title bar, filter bar, list/detail split, and footer.
 ///
@@ -102,14 +102,18 @@ fn draw_title(frame: &mut Frame, area: Rect, app: &App) {
         Span::raw("  "),
         Span::styled(
             format!("view: {}", app.view().label()),
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
     for toggle in active_toggles(app) {
         spans.push(Span::raw(" "));
         spans.push(Span::styled(
             toggle,
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ));
     }
     let title = Paragraph::new(Line::from(spans)).block(Block::default().borders(Borders::ALL));
@@ -220,14 +224,16 @@ fn list_item(scored: &ScoredTask, today: NaiveDate, width: usize) -> ListItem<'s
     // Done and Cancelled take precedence over due-date colouring: a finished
     // task with a past due date should still render as done/grey, not red.
     let base = match due_state {
-        _ if task.status == Status::Done => {
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)
-        }
+        _ if task.status == Status::Done => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
         _ if task.status == Status::Cancelled => Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM | Modifier::CROSSED_OUT),
         Some(DueState::Overdue) => Style::default().fg(Color::Red),
-        Some(DueState::Today) => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        Some(DueState::Today) => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
         _ if started => Style::default().add_modifier(Modifier::BOLD),
         _ if low => Style::default().add_modifier(Modifier::DIM),
         _ => Style::default(),
@@ -248,7 +254,10 @@ fn list_item(scored: &ScoredTask, today: NaiveDate, width: usize) -> ListItem<'s
     };
 
     let mut spans = vec![
-        Span::styled(format!("{:5.1}", scored.score), base.add_modifier(Modifier::DIM)),
+        Span::styled(
+            format!("{:5.1}", scored.score),
+            base.add_modifier(Modifier::DIM),
+        ),
         Span::raw(" "),
         priority_marker(&task.priority, base),
         Span::raw(" "),
@@ -369,7 +378,9 @@ fn detail_lines(detail: &DetailData, today: NaiveDate, width: usize) -> Vec<Line
     if let Some(due) = task.due {
         let style = match DueState::classify(due, today) {
             DueState::Overdue => Style::default().fg(Color::Red),
-            DueState::Today => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            DueState::Today => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
             DueState::Future => Style::default(),
         };
         lines.push(Line::from(vec![
@@ -496,8 +507,12 @@ fn field(label: &str, value: String) -> Line<'static> {
 /// Coloured status value.
 fn status_span(status: &Status) -> Span<'static> {
     let style = match status {
-        Status::Started => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-        Status::Done => Style::default().fg(Color::Green).add_modifier(Modifier::DIM),
+        Status::Started => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        Status::Done => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::DIM),
         Status::Cancelled => Style::default().add_modifier(Modifier::DIM | Modifier::CROSSED_OUT),
         Status::Open => Style::default(),
     };
@@ -571,7 +586,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             "Tab section  j/k nav  Space/a toggle  x exclude (ctx)  C clear  Esc close"
         }
     };
-    let mut spans = vec![Span::styled(hint, Style::default().add_modifier(Modifier::DIM))];
+    let mut spans = vec![Span::styled(
+        hint,
+        Style::default().add_modifier(Modifier::DIM),
+    )];
     if let Some(status) = app.status() {
         spans.push(Span::raw("  |  "));
         spans.push(Span::raw(status.to_owned()));
@@ -583,11 +601,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 /// form field, the focused row highlighted, multi-line textareas for
 /// description/notes, and live date previews.
 mod edit_modal {
-    use ratatui::Frame;
     use ratatui::layout::{Constraint, Direction, Layout, Rect};
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+    use ratatui::Frame;
 
     use crate::tui::app::App;
     use crate::tui::edit::{EditForm, Field, RecurMode, TagMode};
@@ -637,25 +655,123 @@ mod edit_modal {
             ])
             .split(inner);
 
-        text_row(frame, rows[0], "Title", form.title.value(), form.focus == Field::Title);
-        date_row(frame, rows[1], "Due", form.due.value(), form.due_preview(today), form.focus == Field::Due);
-        date_row(frame, rows[2], "Start", form.start.value(), form.start_preview(today), form.focus == Field::Start);
-        value_row(frame, rows[3], "Priority", &form.priority.to_string(), form.focus == Field::Priority);
+        text_row(
+            frame,
+            rows[0],
+            "Title",
+            form.title.value(),
+            form.focus == Field::Title,
+        );
+        date_row(
+            frame,
+            rows[1],
+            "Due",
+            form.due.value(),
+            form.due_preview(today),
+            form.focus == Field::Due,
+        );
+        date_row(
+            frame,
+            rows[2],
+            "Start",
+            form.start.value(),
+            form.start_preview(today),
+            form.focus == Field::Start,
+        );
+        value_row(
+            frame,
+            rows[3],
+            "Priority",
+            &form.priority.to_string(),
+            form.focus == Field::Priority,
+        );
         tag_row(frame, rows[4], form);
-        text_row(frame, rows[5], "Assignee", form.assignee.value(), form.focus == Field::Assignee);
-        text_row(frame, rows[6], "URL", form.url.value(), form.focus == Field::Url);
-        text_row(frame, rows[7], "Score adj", form.score_adjustment.value(), form.focus == Field::ScoreAdjustment);
-        value_row(frame, rows[8], "Long-term", if form.long_term { "yes" } else { "no" }, form.focus == Field::LongTerm);
-        value_row(frame, rows[9], "Recur", form.recur_mode_label(), form.focus == Field::RecurMode);
-        text_row(frame, rows[10], "  RRULE", form.recur_rule.value(), form.focus == Field::RecurRule);
-        text_row(frame, rows[11], "  Interval", form.recur_completion.value(), form.focus == Field::RecurCompletion);
-        text_row(frame, rows[12], "  Snap", form.recur_snap.value(), form.focus == Field::RecurSnap);
-        text_row(frame, rows[13], "Data key", form.data_key.value(), form.focus == Field::DataKey);
-        text_row(frame, rows[14], "Data val", form.data_value.value(), form.focus == Field::DataValue);
+        text_row(
+            frame,
+            rows[5],
+            "Assignee",
+            form.assignee.value(),
+            form.focus == Field::Assignee,
+        );
+        text_row(
+            frame,
+            rows[6],
+            "URL",
+            form.url.value(),
+            form.focus == Field::Url,
+        );
+        text_row(
+            frame,
+            rows[7],
+            "Score adj",
+            form.score_adjustment.value(),
+            form.focus == Field::ScoreAdjustment,
+        );
+        value_row(
+            frame,
+            rows[8],
+            "Long-term",
+            if form.long_term { "yes" } else { "no" },
+            form.focus == Field::LongTerm,
+        );
+        value_row(
+            frame,
+            rows[9],
+            "Recur",
+            form.recur_mode_label(),
+            form.focus == Field::RecurMode,
+        );
+        text_row(
+            frame,
+            rows[10],
+            "  RRULE",
+            form.recur_rule.value(),
+            form.focus == Field::RecurRule,
+        );
+        text_row(
+            frame,
+            rows[11],
+            "  Interval",
+            form.recur_completion.value(),
+            form.focus == Field::RecurCompletion,
+        );
+        text_row(
+            frame,
+            rows[12],
+            "  Snap",
+            form.recur_snap.value(),
+            form.focus == Field::RecurSnap,
+        );
+        text_row(
+            frame,
+            rows[13],
+            "Data key",
+            form.data_key.value(),
+            form.focus == Field::DataKey,
+        );
+        text_row(
+            frame,
+            rows[14],
+            "Data val",
+            form.data_value.value(),
+            form.focus == Field::DataValue,
+        );
 
         // Description / notes textareas.
-        labelled_textarea(frame, rows[16], "Description", &form.description, form.focus == Field::Description);
-        labelled_textarea(frame, rows[17], "Notes", &form.notes, form.focus == Field::Notes);
+        labelled_textarea(
+            frame,
+            rows[16],
+            "Description",
+            &form.description,
+            form.focus == Field::Description,
+        );
+        labelled_textarea(
+            frame,
+            rows[17],
+            "Notes",
+            &form.notes,
+            form.focus == Field::Notes,
+        );
 
         // Summary of committed tags + data entries.
         draw_summary(frame, rows[18], form);
@@ -665,7 +781,10 @@ mod edit_modal {
     fn text_row(frame: &mut Frame, area: Rect, label: &str, value: &str, focused: bool) {
         let style = row_style(focused);
         let line = Line::from(vec![
-            Span::styled(format!("{label:>10}: "), Style::default().add_modifier(Modifier::DIM)),
+            Span::styled(
+                format!("{label:>10}: "),
+                Style::default().add_modifier(Modifier::DIM),
+            ),
             Span::styled(value.to_owned(), style),
         ]);
         frame.render_widget(Paragraph::new(line), area);
@@ -675,7 +794,10 @@ mod edit_modal {
     fn value_row(frame: &mut Frame, area: Rect, label: &str, value: &str, focused: bool) {
         let style = row_style(focused).fg(Color::Yellow);
         let line = Line::from(vec![
-            Span::styled(format!("{label:>10}: "), Style::default().add_modifier(Modifier::DIM)),
+            Span::styled(
+                format!("{label:>10}: "),
+                Style::default().add_modifier(Modifier::DIM),
+            ),
             Span::styled(value.to_owned(), style),
         ]);
         frame.render_widget(Paragraph::new(line), area);
@@ -697,7 +819,10 @@ mod edit_modal {
             Err(e) => (format!("  ✗ {e}"), Style::default().fg(Color::Red)),
         };
         let line = Line::from(vec![
-            Span::styled(format!("{label:>10}: "), Style::default().add_modifier(Modifier::DIM)),
+            Span::styled(
+                format!("{label:>10}: "),
+                Style::default().add_modifier(Modifier::DIM),
+            ),
             Span::styled(value.to_owned(), style),
             Span::styled(preview_text, preview_style),
         ]);
@@ -711,7 +836,11 @@ mod edit_modal {
         textarea: &tui_textarea::TextArea,
         focused: bool,
     ) {
-        let border = if focused { Color::Cyan } else { Color::DarkGray };
+        let border = if focused {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        };
         let block = Block::default()
             .borders(Borders::ALL)
             .title(format!(" {label} "))
@@ -770,10 +899,7 @@ mod edit_modal {
                 };
                 vec![
                     label,
-                    Span::styled(
-                        "Add: ",
-                        Style::default().add_modifier(Modifier::DIM),
-                    ),
+                    Span::styled("Add: ", Style::default().add_modifier(Modifier::DIM)),
                     Span::styled(form.tag_input.value().to_owned(), input_style),
                     Span::styled("█", Style::default().add_modifier(Modifier::DIM)),
                 ]
@@ -834,11 +960,11 @@ mod edit_modal {
 /// The delete-confirmation popup: a small centered box showing the task title
 /// with a `y/N` prompt.
 mod confirm_popup {
-    use ratatui::Frame;
     use ratatui::layout::Rect;
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+    use ratatui::Frame;
 
     use crate::tui::app::App;
 
@@ -867,7 +993,10 @@ mod confirm_popup {
             )),
             Line::raw(""),
             Line::from(vec![
-                Span::styled("y/Enter", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "y/Enter",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" delete    "),
                 Span::styled("n/Esc", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(" cancel"),
@@ -880,11 +1009,11 @@ mod confirm_popup {
 /// The move (parent-picker) popup: a search line over a scrollable list of
 /// candidate parents (the moved task and its descendants are already excluded).
 mod move_popup {
-    use ratatui::Frame;
     use ratatui::layout::{Constraint, Direction, Layout, Rect};
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+    use ratatui::Frame;
 
     use crate::tui::app::App;
 
@@ -923,8 +1052,8 @@ mod move_popup {
             .iter()
             .map(|c| ListItem::new(Line::from(Span::raw(c.label.clone()))))
             .collect();
-        let list = List::new(items)
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        let list =
+            List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
         let mut state = ListState::default();
         if picker.filtered().is_empty() {
             state.select(None);
@@ -939,11 +1068,11 @@ mod move_popup {
 /// Users), the focused one highlighted, each row showing its toggle state. The
 /// highlighted row within the focused section is reversed.
 mod state_popup {
-    use ratatui::Frame;
     use ratatui::layout::{Constraint, Direction, Layout, Rect};
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+    use ratatui::Frame;
 
     use crate::tui::app::App;
     use crate::tui::state_panel::{Section, StatePanel};
@@ -986,9 +1115,17 @@ mod state_popup {
     /// A section block whose border/title is emphasised when it holds focus.
     fn section_block(label: &str, focused: bool) -> Block<'static> {
         let (border, title_style) = if focused {
-            (Color::Cyan, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            (
+                Color::Cyan,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
         } else {
-            (Color::DarkGray, Style::default().add_modifier(Modifier::DIM))
+            (
+                Color::DarkGray,
+                Style::default().add_modifier(Modifier::DIM),
+            )
         };
         Block::default()
             .borders(Borders::ALL)
@@ -1030,7 +1167,9 @@ mod state_popup {
                 if r.active {
                     spans.push(Span::styled(
                         "  [active]",
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
                     ));
                 }
                 if r.excluded {
@@ -1061,7 +1200,10 @@ mod state_popup {
                 let (label, style) = if r.available {
                     ("available", Style::default().fg(Color::Green))
                 } else {
-                    ("unavailable", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                    (
+                        "unavailable",
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    )
                 };
                 ListItem::new(Line::from(vec![
                     Span::raw(format!("{:<22} ", r.tag)),
@@ -1089,7 +1231,9 @@ mod state_popup {
                 if r.active {
                     spans.push(Span::styled(
                         "  [active]",
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
                     ));
                 }
                 ListItem::new(Line::from(spans))
@@ -1109,10 +1253,10 @@ mod state_popup {
 /// The tree view: a `tui-tree-widget` rendering of the parent/child hierarchy
 /// (left pane). Selection drives the shared detail pane (right pane).
 mod tree_view {
-    use ratatui::Frame;
     use ratatui::layout::Rect;
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::widgets::{Block, Borders};
+    use ratatui::Frame;
     use tui_tree_widget::Tree;
 
     use crate::tui::app::App;
@@ -1157,11 +1301,11 @@ mod tree_view {
 /// honouring the app's active filter tokens/flags.
 mod forecast_view {
     use chrono::NaiveDate;
-    use ratatui::Frame;
     use ratatui::layout::Rect;
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Borders, List, ListItem};
+    use ratatui::Frame;
 
     use crate::core::forecast::ForecastEntry;
     use crate::tui::app::App;
@@ -1213,7 +1357,9 @@ mod forecast_view {
                 }
                 items.push(ListItem::new(Line::from(Span::styled(
                     section.label(horizon),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ))));
                 current = Some(section);
             }
@@ -1227,7 +1373,9 @@ mod forecast_view {
     fn entry_line(e: &ForecastEntry, days: i64) -> Line<'static> {
         let base = match days {
             d if d < 0 => Style::default().fg(Color::Red),
-            0 => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            0 => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
             _ => Style::default(),
         };
         let due_label = match days {
@@ -1256,11 +1404,11 @@ mod forecast_view {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Config;
     use crate::core::bootstrap;
     use crate::core::domain::task::{Recurrence, Task};
-    use ratatui::Terminal;
+    use crate::Config;
     use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
 
     use crate::tui::app::{Action, App, View};
     use crate::tui::config::ConfigSource;
@@ -1315,9 +1463,7 @@ mod tests {
         child
             .data
             .insert("zeta".to_owned(), serde_json::json!("last"));
-        child
-            .data
-            .insert("alpha".to_owned(), serde_json::json!(42));
+        child.data.insert("alpha".to_owned(), serde_json::json!(42));
 
         // Mutate the blocker after capturing its id above.
         blocker.title = "the blocker".to_owned();
@@ -1365,10 +1511,7 @@ mod tests {
 
     #[test]
     fn renders_move_picker_without_panicking() {
-        let mut app = app_with_tasks(vec![
-            Task::new("child"),
-            Task::new("candidate parent"),
-        ]);
+        let mut app = app_with_tasks(vec![Task::new("child"), Task::new("candidate parent")]);
         app.update(Action::OpenMove);
         assert_eq!(app.mode(), Mode::MovePicker);
         let backend = TestBackend::new(80, 24);
@@ -1560,7 +1703,11 @@ mod tests {
 
         // Select the blocker and render — its detail pane must show the
         // `Blocks` section.
-        let idx = app.tasks().iter().position(|s| s.task.id == blocker_id).unwrap();
+        let idx = app
+            .tasks()
+            .iter()
+            .position(|s| s.task.id == blocker_id)
+            .unwrap();
         while app.selected() < idx {
             app.update(Action::SelectNext);
         }
@@ -1570,11 +1717,19 @@ mod tests {
         let lines = detail_lines(&detail, app.today(), 200);
         let text = lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("Blocks:"), "expected Blocks section: {text}");
-        assert!(text.contains("the blocked task"), "expected blocked title: {text}");
+        assert!(
+            text.contains("the blocked task"),
+            "expected blocked title: {text}"
+        );
 
         // Full render must not panic.
         let backend = TestBackend::new(100, 30);

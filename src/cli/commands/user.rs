@@ -72,10 +72,7 @@ fn clear(ctx: &mut AppContext) -> anyhow::Result<()> {
 
 fn list(ctx: &mut AppContext) -> anyhow::Result<()> {
     let tasks = ctx.repo.store.list_tasks()?;
-    let mut users: Vec<String> = tasks
-        .into_iter()
-        .filter_map(|t| t.assignee)
-        .collect();
+    let mut users: Vec<String> = tasks.into_iter().filter_map(|t| t.assignee).collect();
     users.sort();
     users.dedup();
 

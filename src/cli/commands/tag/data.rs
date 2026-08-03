@@ -79,7 +79,13 @@ fn set(ctx: &mut AppContext, args: DataSetArgs) -> anyhow::Result<()> {
         )?;
         Ok(())
     })?;
-    tracing::info!(cmd = "tag", "set data {}.{} = {}", args.tag, args.key, args.value);
+    tracing::info!(
+        cmd = "tag",
+        "set data {}.{} = {}",
+        args.tag,
+        args.key,
+        args.value
+    );
     Ok(())
 }
 

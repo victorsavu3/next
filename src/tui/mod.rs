@@ -20,8 +20,8 @@ pub mod ui;
 
 use std::time::Duration;
 
-use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use ratatui::DefaultTerminal;
 
 use crate::core::TaskRepository;
 use crate::Config;

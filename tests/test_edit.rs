@@ -248,7 +248,10 @@ fn edit_typoed_flag_in_trailing_tokens_rejected() {
 
     let msg = err.to_string();
     assert!(msg.contains("unrecognised flag"), "unexpected error: {msg}");
-    assert!(msg.contains("--clear-du"), "error must name the token: {msg}");
+    assert!(
+        msg.contains("--clear-du"),
+        "error must name the token: {msg}"
+    );
     assert!(msg.contains("--help"), "error must point at --help: {msg}");
 
     // The task is untouched.
@@ -276,7 +279,10 @@ fn edit_invalid_trailing_remove_token_rejected() {
         &mut env.ctx,
     )
     .unwrap_err();
-    assert!(err.to_string().contains("bad!tag"), "unexpected error: {err}");
+    assert!(
+        err.to_string().contains("bad!tag"),
+        "unexpected error: {err}"
+    );
 
     let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert!(task.tags.contains(&"@work".to_string()));
@@ -288,7 +294,10 @@ fn edit_invalid_remove_tag_flag_rejected() {
     // task, so removing one would otherwise silently do nothing.
     let mut env = common::setup();
     add::run(
-        add::Args { slug: Some("bad-flag-remove".to_string()), ..add_args("Bad flag remove") },
+        add::Args {
+            slug: Some("bad-flag-remove".to_string()),
+            ..add_args("Bad flag remove")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -301,14 +310,20 @@ fn edit_invalid_remove_tag_flag_rejected() {
         &mut env.ctx,
     )
     .unwrap_err();
-    assert!(err.to_string().contains("bad!tag"), "unexpected error: {err}");
+    assert!(
+        err.to_string().contains("bad!tag"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
 fn edit_sets_description() {
     let mut env = common::setup();
     add::run(
-        add::Args { slug: Some("desc-task".to_string()), ..add_args("Described task") },
+        add::Args {
+            slug: Some("desc-task".to_string()),
+            ..add_args("Described task")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -340,7 +355,10 @@ fn edit_clears_description() {
     .unwrap();
 
     edit::run(
-        edit::Args { clear_description: true, ..base_edit("clear-desc-task") },
+        edit::Args {
+            clear_description: true,
+            ..base_edit("clear-desc-task")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -353,7 +371,10 @@ fn edit_clears_description() {
 fn edit_sets_url() {
     let mut env = common::setup();
     add::run(
-        add::Args { slug: Some("url-task".to_string()), ..add_args("URL task") },
+        add::Args {
+            slug: Some("url-task".to_string()),
+            ..add_args("URL task")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -385,7 +406,10 @@ fn edit_clears_url() {
     .unwrap();
 
     edit::run(
-        edit::Args { clear_url: true, ..base_edit("clear-url-task") },
+        edit::Args {
+            clear_url: true,
+            ..base_edit("clear-url-task")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -398,7 +422,10 @@ fn edit_clears_url() {
 fn edit_rejects_invalid_url() {
     let mut env = common::setup();
     add::run(
-        add::Args { slug: Some("bad-url-task".to_string()), ..add_args("Bad URL task") },
+        add::Args {
+            slug: Some("bad-url-task".to_string()),
+            ..add_args("Bad URL task")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -467,12 +494,22 @@ fn title_edit_commits_the_file_rename() {
     )
     .unwrap();
 
-    assert!(!old_file.exists(), "old file must be gone from the working tree");
+    assert!(
+        !old_file.exists(),
+        "old file must be gone from the working tree"
+    );
     // No tracked-file changes may remain: the rename (delete + add) was
     // committed atomically with the edit.
     let mut cmd = std::process::Command::new("git");
-    cmd.args(["status", "--porcelain", "--untracked-files=no"]).current_dir(&root);
-    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+    cmd.args(["status", "--porcelain", "--untracked-files=no"])
+        .current_dir(&root);
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+    ] {
         cmd.env_remove(var);
     }
     let out = cmd.output().unwrap();

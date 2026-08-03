@@ -10,7 +10,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
 use next::mcp::{
-    server::{AppState, build_router},
+    server::{build_router, AppState},
     sync_manager::spawn_deferred_sync,
 };
 use next::TaskRepository;
@@ -28,7 +28,13 @@ fn init_git_repo(dir: &Path) {
         // Strip the repo-scoping vars `git commit` exports to hook
         // subprocesses (`GIT_DIR`, …) so a suite run by a pre-commit hook
         // stays in `dir`.
-        for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+        ] {
             cmd.env_remove(var);
         }
         cmd.status().expect("git command failed");
@@ -95,9 +101,13 @@ async fn tool_call(
     arguments: Value,
 ) -> Value {
     mcp_call(
-        client, addr, token, "tools/call",
+        client,
+        addr,
+        token,
+        "tools/call",
         json!({ "name": tool, "arguments": arguments }),
-    ).await
+    )
+    .await
 }
 
 fn result_text(response: &Value) -> String {
@@ -113,8 +123,7 @@ fn result_value(response: &Value) -> Value {
 }
 
 fn is_error(response: &Value) -> bool {
-    response["result"]["isError"].as_bool().unwrap_or(false)
-        || response.get("error").is_some()
+    response["result"]["isError"].as_bool().unwrap_or(false) || response.get("error").is_some()
 }
 
 // ── MCP protocol tests ────────────────────────────────────────────────────────
@@ -125,7 +134,10 @@ async fn initialize_handshake() {
     let addr = start_test_server("tok", None, dir.path()).await;
     let resp = mcp_call(&Client::new(), addr, "tok", "initialize", json!({})).await;
     assert_eq!(resp["result"]["protocolVersion"], "2024-11-05");
-    assert!(resp["result"]["serverInfo"]["name"].as_str().unwrap().contains("mcp"));
+    assert!(resp["result"]["serverInfo"]["name"]
+        .as_str()
+        .unwrap()
+        .contains("mcp"));
 }
 
 #[tokio::test]
@@ -144,7 +156,10 @@ async fn missing_token_returns_401() {
     let status = Client::new()
         .post(format!("http://{addr}/"))
         .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }))
-        .send().await.unwrap().status();
+        .send()
+        .await
+        .unwrap()
+        .status();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
@@ -156,7 +171,10 @@ async fn wrong_token_returns_401() {
         .post(format!("http://{addr}/"))
         .bearer_auth("wrong")
         .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }))
-        .send().await.unwrap().status();
+        .send()
+        .await
+        .unwrap()
+        .status();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
@@ -177,8 +195,14 @@ async fn add_and_list_task() {
     let addr = start_test_server("tok", None, dir.path()).await;
     let c = Client::new();
 
-    let add = tool_call(&c, addr, "tok", "add_task",
-        json!({ "title": "Buy milk", "autosync": false })).await;
+    let add = tool_call(
+        &c,
+        addr,
+        "tok",
+        "add_task",
+        json!({ "title": "Buy milk", "autosync": false }),
+    )
+    .await;
     assert!(!is_error(&add));
     let task = result_value(&add);
     assert_eq!(task["title"], "Buy milk");
@@ -197,12 +221,24 @@ async fn get_task_with_children() {
     let addr = start_test_server("tok", None, dir.path()).await;
     let c = Client::new();
 
-    let parent = tool_call(&c, addr, "tok", "add_task",
-        json!({ "title": "Parent", "slug": "par", "autosync": false })).await;
+    let parent = tool_call(
+        &c,
+        addr,
+        "tok",
+        "add_task",
+        json!({ "title": "Parent", "slug": "par", "autosync": false }),
+    )
+    .await;
     let pid = result_value(&parent)["id"].as_str().unwrap().to_owned();
 
-    tool_call(&c, addr, "tok", "add_task",
-        json!({ "title": "Child", "parent": "par", "autosync": false })).await;
+    tool_call(
+        &c,
+        addr,
+        "tok",
+        "add_task",
+        json!({ "title": "Child", "parent": "par", "autosync": false }),
+    )
+    .await;
 
     let get = tool_call(&c, addr, "tok", "get_task", json!({ "id": pid })).await;
     assert!(!is_error(&get));
@@ -217,20 +253,44 @@ async fn update_task_transitions() {
     let addr = start_test_server("tok", None, dir.path()).await;
     let c = Client::new();
 
-    let add = tool_call(&c, addr, "tok", "add_task",
-        json!({ "title": "Work item", "autosync": false })).await;
+    let add = tool_call(
+        &c,
+        addr,
+        "tok",
+        "add_task",
+        json!({ "title": "Work item", "autosync": false }),
+    )
+    .await;
     let id = result_value(&add)["id"].as_str().unwrap().to_owned();
 
-    let started = tool_call(&c, addr, "tok", "update_task",
-        json!({ "id": id, "action": "start", "autosync": false })).await;
+    let started = tool_call(
+        &c,
+        addr,
+        "tok",
+        "update_task",
+        json!({ "id": id, "action": "start", "autosync": false }),
+    )
+    .await;
     assert_eq!(result_value(&started)["status"], "started");
 
-    let stopped = tool_call(&c, addr, "tok", "update_task",
-        json!({ "id": id, "action": "stop", "autosync": false })).await;
+    let stopped = tool_call(
+        &c,
+        addr,
+        "tok",
+        "update_task",
+        json!({ "id": id, "action": "stop", "autosync": false }),
+    )
+    .await;
     assert_eq!(result_value(&stopped)["status"], "open");
 
-    let done = tool_call(&c, addr, "tok", "update_task",
-        json!({ "id": id, "action": "done", "autosync": false })).await;
+    let done = tool_call(
+        &c,
+        addr,
+        "tok",
+        "update_task",
+        json!({ "id": id, "action": "done", "autosync": false }),
+    )
+    .await;
     assert_eq!(result_value(&done)["status"], "done");
 }
 
@@ -240,16 +300,39 @@ async fn update_task_done_with_recurrence_spawns_next() {
     let addr = start_test_server("tok", None, dir.path()).await;
     let c = Client::new();
 
-    let add = tool_call(&c, addr, "tok", "add_task",
-        json!({ "title": "Daily standup", "recur_completion": 1, "autosync": false })).await;
+    let add = tool_call(
+        &c,
+        addr,
+        "tok",
+        "add_task",
+        json!({ "title": "Daily standup", "recur_completion": 1, "autosync": false }),
+    )
+    .await;
     let id = result_value(&add)["id"].as_str().unwrap().to_owned();
 
-    tool_call(&c, addr, "tok", "update_task",
-        json!({ "id": id, "action": "done", "autosync": false })).await;
+    tool_call(
+        &c,
+        addr,
+        "tok",
+        "update_task",
+        json!({ "id": id, "action": "done", "autosync": false }),
+    )
+    .await;
 
-    let list = tool_call(&c, addr, "tok", "list_tasks", json!({ "include_all": true })).await;
+    let list = tool_call(
+        &c,
+        addr,
+        "tok",
+        "list_tasks",
+        json!({ "include_all": true }),
+    )
+    .await;
     let page: Value = serde_json::from_str(&result_text(&list)).unwrap();
-    assert_eq!(page["items"].as_array().unwrap().len(), 2, "original + spawned next instance");
+    assert_eq!(
+        page["items"].as_array().unwrap().len(),
+        2,
+        "original + spawned next instance"
+    );
 }
 
 #[tokio::test]
@@ -258,15 +341,34 @@ async fn delete_task() {
     let addr = start_test_server("tok", None, dir.path()).await;
     let c = Client::new();
 
-    let add = tool_call(&c, addr, "tok", "add_task",
-        json!({ "title": "Delete me", "autosync": false })).await;
+    let add = tool_call(
+        &c,
+        addr,
+        "tok",
+        "add_task",
+        json!({ "title": "Delete me", "autosync": false }),
+    )
+    .await;
     let id = result_value(&add)["id"].as_str().unwrap().to_owned();
 
-    let del = tool_call(&c, addr, "tok", "delete_task",
-        json!({ "id": id, "autosync": false })).await;
+    let del = tool_call(
+        &c,
+        addr,
+        "tok",
+        "delete_task",
+        json!({ "id": id, "autosync": false }),
+    )
+    .await;
     assert!(!is_error(&del));
 
-    let list = tool_call(&c, addr, "tok", "list_tasks", json!({ "include_all": true })).await;
+    let list = tool_call(
+        &c,
+        addr,
+        "tok",
+        "list_tasks",
+        json!({ "include_all": true }),
+    )
+    .await;
     let page: Value = serde_json::from_str(&result_text(&list)).unwrap();
     assert!(page["items"].as_array().unwrap().is_empty());
     assert_eq!(page["total"], 0);
@@ -280,13 +382,25 @@ async fn context_roundtrip() {
     let addr = start_test_server("tok", None, dir.path()).await;
     let c = Client::new();
 
-    tool_call(&c, addr, "tok", "set_context",
-        json!({ "contexts": ["@work"], "autosync": false })).await;
+    tool_call(
+        &c,
+        addr,
+        "tok",
+        "set_context",
+        json!({ "contexts": ["@work"], "autosync": false }),
+    )
+    .await;
     let state = result_value(&tool_call(&c, addr, "tok", "get_state", json!({})).await);
     assert_eq!(state["active_contexts"][0], "@work");
 
-    tool_call(&c, addr, "tok", "set_context",
-        json!({ "contexts": [], "autosync": false })).await;
+    tool_call(
+        &c,
+        addr,
+        "tok",
+        "set_context",
+        json!({ "contexts": [], "autosync": false }),
+    )
+    .await;
     let state2 = result_value(&tool_call(&c, addr, "tok", "get_state", json!({})).await);
     assert_eq!(state2["active_contexts"].as_array().unwrap().len(), 0);
 }
@@ -307,11 +421,25 @@ async fn manage_tag_describe_and_show() {
     let addr = start_test_server("tok", None, dir.path()).await;
     let c = Client::new();
 
-    tool_call(&c, addr, "tok", "manage_tag",
-        json!({ "action": "describe", "tag": "@work", "description": "Office", "autosync": false })).await;
+    tool_call(
+        &c,
+        addr,
+        "tok",
+        "manage_tag",
+        json!({ "action": "describe", "tag": "@work", "description": "Office", "autosync": false }),
+    )
+    .await;
 
-    let show = result_value(&tool_call(&c, addr, "tok", "manage_tag",
-        json!({ "action": "show", "tag": "@work" })).await);
+    let show = result_value(
+        &tool_call(
+            &c,
+            addr,
+            "tok",
+            "manage_tag",
+            json!({ "action": "show", "tag": "@work" }),
+        )
+        .await,
+    );
     assert_eq!(show["meta"]["description"], "Office");
 }
 
@@ -321,20 +449,52 @@ async fn manage_task_data_set_get_unset() {
     let addr = start_test_server("tok", None, dir.path()).await;
     let c = Client::new();
 
-    let add = tool_call(&c, addr, "tok", "add_task",
-        json!({ "title": "Data task", "autosync": false })).await;
+    let add = tool_call(
+        &c,
+        addr,
+        "tok",
+        "add_task",
+        json!({ "title": "Data task", "autosync": false }),
+    )
+    .await;
     let id = result_value(&add)["id"].as_str().unwrap().to_owned();
 
-    tool_call(&c, addr, "tok", "manage_task_data",
-        json!({ "action": "set", "id": id, "key": "effort", "value": "3", "autosync": false })).await;
-    let get = result_value(&tool_call(&c, addr, "tok", "manage_task_data",
-        json!({ "action": "get", "id": id, "key": "effort" })).await);
+    tool_call(
+        &c,
+        addr,
+        "tok",
+        "manage_task_data",
+        json!({ "action": "set", "id": id, "key": "effort", "value": "3", "autosync": false }),
+    )
+    .await;
+    let get = result_value(
+        &tool_call(
+            &c,
+            addr,
+            "tok",
+            "manage_task_data",
+            json!({ "action": "get", "id": id, "key": "effort" }),
+        )
+        .await,
+    );
     assert_eq!(get, 3);
 
-    tool_call(&c, addr, "tok", "manage_task_data",
-        json!({ "action": "unset", "id": id, "key": "effort", "autosync": false })).await;
-    let err = tool_call(&c, addr, "tok", "manage_task_data",
-        json!({ "action": "get", "id": id, "key": "effort" })).await;
+    tool_call(
+        &c,
+        addr,
+        "tok",
+        "manage_task_data",
+        json!({ "action": "unset", "id": id, "key": "effort", "autosync": false }),
+    )
+    .await;
+    let err = tool_call(
+        &c,
+        addr,
+        "tok",
+        "manage_task_data",
+        json!({ "action": "get", "id": id, "key": "effort" }),
+    )
+    .await;
     assert!(is_error(&err));
 }
 
@@ -355,27 +515,56 @@ async fn get_forecast_projects_schedule_recurrence() {
     let c = Client::new();
 
     let today = chrono::Local::now().date_naive();
-    let due_in = |n: i64| (today + chrono::Duration::days(n)).format("%Y-%m-%d").to_string();
+    let due_in = |n: i64| {
+        (today + chrono::Duration::days(n))
+            .format("%Y-%m-%d")
+            .to_string()
+    };
 
     // Weekly schedule task due today → anchors on today, projecting weekly ahead.
-    let add = tool_call(&c, addr, "tok", "add_task",
+    let add = tool_call(
+        &c,
+        addr,
+        "tok",
+        "add_task",
         json!({ "title": "Weekly review", "due": due_in(0),
-                "recur_schedule": "FREQ=WEEKLY", "autosync": false })).await;
+                "recur_schedule": "FREQ=WEEKLY", "autosync": false }),
+    )
+    .await;
     assert!(!is_error(&add));
 
     // Non-recurring task due in 3 days → concrete entry, never projected.
-    let add2 = tool_call(&c, addr, "tok", "add_task",
-        json!({ "title": "One off", "due": due_in(3), "autosync": false })).await;
+    let add2 = tool_call(
+        &c,
+        addr,
+        "tok",
+        "add_task",
+        json!({ "title": "One off", "due": due_in(3), "autosync": false }),
+    )
+    .await;
     assert!(!is_error(&add2));
 
     // Completion-type recurring task due in 2 days → concrete entry plus
     // projected occurrences (assumed done ASAP).
-    let add3 = tool_call(&c, addr, "tok", "add_task",
+    let add3 = tool_call(
+        &c,
+        addr,
+        "tok",
+        "add_task",
         json!({ "title": "Water plants", "due": due_in(2),
-                "recur_completion": 7, "autosync": false })).await;
+                "recur_completion": 7, "autosync": false }),
+    )
+    .await;
     assert!(!is_error(&add3));
 
-    let resp = tool_call(&c, addr, "tok", "get_forecast", json!({ "horizon_days": 30 })).await;
+    let resp = tool_call(
+        &c,
+        addr,
+        "tok",
+        "get_forecast",
+        json!({ "horizon_days": 30 }),
+    )
+    .await;
     assert!(!is_error(&resp));
     let v: Vec<Value> = serde_json::from_str(&result_text(&resp)).unwrap();
 
@@ -387,12 +576,20 @@ async fn get_forecast_projects_schedule_recurrence() {
     assert_eq!(weekly.len(), 4, "expected 4 projected weekly occurrences");
 
     // The non-recurring and completion-type tasks appear as concrete entries.
-    assert!(v.iter().any(|e| e["title"] == json!("One off") && e["projected"] == json!(false)));
-    assert!(v.iter().any(|e| e["title"] == json!("Water plants") && e["projected"] == json!(false)));
+    assert!(v
+        .iter()
+        .any(|e| e["title"] == json!("One off") && e["projected"] == json!(false)));
+    assert!(v
+        .iter()
+        .any(|e| e["title"] == json!("Water plants") && e["projected"] == json!(false)));
     // Completion-type recurrence projects too (assumed done ASAP)…
-    assert!(v.iter().any(|e| e["title"] == json!("Water plants") && e["projected"] == json!(true)));
+    assert!(v
+        .iter()
+        .any(|e| e["title"] == json!("Water plants") && e["projected"] == json!(true)));
     // …but a non-recurring task is never projected.
-    assert!(!v.iter().any(|e| e["title"] == json!("One off") && e["projected"] == json!(true)));
+    assert!(!v
+        .iter()
+        .any(|e| e["title"] == json!("One off") && e["projected"] == json!(true)));
 }
 
 // ── Webhook tests ─────────────────────────────────────────────────────────────
@@ -404,7 +601,9 @@ async fn webhook_valid_token() {
     let resp = Client::new()
         .post(format!("http://{addr}/webhook/sync"))
         .bearer_auth("hook-tok")
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = resp.json().await.unwrap();
     assert!(body.get("status").is_some());
@@ -417,7 +616,10 @@ async fn webhook_wrong_token_rejected() {
     let status = Client::new()
         .post(format!("http://{addr}/webhook/sync"))
         .bearer_auth("wrong")
-        .send().await.unwrap().status();
+        .send()
+        .await
+        .unwrap()
+        .status();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
@@ -428,7 +630,10 @@ async fn webhook_mcp_token_not_accepted_on_webhook_route() {
     let status = Client::new()
         .post(format!("http://{addr}/webhook/sync"))
         .bearer_auth("mcp-tok")
-        .send().await.unwrap().status();
+        .send()
+        .await
+        .unwrap()
+        .status();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
@@ -441,7 +646,10 @@ async fn webhook_unconfigured_returns_401_not_404() {
     let status = Client::new()
         .post(format!("http://{addr}/webhook/sync"))
         .bearer_auth("anything")
-        .send().await.unwrap().status();
+        .send()
+        .await
+        .unwrap()
+        .status();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
@@ -453,8 +661,14 @@ async fn autosync_false_does_not_block_on_sync() {
     // sync attempt, so there's no error even though there is no remote.
     let dir = tempfile::tempdir().unwrap();
     let addr = start_test_server("tok", None, dir.path()).await;
-    let resp = tool_call(&Client::new(), addr, "tok", "add_task",
-        json!({ "title": "Batch", "autosync": false })).await;
+    let resp = tool_call(
+        &Client::new(),
+        addr,
+        "tok",
+        "add_task",
+        json!({ "title": "Batch", "autosync": false }),
+    )
+    .await;
     assert!(!is_error(&resp));
 }
 
@@ -465,8 +679,14 @@ async fn autosync_true_attempts_sync_and_surfaces_error() {
     // but not propagated to the caller for autosync.
     let dir = tempfile::tempdir().unwrap();
     let addr = start_test_server("tok", None, dir.path()).await;
-    let resp = tool_call(&Client::new(), addr, "tok", "add_task",
-        json!({ "title": "Immediate sync", "autosync": true })).await;
+    let resp = tool_call(
+        &Client::new(),
+        addr,
+        "tok",
+        "add_task",
+        json!({ "title": "Immediate sync", "autosync": true }),
+    )
+    .await;
     // Task was created successfully even though sync failed (no remote).
     assert!(!is_error(&resp));
     assert_eq!(result_value(&resp)["title"], "Immediate sync");

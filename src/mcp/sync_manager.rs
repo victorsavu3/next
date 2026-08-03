@@ -121,7 +121,10 @@ async fn run_sync_background(ctx: &Arc<Mutex<TaskRepository>>, semaphore: &Arc<S
     let permit = match Arc::clone(semaphore).try_acquire_owned() {
         Ok(p) => p,
         Err(_) => {
-            tracing::info!(cmd = "sync", "background sync skipped: explicit sync already in progress");
+            tracing::info!(
+                cmd = "sync",
+                "background sync skipped: explicit sync already in progress"
+            );
             return;
         }
     };
@@ -173,29 +176,53 @@ mod tests {
     use tokio::sync::Mutex;
 
     use super::*;
-    use crate::core::error::{TaskError, Result};
-    use crate::core::store::{PullResult, Store, VcsBackend};
-    use crate::TaskRepository;
     use crate::core::domain::state::GlobalState;
     use crate::core::domain::tag::TagMeta;
     use crate::core::domain::task::Task;
+    use crate::core::error::{Result, TaskError};
+    use crate::core::store::{PullResult, Store, VcsBackend};
+    use crate::TaskRepository;
     use uuid::Uuid;
 
     struct FakeStore;
 
     impl Store for FakeStore {
-        fn get_task(&self, _id: Uuid) -> Result<Task> { unimplemented!() }
-        fn get_task_by_slug(&self, _slug: &str) -> Result<Option<Task>> { unimplemented!() }
-        fn find_tasks_by_prefix(&self, _prefix: &str) -> Result<Vec<Task>> { unimplemented!() }
-        fn list_tasks(&self) -> Result<Vec<Task>> { unimplemented!() }
-        fn save_task(&mut self, _task: &Task) -> Result<()> { unimplemented!() }
-        fn delete_task(&mut self, _id: Uuid) -> Result<()> { unimplemented!() }
-        fn get_state(&self) -> Result<GlobalState> { unimplemented!() }
-        fn save_state(&mut self, _state: &GlobalState) -> Result<()> { unimplemented!() }
-        fn get_tag_meta(&self, _tag: &str) -> Result<Option<TagMeta>> { unimplemented!() }
-        fn set_tag_meta(&mut self, _tag: &str, _meta: TagMeta) -> Result<()> { unimplemented!() }
-        fn delete_tag_meta(&mut self, _tag: &str) -> Result<()> { unimplemented!() }
-        fn list_tag_metas(&self) -> Result<HashMap<String, TagMeta>> { unimplemented!() }
+        fn get_task(&self, _id: Uuid) -> Result<Task> {
+            unimplemented!()
+        }
+        fn get_task_by_slug(&self, _slug: &str) -> Result<Option<Task>> {
+            unimplemented!()
+        }
+        fn find_tasks_by_prefix(&self, _prefix: &str) -> Result<Vec<Task>> {
+            unimplemented!()
+        }
+        fn list_tasks(&self) -> Result<Vec<Task>> {
+            unimplemented!()
+        }
+        fn save_task(&mut self, _task: &Task) -> Result<()> {
+            unimplemented!()
+        }
+        fn delete_task(&mut self, _id: Uuid) -> Result<()> {
+            unimplemented!()
+        }
+        fn get_state(&self) -> Result<GlobalState> {
+            unimplemented!()
+        }
+        fn save_state(&mut self, _state: &GlobalState) -> Result<()> {
+            unimplemented!()
+        }
+        fn get_tag_meta(&self, _tag: &str) -> Result<Option<TagMeta>> {
+            unimplemented!()
+        }
+        fn set_tag_meta(&mut self, _tag: &str, _meta: TagMeta) -> Result<()> {
+            unimplemented!()
+        }
+        fn delete_tag_meta(&mut self, _tag: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn list_tag_metas(&self) -> Result<HashMap<String, TagMeta>> {
+            unimplemented!()
+        }
     }
 
     #[derive(Clone)]
@@ -206,17 +233,27 @@ mod tests {
 
     impl FakeVcs {
         fn new() -> Self {
-            Self { sync_count: Arc::new(AtomicUsize::new(0)), fail: false }
+            Self {
+                sync_count: Arc::new(AtomicUsize::new(0)),
+                fail: false,
+            }
         }
 
         fn new_failing() -> Self {
-            Self { sync_count: Arc::new(AtomicUsize::new(0)), fail: true }
+            Self {
+                sync_count: Arc::new(AtomicUsize::new(0)),
+                fail: true,
+            }
         }
     }
 
     impl VcsBackend for FakeVcs {
-        fn commit(&self, _paths: &[std::path::PathBuf], _message: &str) -> Result<()> { Ok(()) }
-        fn head_hash(&self) -> Result<String> { Ok("0000000000000000000000000000000000000000".to_owned()) }
+        fn commit(&self, _paths: &[std::path::PathBuf], _message: &str) -> Result<()> {
+            Ok(())
+        }
+        fn head_hash(&self) -> Result<String> {
+            Ok("0000000000000000000000000000000000000000".to_owned())
+        }
 
         fn pull(&self) -> Result<PullResult> {
             if self.fail {
@@ -235,7 +272,11 @@ mod tests {
     }
 
     fn make_ctx(vcs: FakeVcs) -> TaskRepository {
-        TaskRepository::with_parts(Box::new(FakeStore), Box::new(vcs), std::path::PathBuf::from("/tmp"))
+        TaskRepository::with_parts(
+            Box::new(FakeStore),
+            Box::new(vcs),
+            std::path::PathBuf::from("/tmp"),
+        )
     }
 
     #[test]
@@ -247,7 +288,10 @@ mod tests {
     fn semaphore_blocks_concurrent_sync() {
         let scheduler = SyncScheduler::new_for_test();
         let _permit = scheduler.try_acquire().expect("first acquire must succeed");
-        assert!(scheduler.try_acquire().is_none(), "second acquire must fail while first is held");
+        assert!(
+            scheduler.try_acquire().is_none(),
+            "second acquire must fail while first is held"
+        );
     }
 
     #[test]
@@ -256,7 +300,10 @@ mod tests {
         {
             let _permit = scheduler.try_acquire().expect("first acquire must succeed");
         }
-        assert!(scheduler.try_acquire().is_some(), "must succeed after permit is dropped");
+        assert!(
+            scheduler.try_acquire().is_some(),
+            "must succeed after permit is dropped"
+        );
     }
 
     #[tokio::test]
@@ -281,7 +328,11 @@ mod tests {
         tokio::time::advance(delay * 2).await;
         tokio::task::yield_now().await;
 
-        assert_eq!(counter.load(Ordering::SeqCst), 0, "cancelled sync must not run");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            0,
+            "cancelled sync must not run"
+        );
     }
 
     #[tokio::test]
@@ -303,7 +354,11 @@ mod tests {
         tokio::task::yield_now().await;
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        assert_eq!(counter.load(Ordering::SeqCst), 1, "sync must run after delay");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "sync must run after delay"
+        );
     }
 
     #[tokio::test]
@@ -331,14 +386,22 @@ mod tests {
         tokio::time::advance(Duration::from_secs(2)).await;
         tokio::task::yield_now().await;
 
-        assert_eq!(counter.load(Ordering::SeqCst), 0, "sync must not fire before reset delay elapses");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            0,
+            "sync must not fire before reset delay elapses"
+        );
 
         // now advance past the full reset delay
         tokio::time::advance(Duration::from_secs(4)).await;
         tokio::task::yield_now().await;
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        assert_eq!(counter.load(Ordering::SeqCst), 1, "sync must fire after reset delay elapses");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "sync must fire after reset delay elapses"
+        );
     }
 
     #[tokio::test]
@@ -362,7 +425,11 @@ mod tests {
         tokio::task::yield_now().await;
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        assert_eq!(counter.load(Ordering::SeqCst), 0, "background sync must be skipped when semaphore is held");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            0,
+            "background sync must be skipped when semaphore is held"
+        );
     }
 
     #[tokio::test]

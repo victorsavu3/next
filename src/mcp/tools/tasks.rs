@@ -1,11 +1,17 @@
 use chrono::Local;
 use serde_json::{json, Value};
 
-use crate::core::domain::{date_parse::parse_date, filter, task::{Recurrence, Task}};
+use crate::core::domain::{
+    date_parse::parse_date,
+    filter,
+    task::{Recurrence, Task},
+};
 use crate::core::recurrence::{parse_snap, validate_rrule};
-use crate::core::scoring;
-use crate::core::service::{apply_edits, complete_task, create_task, CreateTaskParams, EditTaskParams};
 use crate::core::resolve::resolve_task_id;
+use crate::core::scoring;
+use crate::core::service::{
+    apply_edits, complete_task, create_task, CreateTaskParams, EditTaskParams,
+};
 use crate::core::storage;
 use crate::TaskRepository;
 
@@ -21,7 +27,11 @@ fn strings_param(params: &Value, key: &str) -> Vec<String> {
     params
         .get(key)
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -29,16 +39,38 @@ fn strings_param(params: &Value, key: &str) -> Vec<String> {
 /// transition). Used by `update_task` to decide whether the field-edit path
 /// should run in addition to any `action`, so edits are never silently dropped.
 const EDIT_PARAM_KEYS: &[&str] = &[
-    "title", "due", "clear_due", "start", "clear_start", "priority", "slug",
-    "assignee", "clear_assignee", "add_tags", "remove_tags", "parent",
-    "clear_parent", "blocked_by", "clear_blocked_by", "description",
-    "clear_description", "url", "clear_url", "notes", "recur_schedule",
-    "recur_completion", "recur_snap", "clear_recurrence", "long_term",
+    "title",
+    "due",
+    "clear_due",
+    "start",
+    "clear_start",
+    "priority",
+    "slug",
+    "assignee",
+    "clear_assignee",
+    "add_tags",
+    "remove_tags",
+    "parent",
+    "clear_parent",
+    "blocked_by",
+    "clear_blocked_by",
+    "description",
+    "clear_description",
+    "url",
+    "clear_url",
+    "notes",
+    "recur_schedule",
+    "recur_completion",
+    "recur_snap",
+    "clear_recurrence",
+    "long_term",
     "score_adjustment",
 ];
 
 fn has_edit_params(params: &Value) -> bool {
-    EDIT_PARAM_KEYS.iter().any(|k| params.get(*k).is_some_and(|v| !v.is_null()))
+    EDIT_PARAM_KEYS
+        .iter()
+        .any(|k| params.get(*k).is_some_and(|v| !v.is_null()))
 }
 
 // ── list_tasks ───────────────────────────────────────────────────────────────
@@ -90,7 +122,14 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
     let filtered = filter::apply(candidates.clone(), &filter_set, &state, today);
     let pool = crate::core::listing::extend_with_parents(&*ctx.store, candidates)?;
     let task_dates = ctx.task_git_dates_for(&pool);
-    let scored = scoring::score_and_sort(filtered, &pool, today, &ctx.scoring, &tag_metas, &task_dates);
+    let scored = scoring::score_and_sort(
+        filtered,
+        &pool,
+        today,
+        &ctx.scoring,
+        &tag_metas,
+        &task_dates,
+    );
 
     let result = crate::core::store::paginate(scored, page, page_size);
     Ok(serde_json::to_value(&result)?)
@@ -124,8 +163,14 @@ pub fn get_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
     let mut dated: Vec<Task> = vec![task.clone()];
     dated.extend(parent.clone());
     let task_dates = ctx.task_git_dates_for(&dated);
-    let breakdown =
-        scoring::score_with_breakdown(&task, parent.as_ref(), &task_dates, today, &ctx.scoring, &tag_metas);
+    let breakdown = scoring::score_with_breakdown(
+        &task,
+        parent.as_ref(),
+        &task_dates,
+        today,
+        &ctx.scoring,
+        &tag_metas,
+    );
 
     Ok(json!({
         "task": task,
@@ -157,11 +202,22 @@ pub fn add_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
         validate_rrule(rule)
             .map_err(|e| anyhow::anyhow!("invalid recurrence rule {rule:?}: {e}"))?;
         let anchor = start.or(due).unwrap_or(today);
-        let snap = str_param(params, "recur_snap").map(parse_snap).transpose()?;
-        Some(Recurrence::Schedule { rrule: rule.to_owned(), anchor, snap })
+        let snap = str_param(params, "recur_snap")
+            .map(parse_snap)
+            .transpose()?;
+        Some(Recurrence::Schedule {
+            rrule: rule.to_owned(),
+            anchor,
+            snap,
+        })
     } else if let Some(days) = params.get("recur_completion").and_then(|v| v.as_u64()) {
-        let snap = str_param(params, "recur_snap").map(parse_snap).transpose()?;
-        Some(Recurrence::Completion { interval_days: days as u32, snap })
+        let snap = str_param(params, "recur_snap")
+            .map(parse_snap)
+            .transpose()?;
+        Some(Recurrence::Completion {
+            interval_days: days as u32,
+            snap,
+        })
     } else {
         None
     };
@@ -193,7 +249,12 @@ pub fn add_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
     )?;
     ctx.record_task_event("add", task.id);
 
-    tracing::info!(cmd = "mcp/add", "[{}] {}", &task.id.to_string()[..8], task.title);
+    tracing::info!(
+        cmd = "mcp/add",
+        "[{}] {}",
+        &task.id.to_string()[..8],
+        task.title
+    );
 
     Ok(serde_json::to_value(&task)?)
 }
@@ -236,11 +297,22 @@ pub fn update_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<V
                 Some(Recurrence::Schedule { anchor, .. }) => *anchor,
                 _ => existing.start.or(existing.due).unwrap_or(today),
             };
-            let snap = str_param(params, "recur_snap").map(parse_snap).transpose()?;
-            Some(Recurrence::Schedule { rrule: rule.to_owned(), anchor, snap })
+            let snap = str_param(params, "recur_snap")
+                .map(parse_snap)
+                .transpose()?;
+            Some(Recurrence::Schedule {
+                rrule: rule.to_owned(),
+                anchor,
+                snap,
+            })
         } else if let Some(days) = params.get("recur_completion").and_then(|v| v.as_u64()) {
-            let snap = str_param(params, "recur_snap").map(parse_snap).transpose()?;
-            Some(Recurrence::Completion { interval_days: days as u32, snap })
+            let snap = str_param(params, "recur_snap")
+                .map(parse_snap)
+                .transpose()?;
+            Some(Recurrence::Completion {
+                interval_days: days as u32,
+                snap,
+            })
         } else if let Some(snap_str) = str_param(params, "recur_snap") {
             // Standalone recur_snap: update the snap on the existing rule
             // (mirrors the CLI's `next edit --recur-snap`).
@@ -313,7 +385,11 @@ pub fn update_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<V
             &mut *ctx.store,
             &*ctx.vcs,
         )?;
-        let verb: &'static str = if matches!(action, Some("move")) { "move" } else { "edit" };
+        let verb: &'static str = if matches!(action, Some("move")) {
+            "move"
+        } else {
+            "edit"
+        };
         ctx.record_task_event(verb, task.id);
         tracing::info!(cmd = %format!("mcp/{verb}"), "[{}] {}", &task.id.to_string()[..8], task.title);
         edited = Some(task);
@@ -331,7 +407,12 @@ pub fn update_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<V
                 Ok(task)
             })?;
             ctx.record_task_event("start", task.id);
-            tracing::info!(cmd = "mcp/start", "[{}] {}", &task.id.to_string()[..8], task.title);
+            tracing::info!(
+                cmd = "mcp/start",
+                "[{}] {}",
+                &task.id.to_string()[..8],
+                task.title
+            );
             task
         }
         Some("stop") => {
@@ -344,7 +425,12 @@ pub fn update_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<V
                 Ok(task)
             })?;
             ctx.record_task_event("stop", task.id);
-            tracing::info!(cmd = "mcp/stop", "[{}] {}", &task.id.to_string()[..8], task.title);
+            tracing::info!(
+                cmd = "mcp/stop",
+                "[{}] {}",
+                &task.id.to_string()[..8],
+                task.title
+            );
             task
         }
         Some("cancel") => {
@@ -357,7 +443,12 @@ pub fn update_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<V
                 Ok(task)
             })?;
             ctx.record_task_event("cancel", task.id);
-            tracing::info!(cmd = "mcp/cancel", "[{}] {}", &task.id.to_string()[..8], task.title);
+            tracing::info!(
+                cmd = "mcp/cancel",
+                "[{}] {}",
+                &task.id.to_string()[..8],
+                task.title
+            );
             task
         }
         Some("done") => {
@@ -373,7 +464,12 @@ pub fn update_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<V
                 &*ctx.vcs,
             )?;
             ctx.record_task_event("done", task.id);
-            tracing::info!(cmd = "mcp/done", "[{}] {}", &task.id.to_string()[..8], task.title);
+            tracing::info!(
+                cmd = "mcp/done",
+                "[{}] {}",
+                &task.id.to_string()[..8],
+                task.title
+            );
             task
         }
         // "move" and a plain edit already produced the task above.
@@ -402,7 +498,12 @@ pub fn delete_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<V
         Ok(task)
     })?;
     ctx.record_task_event("delete", task.id);
-    tracing::info!(cmd = "mcp/delete", "[{}] {}", &task.id.to_string()[..8], task.title);
+    tracing::info!(
+        cmd = "mcp/delete",
+        "[{}] {}",
+        &task.id.to_string()[..8],
+        task.title
+    );
 
     Ok(json!({ "deleted": task.id.to_string(), "title": task.title }))
 }
@@ -417,7 +518,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         crate::core::test_git::init_test_repo(dir.path());
         let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let ctx =
+            TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 
@@ -521,7 +623,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(done["status"], "done");
-        assert_eq!(done["notes"], "wrapped up", "notes edit must not be dropped by the done action");
+        assert_eq!(
+            done["notes"], "wrapped up",
+            "notes edit must not be dropped by the done action"
+        );
     }
 
     #[test]
@@ -537,7 +642,11 @@ mod tests {
         .unwrap();
         assert_eq!(started["status"], "started");
         assert_eq!(started["priority"], "high");
-        assert!(started["tags"].as_array().unwrap().iter().any(|t| t == "@work"));
+        assert!(started["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t == "@work"));
     }
 
     #[test]
@@ -592,20 +701,33 @@ mod tests {
         // `long_term` is omitted from JSON when false (skip_serializing_if), so
         // clearing a previously-true flag shows up as the key going absent.
         let off = update_task(&json!({ "id": id, "long_term": false }), &mut ctx).unwrap();
-        assert!(off["long_term"].is_null(), "long_term:false must clear it, not be ignored: {off}");
+        assert!(
+            off["long_term"].is_null(),
+            "long_term:false must clear it, not be ignored: {off}"
+        );
     }
 
     #[test]
     fn update_task_standalone_recur_snap_updates_existing() {
         let (_dir, mut ctx) = make_ctx();
-        let task = add_task(&json!({ "title": "Recurring", "recur_completion": 7 }), &mut ctx).unwrap();
+        let task = add_task(
+            &json!({ "title": "Recurring", "recur_completion": 7 }),
+            &mut ctx,
+        )
+        .unwrap();
         let id = task["id"].as_str().unwrap().to_owned();
         assert!(task["recurrence"]["snap"].is_null());
 
         let updated = update_task(&json!({ "id": id, "recur_snap": "monday" }), &mut ctx).unwrap();
-        assert!(!updated["recurrence"]["snap"].is_null(), "standalone recur_snap must set the snap");
+        assert!(
+            !updated["recurrence"]["snap"].is_null(),
+            "standalone recur_snap must set the snap"
+        );
         assert_eq!(updated["recurrence"]["type"], "completion");
-        assert_eq!(updated["recurrence"]["interval_days"], 7, "interval must be preserved");
+        assert_eq!(
+            updated["recurrence"]["interval_days"], 7,
+            "interval must be preserved"
+        );
     }
 
     #[test]
@@ -615,7 +737,8 @@ mod tests {
         let id = task["id"].as_str().unwrap();
         let err = update_task(&json!({ "id": id, "recur_snap": "monday" }), &mut ctx).unwrap_err();
         assert!(
-            err.to_string().contains("recur_snap requires an existing recurrence"),
+            err.to_string()
+                .contains("recur_snap requires an existing recurrence"),
             "unexpected error: {err}"
         );
     }

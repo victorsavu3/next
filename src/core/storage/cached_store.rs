@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
 use crate::core::{
     domain::{state::GlobalState, tag::TagMeta, task::Task},
-    error::{TaskError, Result},
+    error::{Result, TaskError},
     scoring::TaskDates,
     store::{Page, Store, TaskLocation, TaskQuery, DEFAULT_PAGE_SIZE},
 };
@@ -118,7 +118,10 @@ impl CachedStore {
 
     /// Repo-relative path (`tasks/<filename>`) where `task` is stored on disk.
     fn rel_task_path(task: &Task) -> String {
-        format!("tasks/{}", crate::core::storage::filenames::generate_filename(task))
+        format!(
+            "tasks/{}",
+            crate::core::storage::filenames::generate_filename(task)
+        )
     }
 
     /// Brings the cache in line with `new_head`.
@@ -134,7 +137,8 @@ impl CachedStore {
             return Ok(());
         }
         if let Some(stored) = stored {
-            if let Some(changes) = super::git_backend::changed_paths(&self.root, &stored, new_head) {
+            if let Some(changes) = super::git_backend::changed_paths(&self.root, &stored, new_head)
+            {
                 return self.apply_changes(&changes, new_head);
             }
         }
@@ -146,7 +150,10 @@ impl CachedStore {
         // The exact change time of each file lies somewhere in the diffed
         // commit range; the new head's time is the closest cheap bound.
         let head_time = super::git_backend::commit_time(&self.root, new_head);
-        let head_dates = head_time.map(|t| TaskDates { created_at: t, updated_at: t });
+        let head_dates = head_time.map(|t| TaskDates {
+            created_at: t,
+            updated_at: t,
+        });
 
         // Deletes first, so a rename (delete + add of the same task under a
         // new filename) nets out to the surviving row. Stash the deleted
@@ -155,7 +162,9 @@ impl CachedStore {
         let mut stashed_created: HashMap<String, String> = HashMap::new();
         self.with_conn(|conn| {
             for change in changes {
-                let FileChange::Delete(path) = change else { continue };
+                let FileChange::Delete(path) = change else {
+                    continue;
+                };
                 if is_task_file(path) {
                     if let Some((id, Some(created))) = delete_by_path(conn, path)? {
                         stashed_created.insert(id, created);
@@ -167,7 +176,9 @@ impl CachedStore {
             Ok(())
         })?;
         for change in changes {
-            let FileChange::Upsert(path) = change else { continue };
+            let FileChange::Upsert(path) = change else {
+                continue;
+            };
             if is_task_file(path) {
                 let abs = self.root.join(path);
                 match std::fs::read_to_string(&abs) {
@@ -183,7 +194,9 @@ impl CachedStore {
                                     "UPDATE tasks SET created_at = ?2 WHERE id = ?1",
                                     params![task.id.to_string(), created],
                                 )
-                                .map_err(|e| TaskError::Other(format!("sqlite restore created_at: {e}")))?;
+                                .map_err(|e| {
+                                    TaskError::Other(format!("sqlite restore created_at: {e}"))
+                                })?;
                             }
                             Ok(())
                         })?;
@@ -204,8 +217,7 @@ impl CachedStore {
                     if self.root.join(&pruned.path).exists() {
                         continue;
                     }
-                    let Some(content) =
-                        super::git_backend::blob_content(&self.root, &pruned.blob)
+                    let Some(content) = super::git_backend::blob_content(&self.root, &pruned.blob)
                     else {
                         continue;
                     };
@@ -230,7 +242,10 @@ fn upsert_segment_rows(
     while delete_by_path(conn, rel_path)?.is_some() {}
     for entry in entries {
         let dates = match (entry.created_at, entry.updated_at) {
-            (Some(c), Some(u)) => Some(TaskDates { created_at: c, updated_at: u }),
+            (Some(c), Some(u)) => Some(TaskDates {
+                created_at: c,
+                updated_at: u,
+            }),
             _ => None,
         };
         upsert_task_row(conn, &entry.task, rel_path, dates.as_ref(), tier)?;
@@ -373,17 +388,26 @@ impl Store for CachedStore {
         }
 
         let old_path: Option<String> = self.with_conn(|conn| {
-            conn.query_row("SELECT path FROM tasks WHERE id = ?1", params![id_str], |r| r.get(0))
-                .optional()
-                .map_err(|e| TaskError::Other(format!("sqlite path lookup: {e}")))
+            conn.query_row(
+                "SELECT path FROM tasks WHERE id = ?1",
+                params![id_str],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| TaskError::Other(format!("sqlite path lookup: {e}")))
         })?;
 
         self.inner.save_task_at(task, old_path.as_deref())?;
         // A local write is about to be committed, so "now" matches the commit
         // author time; on an existing row only updated_at advances.
         let now = chrono::Utc::now();
-        let dates = TaskDates { created_at: now, updated_at: now };
-        self.with_conn(|conn| upsert_task_row(conn, task, &Self::rel_task_path(task), Some(&dates), 0))
+        let dates = TaskDates {
+            created_at: now,
+            updated_at: now,
+        };
+        self.with_conn(|conn| {
+            upsert_task_row(conn, task, &Self::rel_task_path(task), Some(&dates), 0)
+        })
     }
 
     fn delete_task(&mut self, id: Uuid) -> Result<()> {
@@ -398,9 +422,13 @@ impl Store for CachedStore {
         }
         let id_str = id.to_string();
         let path: Option<String> = self.with_conn(|conn| {
-            conn.query_row("SELECT path FROM tasks WHERE id = ?1", params![id_str], |r| r.get(0))
-                .optional()
-                .map_err(|e| TaskError::Other(format!("sqlite path lookup: {e}")))
+            conn.query_row(
+                "SELECT path FROM tasks WHERE id = ?1",
+                params![id_str],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| TaskError::Other(format!("sqlite path lookup: {e}")))
         })?;
         match path {
             Some(rel) => self.inner.delete_task_at(id, &rel)?,
@@ -473,16 +501,28 @@ impl Store for CachedStore {
     }
 
     fn query_tasks(&self, q: &TaskQuery) -> Result<Page<Task>> {
-        let page_size = if q.page_size == 0 { DEFAULT_PAGE_SIZE } else { q.page_size };
+        let page_size = if q.page_size == 0 {
+            DEFAULT_PAGE_SIZE
+        } else {
+            q.page_size
+        };
         let page = q.page.max(1);
 
-        let mut where_sql =
-            String::from(if q.archived { "archived <> 0" } else { "archived = 0" });
+        let mut where_sql = String::from(if q.archived {
+            "archived <> 0"
+        } else {
+            "archived = 0"
+        });
         let mut args: Vec<String> = Vec::new();
 
         if let Some(statuses) = &q.statuses {
             if statuses.is_empty() {
-                return Ok(Page { items: Vec::new(), page, page_size, total: 0 });
+                return Ok(Page {
+                    items: Vec::new(),
+                    page,
+                    page_size,
+                    total: 0,
+                });
             }
             let marks = vec!["?"; statuses.len()].join(", ");
             where_sql.push_str(&format!(" AND status IN ({marks})"));
@@ -532,7 +572,12 @@ impl Store for CachedStore {
                 })
                 .map_err(|e| TaskError::Other(format!("sqlite query tasks: {e}")))?,
             )?;
-            Ok(Page { items, page, page_size, total })
+            Ok(Page {
+                items,
+                page,
+                page_size,
+                total,
+            })
         })
     }
 
@@ -580,7 +625,10 @@ impl Store for CachedStore {
         // while preserving the frozen created_at; updated_at advances to now.
         self.inner.save_task_at(task, None)?;
         let now = chrono::Utc::now();
-        let dates = TaskDates { created_at: now, updated_at: now };
+        let dates = TaskDates {
+            created_at: now,
+            updated_at: now,
+        };
         self.with_conn(|conn| {
             upsert_task_row(conn, task, &Self::rel_task_path(task), Some(&dates), 0)
         })
@@ -607,12 +655,20 @@ impl Store for CachedStore {
             for row in rows {
                 let (id, created, updated) =
                     row.map_err(|e| TaskError::Other(format!("sqlite dates row: {e}")))?;
-                let (Ok(id), Some(created), Some(updated)) =
-                    (Uuid::parse_str(&id), parse_rfc3339(&created), parse_rfc3339(&updated))
-                else {
+                let (Ok(id), Some(created), Some(updated)) = (
+                    Uuid::parse_str(&id),
+                    parse_rfc3339(&created),
+                    parse_rfc3339(&updated),
+                ) else {
                     continue;
                 };
-                dates.insert(id, TaskDates { created_at: created, updated_at: updated });
+                dates.insert(
+                    id,
+                    TaskDates {
+                        created_at: created,
+                        updated_at: updated,
+                    },
+                );
             }
             Ok(dates)
         })
@@ -882,7 +938,8 @@ mod tests {
             cfg.set_str("user.name", "Test").unwrap();
             cfg.set_str("user.email", "test@test.com").unwrap();
         }
-        let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let inner =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
         let vcs = GitBackend::open(dir.path()).unwrap();
         let head_hash = vcs.head_hash().unwrap();
         let db_path = dir.path().join(".next.db");
@@ -997,7 +1054,10 @@ mod tests {
         let default = store.get_state().unwrap();
         assert!(default.active_contexts.is_empty());
 
-        let state = GlobalState { active_contexts: vec!["@work".into()], ..Default::default() };
+        let state = GlobalState {
+            active_contexts: vec!["@work".into()],
+            ..Default::default()
+        };
         store.save_state(&state).unwrap();
 
         let loaded = store.get_state().unwrap();
@@ -1047,7 +1107,8 @@ mod tests {
 
         // Session 1: add a task and commit it.
         {
-            let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+            let inner =
+                TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
             let head = vcs.head_hash().unwrap();
             let db_path = dir.path().join(".next.db");
             let mut store = CachedStore::open(inner, db_path, &head).unwrap();
@@ -1062,7 +1123,8 @@ mod tests {
 
         // Session 2: open with the new HEAD — cache must be rebuilt.
         {
-            let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+            let inner =
+                TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
             let head = vcs.head_hash().unwrap();
             let db_path = dir.path().join(".next.db");
             let store = CachedStore::open(inner, db_path, &head).unwrap();
@@ -1089,7 +1151,8 @@ mod tests {
         fs::write(tasks_dir.join("external.toml"), toml).unwrap();
 
         // Open with a head_hash that doesn't match stored (empty DB → will rebuild).
-        let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let inner =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
         let db_path = dir.path().join(".next.db");
         let store = CachedStore::open(inner, db_path, "fake-head").unwrap();
 
@@ -1109,7 +1172,8 @@ mod tests {
         let tasks_dir = dir.path().join("tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
 
-        let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let inner =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
         let db_path = dir.path().join(".next.db");
         let mut store = CachedStore::open(inner, db_path, "head-before-pull").unwrap();
 
@@ -1205,7 +1269,8 @@ mod tests {
         let mut task = Task::new("Movable");
         task.slug = Some("before".into());
         store.save_task(&task).unwrap();
-        vcs.commit(&[dir.path().join("tasks/before.toml")], "add").unwrap();
+        vcs.commit(&[dir.path().join("tasks/before.toml")], "add")
+            .unwrap();
         store.note_head(&vcs.head_hash().unwrap()).unwrap();
 
         // Externally rename the file (slug change): delete + add in one commit.
@@ -1245,14 +1310,28 @@ mod tests {
         task.assignee = Some("victor".into());
         store.save_task(&task).unwrap();
 
-        let (status, priority, due, completed, assignee, path): (String, String, String, String, String, String) = store
+        let (status, priority, due, completed, assignee, path): (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        ) = store
             .with_conn(|conn| {
                 conn.query_row(
                     "SELECT status, priority, due, completed_at, assignee, path
                      FROM tasks WHERE id = ?1",
                     params![task.id.to_string()],
                     |row| {
-                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                        ))
                     },
                 )
                 .map_err(|e| TaskError::Other(e.to_string()))
@@ -1320,7 +1399,12 @@ mod tests {
         // Most recent completion first.
         assert_eq!(p1.items[0].title, "Done 2");
 
-        let p2 = store.query_tasks(&TaskQuery { page: 2, ..q.clone() }).unwrap();
+        let p2 = store
+            .query_tasks(&TaskQuery {
+                page: 2,
+                ..q.clone()
+            })
+            .unwrap();
         assert_eq!(p2.total, 3);
         assert_eq!(p2.items.len(), 1);
         let p3 = store.query_tasks(&TaskQuery { page: 3, ..q }).unwrap();
@@ -1345,12 +1429,18 @@ mod tests {
         store.save_task(&home).unwrap();
         store.save_task(&worker).unwrap();
 
-        let q = TaskQuery { required_tags: vec!["@work".into()], ..Default::default() };
+        let q = TaskQuery {
+            required_tags: vec!["@work".into()],
+            ..Default::default()
+        };
         let got = store.query_tasks(&q).unwrap();
         assert_eq!(got.items.len(), 1, "parent tag matches descendants only");
         assert_eq!(got.items[0].id, work.id);
 
-        let q = TaskQuery { excluded_tags: vec!["@work".into()], ..Default::default() };
+        let q = TaskQuery {
+            excluded_tags: vec!["@work".into()],
+            ..Default::default()
+        };
         let got = store.query_tasks(&q).unwrap();
         let titles: Vec<_> = got.items.iter().map(|t| t.title.as_str()).collect();
         assert_eq!(got.items.len(), 2);
@@ -1385,7 +1475,10 @@ mod tests {
         }
 
         let got = store
-            .query_tasks(&TaskQuery { parent_id: Some(parent.id), ..TaskQuery::unpaginated() })
+            .query_tasks(&TaskQuery {
+                parent_id: Some(parent.id),
+                ..TaskQuery::unpaginated()
+            })
             .unwrap();
         assert_eq!(got.total, 2);
         let ids: Vec<_> = got.items.iter().map(|t| t.id).collect();
@@ -1397,7 +1490,10 @@ mod tests {
         let (_dir, mut store, _vcs) = setup();
         store.save_task(&Task::new("Active")).unwrap();
         let got = store
-            .query_tasks(&TaskQuery { archived: true, ..Default::default() })
+            .query_tasks(&TaskQuery {
+                archived: true,
+                ..Default::default()
+            })
             .unwrap();
         assert_eq!(got.total, 0);
         assert!(got.items.is_empty());
@@ -1418,10 +1514,15 @@ mod tests {
         let frozen = chrono::DateTime::from_timestamp(1_700_000_000, 0);
         write_segment(
             &seg_abs,
-            vec![ArchivedTask { created_at: frozen, updated_at: frozen, task: old.clone() }],
+            vec![ArchivedTask {
+                created_at: frozen,
+                updated_at: frozen,
+                task: old.clone(),
+            }],
         )
         .unwrap();
-        vcs.commit(std::slice::from_ref(&seg_abs), "archive pass").unwrap();
+        vcs.commit(std::slice::from_ref(&seg_abs), "archive pass")
+            .unwrap();
         store.after_pull(&vcs.head_hash().unwrap()).unwrap();
 
         // Hidden from active listings and queries…
@@ -1429,22 +1530,38 @@ mod tests {
         assert_eq!(store.query_tasks(&TaskQuery::default()).unwrap().total, 1);
         // …visible through the archived query, ordered lookups intact…
         let archived = store
-            .query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() })
+            .query_tasks(&TaskQuery {
+                archived: true,
+                ..TaskQuery::unpaginated()
+            })
             .unwrap();
         assert_eq!(archived.total, 1);
         assert_eq!(archived.items[0].id, old.id);
         // …and tier-transparent for direct reads, with frozen dates served.
         assert_eq!(store.get_task(old.id).unwrap().title, "Ancient");
         assert!(store.get_task_by_slug("ancient").unwrap().is_some());
-        assert_eq!(store.task_dates().unwrap()[&old.id].created_at, frozen.unwrap());
+        assert_eq!(
+            store.task_dates().unwrap()[&old.id].created_at,
+            frozen.unwrap()
+        );
 
         // A fresh rebuild (new db) also picks segments up without history.
-        let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
-        let store2 =
-            CachedStore::open(inner, dir.path().join(".next2.db"), &vcs.head_hash().unwrap())
-                .unwrap();
+        let inner =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let store2 = CachedStore::open(
+            inner,
+            dir.path().join(".next2.db"),
+            &vcs.head_hash().unwrap(),
+        )
+        .unwrap();
         assert_eq!(
-            store2.query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+            store2
+                .query_tasks(&TaskQuery {
+                    archived: true,
+                    ..TaskQuery::unpaginated()
+                })
+                .unwrap()
+                .total,
             1
         );
 
@@ -1472,14 +1589,24 @@ mod tests {
 
         let queries = [
             TaskQuery::default(),
-            TaskQuery { statuses: Some(vec![Status::Open]), ..Default::default() },
-            TaskQuery { required_tags: vec!["@work".into()], ..Default::default() },
+            TaskQuery {
+                statuses: Some(vec![Status::Open]),
+                ..Default::default()
+            },
+            TaskQuery {
+                required_tags: vec!["@work".into()],
+                ..Default::default()
+            },
             TaskQuery {
                 required_tags: vec!["rust".into()],
                 excluded_tags: vec!["@home".into()],
                 ..Default::default()
             },
-            TaskQuery { page_size: 2, page: 2, ..Default::default() },
+            TaskQuery {
+                page_size: 2,
+                page: 2,
+                ..Default::default()
+            },
         ];
         // A bare TomlStore over the same directory exercises the default impl.
         let reference =
@@ -1506,7 +1633,10 @@ mod tests {
         task.title = "Dated II".into();
         store.save_task(&task).unwrap();
         let d2 = store.task_dates().unwrap()[&task.id].clone();
-        assert_eq!(d2.created_at, d1.created_at, "created_at must not change on update");
+        assert_eq!(
+            d2.created_at, d1.created_at,
+            "created_at must not change on update"
+        );
         assert!(d2.updated_at > d1.updated_at, "updated_at must advance");
     }
 
@@ -1529,10 +1659,14 @@ mod tests {
         let head = vcs.head_hash().unwrap();
 
         // Fresh cache in a separate db file → full rebuild with backfill.
-        let inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let inner =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
         let store2 = CachedStore::open(inner, dir.path().join(".next2.db"), &head).unwrap();
         let dates = store2.task_dates().unwrap();
-        assert!(dates.contains_key(&plain.id), "uuid-suffixed file must be backfilled");
+        assert!(
+            dates.contains_key(&plain.id),
+            "uuid-suffixed file must be backfilled"
+        );
         assert!(
             dates.contains_key(&slugged.id),
             "slug-named file must be backfilled via its filename key"
@@ -1545,7 +1679,8 @@ mod tests {
         let mut task = Task::new("Evolving");
         task.slug = Some("evolving".into());
         store.save_task(&task).unwrap();
-        vcs.commit(&[dir.path().join("tasks/evolving.toml")], "add").unwrap();
+        vcs.commit(&[dir.path().join("tasks/evolving.toml")], "add")
+            .unwrap();
         store.note_head(&vcs.head_hash().unwrap()).unwrap();
         let before = store.task_dates().unwrap()[&task.id].clone();
 
@@ -1555,11 +1690,15 @@ mod tests {
             toml::to_string_pretty(&task).unwrap(),
         )
         .unwrap();
-        vcs.commit(&[dir.path().join("tasks/evolving.toml")], "modify").unwrap();
+        vcs.commit(&[dir.path().join("tasks/evolving.toml")], "modify")
+            .unwrap();
         store.after_pull(&vcs.head_hash().unwrap()).unwrap();
 
         let after = store.task_dates().unwrap()[&task.id].clone();
-        assert_eq!(after.created_at, before.created_at, "external modify keeps created_at");
+        assert_eq!(
+            after.created_at, before.created_at,
+            "external modify keeps created_at"
+        );
         assert_eq!(store.get_task(task.id).unwrap().title, "Evolved");
     }
 
@@ -1569,22 +1708,33 @@ mod tests {
         let mut task = Task::new("Renamed");
         task.slug = Some("r1".into());
         store.save_task(&task).unwrap();
-        vcs.commit(&[dir.path().join("tasks/r1.toml")], "add").unwrap();
+        vcs.commit(&[dir.path().join("tasks/r1.toml")], "add")
+            .unwrap();
         store.note_head(&vcs.head_hash().unwrap()).unwrap();
         let before = store.task_dates().unwrap()[&task.id].clone();
 
         task.slug = Some("r2".into());
-        fs::write(dir.path().join("tasks/r2.toml"), toml::to_string_pretty(&task).unwrap()).unwrap();
+        fs::write(
+            dir.path().join("tasks/r2.toml"),
+            toml::to_string_pretty(&task).unwrap(),
+        )
+        .unwrap();
         fs::remove_file(dir.path().join("tasks/r1.toml")).unwrap();
         vcs.commit(
-            &[dir.path().join("tasks/r1.toml"), dir.path().join("tasks/r2.toml")],
+            &[
+                dir.path().join("tasks/r1.toml"),
+                dir.path().join("tasks/r2.toml"),
+            ],
             "rename",
         )
         .unwrap();
         store.after_pull(&vcs.head_hash().unwrap()).unwrap();
 
         let after = store.task_dates().unwrap()[&task.id].clone();
-        assert_eq!(after.created_at, before.created_at, "rename keeps created_at");
+        assert_eq!(
+            after.created_at, before.created_at,
+            "rename keeps created_at"
+        );
     }
 
     #[test]
@@ -1651,7 +1801,8 @@ mod tests {
         git2::Repository::init(dir.path()).unwrap();
 
         // A real task on disk that the rebuild must pick up.
-        let mut inner = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let mut inner =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
         let task = Task::new("Survivor");
         inner.save_task(&task).unwrap();
 
@@ -1677,7 +1828,9 @@ mod tests {
         assert_eq!(all.len(), 1, "stale v1 row must be gone, disk task present");
         assert_eq!(all[0].title, "Survivor");
 
-        let version = store.with_conn(|conn| get_meta(conn, "schema_version")).unwrap();
+        let version = store
+            .with_conn(|conn| get_meta(conn, "schema_version"))
+            .unwrap();
         assert_eq!(version.as_deref(), Some(SCHEMA_VERSION));
     }
 
@@ -1711,7 +1864,9 @@ mod tests {
         assert_eq!(all.len(), 1, "stale row must be gone, disk task present");
         assert_eq!(all[0].title, "Survivor");
 
-        let stamped = store.with_conn(|conn| get_meta(conn, "build_version")).unwrap();
+        let stamped = store
+            .with_conn(|conn| get_meta(conn, "build_version"))
+            .unwrap();
         assert_eq!(stamped.as_deref(), Some(BUILD_VERSION));
     }
 
@@ -1737,7 +1892,11 @@ mod tests {
 
         let store = CachedStore::open(inner, db_path, "same-head").unwrap();
         let all = store.list_tasks().unwrap();
-        assert_eq!(all.len(), 1, "fast path must not rebuild when the stamp matches");
+        assert_eq!(
+            all.len(),
+            1,
+            "fast path must not rebuild when the stamp matches"
+        );
         assert_eq!(all[0].title, "Ghost");
     }
 }

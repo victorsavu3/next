@@ -1,4 +1,7 @@
-use crate::{core::{domain::date_parse::parse_date, resolve::resolve_task_id, service::complete_task}, AppContext};
+use crate::{
+    core::{domain::date_parse::parse_date, resolve::resolve_task_id, service::complete_task},
+    AppContext,
+};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -37,7 +40,12 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&task)?);
     } else {
         println!("completed [{}] {}", &task.id.to_string()[..8], task.title);
-        tracing::info!(cmd = "done", "[{}] {}", &task.id.to_string()[..8], task.title);
+        tracing::info!(
+            cmd = "done",
+            "[{}] {}",
+            &task.id.to_string()[..8],
+            task.title
+        );
     }
     Ok(())
 }

@@ -53,7 +53,8 @@ pub fn build_entries(
     task_dates: &HashMap<uuid::Uuid, TaskDates>,
 ) -> Vec<ForecastEntry> {
     let filtered = filter::apply(all_tasks.to_vec(), filter_set, state, today);
-    let scored = scoring::score_and_sort(filtered, all_tasks, today, scoring, tag_metas, task_dates);
+    let scored =
+        scoring::score_and_sort(filtered, all_tasks, today, scoring, tag_metas, task_dates);
 
     let cutoff = today + chrono::Duration::days(horizon as i64);
 
@@ -130,7 +131,10 @@ mod tests {
         );
         let titles: Vec<&str> = entries.iter().map(|e| e.title.as_str()).collect();
         assert!(titles.contains(&"due soon"));
-        assert!(!titles.contains(&"due far"), "beyond horizon must be excluded");
+        assert!(
+            !titles.contains(&"due far"),
+            "beyond horizon must be excluded"
+        );
         assert!(entries.iter().all(|e| !e.projected));
     }
 
@@ -194,7 +198,10 @@ mod tests {
             &HashMap::new(),
         );
         let projected: Vec<_> = entries.iter().filter(|e| e.projected).collect();
-        assert!(!projected.is_empty(), "completion recurrence should emit projected entries");
+        assert!(
+            !projected.is_empty(),
+            "completion recurrence should emit projected entries"
+        );
         // First projection: today + 7 = June 13.
         assert_eq!(projected[0].date, date(2026, 6, 13));
     }

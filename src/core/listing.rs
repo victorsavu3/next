@@ -34,7 +34,10 @@ pub fn load_candidates(store: &dyn Store, filter: &FilterSet) -> Result<Vec<Task
         vec![Status::Open, Status::Started]
     };
     Ok(store
-        .query_tasks(&TaskQuery { statuses: Some(statuses), ..TaskQuery::unpaginated() })?
+        .query_tasks(&TaskQuery {
+            statuses: Some(statuses),
+            ..TaskQuery::unpaginated()
+        })?
         .items)
 }
 
@@ -92,7 +95,10 @@ mod tests {
         let open = Task::new("Open");
         let (_dir, store) = store_with(&[done, open]);
 
-        let filter = FilterSet { closed_only: true, ..Default::default() };
+        let filter = FilterSet {
+            closed_only: true,
+            ..Default::default()
+        };
         let got = load_candidates(&store, &filter).unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].title, "Done");
@@ -105,10 +111,16 @@ mod tests {
         let open = Task::new("Open");
         let (_dir, store) = store_with(&[done, open]);
 
-        let all = FilterSet { disable_implicit: true, ..Default::default() };
+        let all = FilterSet {
+            disable_implicit: true,
+            ..Default::default()
+        };
         assert_eq!(load_candidates(&store, &all).unwrap().len(), 2);
 
-        let scoped = FilterSet { parent_slug: Some("proj".into()), ..Default::default() };
+        let scoped = FilterSet {
+            parent_slug: Some("proj".into()),
+            ..Default::default()
+        };
         assert_eq!(load_candidates(&store, &scoped).unwrap().len(), 2);
     }
 

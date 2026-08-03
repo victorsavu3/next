@@ -133,13 +133,9 @@ fn apply_set(cfg: &mut Config, key: &str, value: &str) -> anyhow::Result<()> {
             if value.eq_ignore_ascii_case("none") {
                 cfg.list_limit = None;
             } else {
-                cfg.list_limit = Some(
-                    value
-                        .parse::<usize>()
-                        .with_context(|| {
-                            format!("list_limit expects a usize or 'none', got {value:?}")
-                        })?,
-                );
+                cfg.list_limit = Some(value.parse::<usize>().with_context(|| {
+                    format!("list_limit expects a usize or 'none', got {value:?}")
+                })?);
             }
         }
         "next_count" => {
@@ -205,7 +201,14 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_config(&dir, "");
 
-        cmd_set(SetArgs { key: "sync.autopush".into(), value: "true".into() }, Some(&path)).unwrap();
+        cmd_set(
+            SetArgs {
+                key: "sync.autopush".into(),
+                value: "true".into(),
+            },
+            Some(&path),
+        )
+        .unwrap();
 
         let cfg = crate::core::bootstrap::parse_config_file(&path);
         assert!(cfg.sync.autopush);
@@ -217,7 +220,10 @@ mod tests {
         let path = write_config(&dir, "");
 
         cmd_set(
-            SetArgs { key: "sync.autopull".into(), value: "false".into() },
+            SetArgs {
+                key: "sync.autopull".into(),
+                value: "false".into(),
+            },
             Some(&path),
         )
         .unwrap();
@@ -231,7 +237,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_config(&dir, "[sync]\nautopush = true\n");
 
-        let args = GetArgs { key: Some("sync.autopush".into()) };
+        let args = GetArgs {
+            key: Some("sync.autopush".into()),
+        };
         cmd_get(args, Some(&path)).unwrap();
     }
 
@@ -239,9 +247,17 @@ mod tests {
     fn set_removed_key_autosync_errors() {
         let dir = TempDir::new().unwrap();
         let path = write_config(&dir, "");
-        let result =
-            cmd_set(SetArgs { key: "autosync".into(), value: "true".into() }, Some(&path));
-        assert!(result.is_err(), "old `autosync` key must no longer be settable");
+        let result = cmd_set(
+            SetArgs {
+                key: "autosync".into(),
+                value: "true".into(),
+            },
+            Some(&path),
+        );
+        assert!(
+            result.is_err(),
+            "old `autosync` key must no longer be settable"
+        );
     }
 
     #[test]
@@ -249,10 +265,16 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_config(&dir, "");
         let result = cmd_set(
-            SetArgs { key: "sync.pull_before_query".into(), value: "false".into() },
+            SetArgs {
+                key: "sync.pull_before_query".into(),
+                value: "false".into(),
+            },
             Some(&path),
         );
-        assert!(result.is_err(), "old `sync.pull_before_query` key must no longer be settable");
+        assert!(
+            result.is_err(),
+            "old `sync.pull_before_query` key must no longer be settable"
+        );
     }
 
     #[test]
@@ -260,9 +282,19 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_config(&dir, "");
 
-        cmd_set(SetArgs { key: "next_count".into(), value: "5".into() }, Some(&path)).unwrap();
         cmd_set(
-            SetArgs { key: "forecast_horizon_days".into(), value: "30".into() },
+            SetArgs {
+                key: "next_count".into(),
+                value: "5".into(),
+            },
+            Some(&path),
+        )
+        .unwrap();
+        cmd_set(
+            SetArgs {
+                key: "forecast_horizon_days".into(),
+                value: "30".into(),
+            },
             Some(&path),
         )
         .unwrap();
@@ -279,11 +311,25 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_config(&dir, "");
 
-        cmd_set(SetArgs { key: "list_limit".into(), value: "50".into() }, Some(&path)).unwrap();
+        cmd_set(
+            SetArgs {
+                key: "list_limit".into(),
+                value: "50".into(),
+            },
+            Some(&path),
+        )
+        .unwrap();
         let cfg = crate::core::bootstrap::parse_config_file(&path);
         assert_eq!(cfg.list_limit, Some(50));
 
-        cmd_set(SetArgs { key: "list_limit".into(), value: "none".into() }, Some(&path)).unwrap();
+        cmd_set(
+            SetArgs {
+                key: "list_limit".into(),
+                value: "none".into(),
+            },
+            Some(&path),
+        )
+        .unwrap();
         let cfg = crate::core::bootstrap::parse_config_file(&path);
         assert_eq!(cfg.list_limit, None);
     }
@@ -294,7 +340,10 @@ mod tests {
         let path = write_config(&dir, "");
 
         cmd_set(
-            SetArgs { key: "repository".into(), value: "/tmp/tasks".into() },
+            SetArgs {
+                key: "repository".into(),
+                value: "/tmp/tasks".into(),
+            },
             Some(&path),
         )
         .unwrap();
@@ -302,7 +351,10 @@ mod tests {
         assert_eq!(cfg.repository, Some(PathBuf::from("/tmp/tasks")));
 
         cmd_set(
-            SetArgs { key: "repository".into(), value: "none".into() },
+            SetArgs {
+                key: "repository".into(),
+                value: "none".into(),
+            },
             Some(&path),
         )
         .unwrap();
@@ -315,7 +367,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_config(&dir, "");
         let result = cmd_set(
-            SetArgs { key: "nonexistent".into(), value: "x".into() },
+            SetArgs {
+                key: "nonexistent".into(),
+                value: "x".into(),
+            },
             Some(&path),
         );
         assert!(result.is_err());
@@ -327,7 +382,10 @@ mod tests {
         let path = dir.path().join("subdir").join("config.toml");
 
         cmd_set(
-            SetArgs { key: "sync.autopush".into(), value: "true".into() },
+            SetArgs {
+                key: "sync.autopush".into(),
+                value: "true".into(),
+            },
             Some(&path),
         )
         .unwrap();
@@ -342,12 +400,18 @@ mod tests {
         let path = write_config(&dir, "");
 
         cmd_set(
-            SetArgs { key: "sync.staleness_secs".into(), value: "7200".into() },
+            SetArgs {
+                key: "sync.staleness_secs".into(),
+                value: "7200".into(),
+            },
             Some(&path),
         )
         .unwrap();
         cmd_set(
-            SetArgs { key: "sync.pull_timeout_secs".into(), value: "30".into() },
+            SetArgs {
+                key: "sync.pull_timeout_secs".into(),
+                value: "30".into(),
+            },
             Some(&path),
         )
         .unwrap();
@@ -362,7 +426,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_config(&dir, "");
         let result = cmd_set(
-            SetArgs { key: "sync.autopush".into(), value: "maybe".into() },
+            SetArgs {
+                key: "sync.autopush".into(),
+                value: "maybe".into(),
+            },
             Some(&path),
         );
         assert!(result.is_err());
@@ -372,7 +439,12 @@ mod tests {
     fn get_unknown_key_returns_error() {
         let dir = TempDir::new().unwrap();
         let path = write_config(&dir, "");
-        let result = cmd_get(GetArgs { key: Some("no_such_key".into()) }, Some(&path));
+        let result = cmd_get(
+            GetArgs {
+                key: Some("no_such_key".into()),
+            },
+            Some(&path),
+        );
         assert!(result.is_err());
     }
 }

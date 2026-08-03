@@ -15,8 +15,7 @@ use crate::core::{
     error::TaskError,
     plugin::registry,
     service::{complete_task, create_task, CreateTaskParams},
-    storage,
-    TaskRepository,
+    storage, TaskRepository,
 };
 
 use super::{issues::ForgejoIssue, keys, PLUGIN_NAME};
@@ -28,7 +27,12 @@ pub trait TaskStore {
     /// Creates a task from an issue (title, url, body, the mapped context tag,
     /// and the `__forgejo-*` link data), subscribes the plugin to it, and
     /// returns its id.
-    fn create_from_issue(&mut self, issue: &ForgejoIssue, context: &str, repo: &str) -> Result<Uuid>;
+    fn create_from_issue(
+        &mut self,
+        issue: &ForgejoIssue,
+        context: &str,
+        repo: &str,
+    ) -> Result<Uuid>;
     /// Marks a task done (and spawns any recurrence instance).
     fn mark_done(&mut self, id: Uuid) -> Result<()>;
     /// Fetches a task by id, or `None` if it no longer exists.
@@ -51,9 +55,13 @@ impl LibTaskStore {
     /// Opens the store on `repo` (required — config-file resolution is CLI-only).
     pub fn open(repo: Option<&Path>) -> Result<Self> {
         let root = repo.ok_or_else(|| {
-            anyhow::anyhow!("no next repository configured — set next_repo in the plugin config or NEXT_REPO")
+            anyhow::anyhow!(
+                "no next repository configured — set next_repo in the plugin config or NEXT_REPO"
+            )
         })?;
-        Ok(Self { ctx: TaskRepository::open(root.to_path_buf())? })
+        Ok(Self {
+            ctx: TaskRepository::open(root.to_path_buf())?,
+        })
     }
 
     /// The repository root this store operates on.
@@ -85,7 +93,12 @@ impl TaskStore for LibTaskStore {
             .collect())
     }
 
-    fn create_from_issue(&mut self, issue: &ForgejoIssue, context: &str, repo: &str) -> Result<Uuid> {
+    fn create_from_issue(
+        &mut self,
+        issue: &ForgejoIssue,
+        context: &str,
+        repo: &str,
+    ) -> Result<Uuid> {
         let today = chrono::Local::now().date_naive();
         let params = CreateTaskParams {
             tags: vec![context.to_owned()],
@@ -154,9 +167,13 @@ mod tests {
     fn forgejo_link_reads_data() {
         let mut task = Task::new("t");
         assert_eq!(forgejo_link(&task), None);
-        task.data.insert(keys::REPO.into(), json!("victor/task-manager"));
+        task.data
+            .insert(keys::REPO.into(), json!("victor/task-manager"));
         task.data.insert(keys::ISSUE.into(), json!(42));
-        assert_eq!(forgejo_link(&task), Some(("victor/task-manager".to_owned(), 42)));
+        assert_eq!(
+            forgejo_link(&task),
+            Some(("victor/task-manager".to_owned(), 42))
+        );
     }
 
     #[test]

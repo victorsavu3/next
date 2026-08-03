@@ -55,7 +55,6 @@ pub struct FilterSet {
     /// task with this slug are returned.  Resolved against the full task list
     /// inside `apply`; silently returns nothing if the slug is not found.
     pub parent_slug: Option<String>,
-
 }
 
 /// Applies `filter` to `tasks` and returns those that pass.
@@ -225,9 +224,9 @@ fn task_matches_contexts(task: &Task, active_contexts: &[String]) -> bool {
     }
 
     active_contexts.iter().any(|active| {
-        task_contexts.iter().any(|&tc| {
-            tag::tag_matches(active, tc) || tag::tag_matches(tc, active)
-        })
+        task_contexts
+            .iter()
+            .any(|&tc| tag::tag_matches(active, tc) || tag::tag_matches(tc, active))
     })
 }
 
@@ -250,9 +249,9 @@ fn task_excluded_by_contexts(task: &Task, excluded_contexts: &[String]) -> bool 
         return false;
     }
 
-    excluded_contexts.iter().any(|exc| {
-        task_contexts.iter().any(|&tc| tag::tag_matches(exc, tc))
-    })
+    excluded_contexts
+        .iter()
+        .any(|exc| task_contexts.iter().any(|&tc| tag::tag_matches(exc, tc)))
 }
 
 /// Pre-computes two indexes needed by the implicit gate.
@@ -470,7 +469,10 @@ mod tests {
 
     #[test]
     fn active_context_hides_wrong_context_tasks() {
-        let state = GlobalState { active_contexts: vec!["@work".into()], ..Default::default() };
+        let state = GlobalState {
+            active_contexts: vec!["@work".into()],
+            ..Default::default()
+        };
 
         let mut work_task = Task::new("Work task");
         work_task.tags = vec!["@work".into()];
@@ -478,27 +480,43 @@ mod tests {
         let mut home_task = Task::new("Home task");
         home_task.tags = vec!["@home".into()];
 
-        let result = apply(vec![work_task, home_task], &FilterSet::default(), &state, today());
+        let result = apply(
+            vec![work_task, home_task],
+            &FilterSet::default(),
+            &state,
+            today(),
+        );
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].title, "Work task");
     }
 
     #[test]
     fn active_context_keeps_context_neutral_tasks() {
-        let state = GlobalState { active_contexts: vec!["@work".into()], ..Default::default() };
+        let state = GlobalState {
+            active_contexts: vec!["@work".into()],
+            ..Default::default()
+        };
 
         let mut work_task = Task::new("Work task");
         work_task.tags = vec!["@work".into()];
 
         let neutral_task = Task::new("No context task");
 
-        let result = apply(vec![work_task, neutral_task], &FilterSet::default(), &state, today());
+        let result = apply(
+            vec![work_task, neutral_task],
+            &FilterSet::default(),
+            &state,
+            today(),
+        );
         assert_eq!(result.len(), 2);
     }
 
     #[test]
     fn parent_context_active_shows_sub_context_task() {
-        let state = GlobalState { active_contexts: vec!["@work".into()], ..Default::default() };
+        let state = GlobalState {
+            active_contexts: vec!["@work".into()],
+            ..Default::default()
+        };
 
         let mut task = Task::new("Frontend work");
         task.tags = vec!["@work/frontend".into()];
@@ -509,7 +527,10 @@ mod tests {
 
     #[test]
     fn sub_context_active_shows_parent_context_task() {
-        let state = GlobalState { active_contexts: vec!["@work/frontend".into()], ..Default::default() };
+        let state = GlobalState {
+            active_contexts: vec!["@work/frontend".into()],
+            ..Default::default()
+        };
 
         let mut task = Task::new("General work task");
         task.tags = vec!["@work".into()]; // less specific than active context
@@ -520,7 +541,10 @@ mod tests {
 
     #[test]
     fn context_override_replaces_state_contexts() {
-        let state = GlobalState { active_contexts: vec!["@work".into()], ..Default::default() };
+        let state = GlobalState {
+            active_contexts: vec!["@work".into()],
+            ..Default::default()
+        };
 
         let mut home_task = Task::new("Home task");
         home_task.tags = vec!["@home".into()];
@@ -535,7 +559,10 @@ mod tests {
 
     #[test]
     fn context_override_empty_disables_context_filter() {
-        let state = GlobalState { active_contexts: vec!["@work".into()], ..Default::default() };
+        let state = GlobalState {
+            active_contexts: vec!["@work".into()],
+            ..Default::default()
+        };
 
         let task = Task::new("No context");
         let filter = FilterSet {
@@ -550,42 +577,66 @@ mod tests {
 
     #[test]
     fn excluded_context_hides_matching_task() {
-        let state = GlobalState { excluded_contexts: vec!["@home".into()], ..Default::default() };
+        let state = GlobalState {
+            excluded_contexts: vec!["@home".into()],
+            ..Default::default()
+        };
 
         let mut home_task = Task::new("Home task");
         home_task.tags = vec!["@home".into()];
         let neutral = Task::new("No context");
 
-        let result = apply(vec![home_task, neutral], &FilterSet::default(), &state, today());
+        let result = apply(
+            vec![home_task, neutral],
+            &FilterSet::default(),
+            &state,
+            today(),
+        );
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].title, "No context");
     }
 
     #[test]
     fn excluded_context_hides_descendant_contexts() {
-        let state = GlobalState { excluded_contexts: vec!["@home".into()], ..Default::default() };
+        let state = GlobalState {
+            excluded_contexts: vec!["@home".into()],
+            ..Default::default()
+        };
 
         let mut kitchen = Task::new("Kitchen task");
         kitchen.tags = vec!["@home/kitchen".into()];
 
         let result = apply(vec![kitchen], &FilterSet::default(), &state, today());
-        assert!(result.is_empty(), "@home excluded should hide @home/kitchen");
+        assert!(
+            result.is_empty(),
+            "@home excluded should hide @home/kitchen"
+        );
     }
 
     #[test]
     fn excluded_sub_context_does_not_hide_parent_context_task() {
-        let state = GlobalState { excluded_contexts: vec!["@home/kitchen".into()], ..Default::default() };
+        let state = GlobalState {
+            excluded_contexts: vec!["@home/kitchen".into()],
+            ..Default::default()
+        };
 
         let mut home_task = Task::new("General home task");
         home_task.tags = vec!["@home".into()];
 
         let result = apply(vec![home_task], &FilterSet::default(), &state, today());
-        assert_eq!(result.len(), 1, "@home/kitchen excluded should not hide @home task");
+        assert_eq!(
+            result.len(),
+            1,
+            "@home/kitchen excluded should not hide @home task"
+        );
     }
 
     #[test]
     fn context_neutral_task_not_hidden_by_exclusion() {
-        let state = GlobalState { excluded_contexts: vec!["@home".into()], ..Default::default() };
+        let state = GlobalState {
+            excluded_contexts: vec!["@home".into()],
+            ..Default::default()
+        };
 
         let neutral = Task::new("No context task");
 
@@ -606,7 +657,12 @@ mod tests {
         let mut kitchen = Task::new("Kitchen task");
         kitchen.tags = vec!["@home/kitchen".into()];
 
-        let result = apply(vec![living_room, kitchen], &FilterSet::default(), &state, today());
+        let result = apply(
+            vec![living_room, kitchen],
+            &FilterSet::default(),
+            &state,
+            today(),
+        );
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].title, "Living room task");
     }
@@ -715,7 +771,10 @@ mod tests {
 
     #[test]
     fn disable_implicit_ignores_contexts() {
-        let state = GlobalState { active_contexts: vec!["@work".into()], ..Default::default() };
+        let state = GlobalState {
+            active_contexts: vec!["@work".into()],
+            ..Default::default()
+        };
 
         let task = Task::new("No context");
         let filter = FilterSet {
@@ -739,21 +798,32 @@ mod tests {
 
     #[test]
     fn active_user_hides_other_users_tasks() {
-        let state = GlobalState { active_users: vec!["alice".into()], ..Default::default() };
+        let state = GlobalState {
+            active_users: vec!["alice".into()],
+            ..Default::default()
+        };
 
         let mut alice_task = Task::new("Alice task");
         alice_task.assignee = Some("alice".into());
         let mut bob_task = Task::new("Bob task");
         bob_task.assignee = Some("bob".into());
 
-        let result = apply(vec![alice_task, bob_task], &FilterSet::default(), &state, today());
+        let result = apply(
+            vec![alice_task, bob_task],
+            &FilterSet::default(),
+            &state,
+            today(),
+        );
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].title, "Alice task");
     }
 
     #[test]
     fn unassigned_tasks_visible_when_user_filter_active() {
-        let state = GlobalState { active_users: vec!["alice".into()], ..Default::default() };
+        let state = GlobalState {
+            active_users: vec!["alice".into()],
+            ..Default::default()
+        };
 
         let unassigned = Task::new("Shared task");
         let result = apply(vec![unassigned], &FilterSet::default(), &state, today());
@@ -762,7 +832,10 @@ mod tests {
 
     #[test]
     fn multiple_active_users_shows_all_their_tasks() {
-        let state = GlobalState { active_users: vec!["alice".into(), "bob".into()], ..Default::default() };
+        let state = GlobalState {
+            active_users: vec!["alice".into(), "bob".into()],
+            ..Default::default()
+        };
 
         let mut alice_task = Task::new("Alice task");
         alice_task.assignee = Some("alice".into());
@@ -782,7 +855,10 @@ mod tests {
 
     #[test]
     fn user_override_empty_bypasses_user_filter() {
-        let state = GlobalState { active_users: vec!["alice".into()], ..Default::default() };
+        let state = GlobalState {
+            active_users: vec!["alice".into()],
+            ..Default::default()
+        };
 
         let mut bob_task = Task::new("Bob task");
         bob_task.assignee = Some("bob".into());
@@ -797,7 +873,10 @@ mod tests {
 
     #[test]
     fn disable_implicit_bypasses_user_filter() {
-        let state = GlobalState { active_users: vec!["alice".into()], ..Default::default() };
+        let state = GlobalState {
+            active_users: vec!["alice".into()],
+            ..Default::default()
+        };
 
         let mut bob_task = Task::new("Bob task");
         bob_task.assignee = Some("bob".into());
@@ -842,7 +921,10 @@ mod tests {
 
     #[test]
     fn closed_only_respects_context() {
-        let state = GlobalState { active_contexts: vec!["@work".into()], ..Default::default() };
+        let state = GlobalState {
+            active_contexts: vec!["@work".into()],
+            ..Default::default()
+        };
 
         let mut done_work = Task::new("Done work task");
         done_work.mark_done(today());
@@ -894,7 +976,10 @@ mod tests {
         done.blocked_by = vec![blocker.id];
         done.mark_done(today());
 
-        let filter = FilterSet { closed_only: true, ..Default::default() };
+        let filter = FilterSet {
+            closed_only: true,
+            ..Default::default()
+        };
         let result = run(vec![blocker, done], filter);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].title, "done but blocked");

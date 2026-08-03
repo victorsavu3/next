@@ -10,7 +10,10 @@ mod tests {
     #[test]
     fn autosync_and_no_autosync_conflict() {
         let result = Cli::try_parse_from(["next", "--autosync", "--no-autosync", "list"]);
-        assert!(result.is_err(), "--autosync and --no-autosync must conflict");
+        assert!(
+            result.is_err(),
+            "--autosync and --no-autosync must conflict"
+        );
     }
 
     #[test]
@@ -58,13 +61,19 @@ mod tests {
     #[test]
     fn autopull_and_no_autopull_conflict() {
         let result = Cli::try_parse_from(["next", "--autopull", "--no-autopull", "list"]);
-        assert!(result.is_err(), "--autopull and --no-autopull must conflict");
+        assert!(
+            result.is_err(),
+            "--autopull and --no-autopull must conflict"
+        );
     }
 
     #[test]
     fn autopush_and_no_autopush_conflict() {
         let result = Cli::try_parse_from(["next", "--autopush", "--no-autopush", "list"]);
-        assert!(result.is_err(), "--autopush and --no-autopush must conflict");
+        assert!(
+            result.is_err(),
+            "--autopush and --no-autopush must conflict"
+        );
     }
 
     #[test]

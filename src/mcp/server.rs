@@ -39,12 +39,18 @@ pub struct AppState {
 pub fn build_router(state: AppState) -> Router {
     let mcp_route = Router::new()
         .route("/", post(mcp_handler))
-        .layer(middleware::from_fn_with_state(state.clone(), require_mcp_bearer))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_mcp_bearer,
+        ))
         .with_state(state.clone());
 
     let webhook_route = Router::new()
         .route("/webhook/sync", post(webhook_handler))
-        .layer(middleware::from_fn_with_state(state.clone(), require_webhook_bearer))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_webhook_bearer,
+        ))
         .with_state(state.clone());
 
     Router::new()
@@ -56,10 +62,7 @@ pub fn build_router(state: AppState) -> Router {
 
 // ── MCP handler ───────────────────────────────────────────────────────────────
 
-async fn mcp_handler(
-    State(state): State<AppState>,
-    body: String,
-) -> Response {
+async fn mcp_handler(State(state): State<AppState>, body: String) -> Response {
     let req: JsonRpcRequest = match serde_json::from_str(&body) {
         Ok(r) => r,
         Err(_) => {
@@ -78,8 +81,8 @@ async fn mcp_handler(
 
     let response = match req.method.as_str() {
         "initialize" => handle_initialize(req.id, &state).await,
-        "tools/list"  => handle_tools_list(req.id),
-        "tools/call"  => handle_tools_call(req.id, req.params, &state).await,
+        "tools/list" => handle_tools_list(req.id),
+        "tools/call" => handle_tools_call(req.id, req.params, &state).await,
         other => JsonRpcResponse::method_not_found(req.id, other),
     };
 
@@ -108,7 +111,9 @@ async fn handle_initialize(id: Option<Value>, state: &AppState) -> JsonRpcRespon
 fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
     JsonRpcResponse::ok(
         id,
-        json!(ToolsListResult { tools: tools::all_tools() }),
+        json!(ToolsListResult {
+            tools: tools::all_tools()
+        }),
     )
 }
 

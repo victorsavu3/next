@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::core::{
-    error::{TaskError, Result},
+    error::{Result, TaskError},
     storage::{self, machine_state::update_machine_state},
 };
 
@@ -26,7 +26,9 @@ pub struct PluginRegistry {
     pub plugins: Vec<Plugin>,
 }
 
-fn default_enabled() -> bool { true }
+fn default_enabled() -> bool {
+    true
+}
 
 /// A single registered plugin and the tasks it watches.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,7 +128,9 @@ impl PluginRegistry {
             .plugins
             .iter_mut()
             .find(|p| p.name == name)
-            .ok_or_else(|| TaskError::Other(format!("unknown plugin {name:?} — register it first")))?;
+            .ok_or_else(|| {
+                TaskError::Other(format!("unknown plugin {name:?} — register it first"))
+            })?;
         if !plugin.tasks.contains(&task_id) {
             plugin.tasks.push(task_id);
         }
@@ -161,7 +165,9 @@ impl PluginRegistry {
 
     /// Iterates the plugins subscribed to `task_id`.
     pub fn subscribers(&self, task_id: Uuid) -> impl Iterator<Item = &Plugin> {
-        self.plugins.iter().filter(move |p| p.tasks.contains(&task_id))
+        self.plugins
+            .iter()
+            .filter(move |p| p.tasks.contains(&task_id))
     }
 }
 
@@ -174,7 +180,9 @@ impl PluginRegistry {
 /// Loads the registry from the combined `state.toml` (empty if no file yet).
 pub fn load(root: &Path) -> Result<PluginRegistry> {
     let machine = storage::load_machine_state(root)?;
-    Ok(PluginRegistry { plugins: machine.plugins })
+    Ok(PluginRegistry {
+        plugins: machine.plugins,
+    })
 }
 
 /// Mutates the plugin section in place, preserving the other state sections.
@@ -263,11 +271,13 @@ mod tests {
     fn round_trip_with_sync_fields() {
         let mut reg = PluginRegistry::default();
         reg.set_sync_command("forgejo", argv("next-forgejo sync"));
-        reg.set_default_sync_interval("forgejo", Some(43200)).unwrap();
+        reg.set_default_sync_interval("forgejo", Some(43200))
+            .unwrap();
         reg.set_sync_interval("forgejo", Some(7200)).unwrap();
         reg.set_enabled("forgejo", false).unwrap();
 
-        let loaded: PluginRegistry = toml::from_str(&toml::to_string_pretty(&reg).unwrap()).unwrap();
+        let loaded: PluginRegistry =
+            toml::from_str(&toml::to_string_pretty(&reg).unwrap()).unwrap();
         let p = &loaded.plugins[0];
         assert_eq!(p.sync_command, vec!["next-forgejo", "sync"]);
         assert_eq!(p.default_sync_interval_secs, Some(43200));
@@ -303,7 +313,11 @@ mod tests {
         reg.set_command("p", argv("new-cmd --flag"));
         assert_eq!(reg.plugins.len(), 1);
         assert_eq!(reg.plugins[0].command, vec!["new-cmd", "--flag"]);
-        assert_eq!(reg.plugins[0].tasks, vec![id], "subscriptions preserved on re-register");
+        assert_eq!(
+            reg.plugins[0].tasks,
+            vec![id],
+            "subscriptions preserved on re-register"
+        );
     }
 
     #[test]
@@ -335,7 +349,10 @@ mod tests {
 
         assert!(reg.unregister("p"));
         assert!(reg.plugins.is_empty());
-        assert!(!reg.unregister("p"), "removing a missing plugin returns false");
+        assert!(
+            !reg.unregister("p"),
+            "removing a missing plugin returns false"
+        );
     }
 
     #[test]
@@ -356,7 +373,11 @@ mod tests {
 
         reg.prune_task(id);
         assert_eq!(reg.subscribers(id).count(), 0);
-        assert_eq!(reg.subscribers(other).count(), 1, "unrelated subscription kept");
+        assert_eq!(
+            reg.subscribers(other).count(),
+            1,
+            "unrelated subscription kept"
+        );
     }
 
     #[test]

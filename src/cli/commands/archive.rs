@@ -39,7 +39,10 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         }
     }
     if !outcome.pruned.is_empty() {
-        println!("Pruned {} segment(s) to the cold tier:", outcome.pruned.len());
+        println!(
+            "Pruned {} segment(s) to the cold tier:",
+            outcome.pruned.len()
+        );
         for seg in &outcome.pruned {
             println!("  {seg}");
         }

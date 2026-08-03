@@ -3,10 +3,9 @@ use std::time::Duration;
 use anyhow::Context as _;
 use clap::Parser;
 use next::{
-    AppContext,
-    cli::{Cli, Command, commands},
     cli::commands::sync as sync_cmd,
-    core,
+    cli::{commands, Cli, Command},
+    core, AppContext,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -127,13 +126,24 @@ fn main() -> anyhow::Result<()> {
 
     let is_mutation = matches!(
         cmd_name,
-        "add" | "start" | "stop" | "done" | "cancel" | "edit" | "delete" | "move" | "tag" | "data" | "archive"
+        "add"
+            | "start"
+            | "stop"
+            | "done"
+            | "cancel"
+            | "edit"
+            | "delete"
+            | "move"
+            | "tag"
+            | "data"
+            | "archive"
     );
 
     // An explicit `next sync` always pulls and pushes, so a flag that disables
     // either half contradicts the command — fail fast with an actionable error
     // rather than silently ignoring the flag.
-    if cmd_name == "sync" && (cli_no_autosync || cli_offline || cli_no_autopull || cli_no_autopush) {
+    if cmd_name == "sync" && (cli_no_autosync || cli_offline || cli_no_autopull || cli_no_autopush)
+    {
         anyhow::bail!(
             "next sync cannot run with --no-autopull/--no-autopush/--no-autosync/--offline: \
              it always pulls and pushes"
@@ -199,7 +209,11 @@ fn main() -> anyhow::Result<()> {
     }
 
     if result.is_ok() && is_mutation && effective_autopush {
-        let sync_args = sync_cmd::Args { push_only: false, pull_only: false, quiet: true };
+        let sync_args = sync_cmd::Args {
+            push_only: false,
+            pull_only: false,
+            quiet: true,
+        };
         if let Err(e) = sync_cmd::run(sync_args, &mut ctx) {
             // Conflicts already printed their message inside `run`; the
             // mutation itself succeeded, so they never change its exit code.

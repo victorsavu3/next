@@ -6,7 +6,7 @@ use std::{
 
 use crate::core::{
     domain::{state::GlobalState, tag::TagMeta, task::Task},
-    error::{TaskError, Result},
+    error::{Result, TaskError},
     store::Store,
 };
 use serde::{Deserialize, Serialize};
@@ -42,7 +42,11 @@ impl TomlStore {
             fs::create_dir_all(state_dir)?;
         }
         let state_lock_path = crate::core::storage::state_lock_path(&state_path);
-        let mut this = Self { root, state_path, state_lock_path };
+        let mut this = Self {
+            root,
+            state_path,
+            state_lock_path,
+        };
         this.migrate_state_file()?;
         this.migrate_tag_descriptions()?;
         Ok(this)
@@ -117,7 +121,10 @@ impl TomlStore {
     /// Absolute path for the metadata file of `tag`.
     /// `@home/kitchen` → `<root>/tags/%40home/kitchen.toml`
     fn tag_file_path(&self, tag: &str) -> PathBuf {
-        self.tags_dir().join(format!("{}.toml", crate::core::storage::encode_tag_path(tag)))
+        self.tags_dir().join(format!(
+            "{}.toml",
+            crate::core::storage::encode_tag_path(tag)
+        ))
     }
 
     /// Acquires the exclusive repository-level lock.
@@ -248,9 +255,8 @@ impl TomlStore {
                 continue;
             }
             let content = fs::read_to_string(path.as_path())?;
-            let task = toml::from_str::<Task>(&content).map_err(|e| {
-                TaskError::Other(format!("parse error in {}: {e}", path.display()))
-            })?;
+            let task = toml::from_str::<Task>(&content)
+                .map_err(|e| TaskError::Other(format!("parse error in {}: {e}", path.display())))?;
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -289,7 +295,10 @@ fn walk_tags_dir(dir: &Path, root: &Path, result: &mut HashMap<String, TagMeta>)
                 // Try full TagMeta first; fall back to legacy single-field format.
                 let meta = toml::from_str::<TagMeta>(&content).unwrap_or_else(|_| {
                     toml::from_str::<LegacyTagEntry>(&content)
-                        .map(|le| TagMeta { description: Some(le.description), ..Default::default() })
+                        .map(|le| TagMeta {
+                            description: Some(le.description),
+                            ..Default::default()
+                        })
                         .unwrap_or_default()
                 });
                 if let Ok(rel) = path.strip_prefix(root) {
@@ -384,7 +393,10 @@ impl Store for TomlStore {
         // Takes the (re-entrant) state lock so this read is consistent with
         // concurrent writers and does not deadlock inside a held state
         // transaction. Keyed off this store's own `state_path`.
-        Ok(crate::core::storage::load_machine_state_at(self.state_path(), self.state_lock_path())?.global)
+        Ok(
+            crate::core::storage::load_machine_state_at(self.state_path(), self.state_lock_path())?
+                .global,
+        )
     }
 
     fn save_state(&mut self, state: &GlobalState) -> Result<()> {
@@ -408,7 +420,10 @@ impl Store for TomlStore {
         let content = fs::read_to_string(path.as_path())?;
         let meta = toml::from_str::<TagMeta>(&content).unwrap_or_else(|_| {
             toml::from_str::<LegacyTagEntry>(&content)
-                .map(|le| TagMeta { description: Some(le.description), ..Default::default() })
+                .map(|le| TagMeta {
+                    description: Some(le.description),
+                    ..Default::default()
+                })
                 .unwrap_or_default()
         });
         Ok(Some(meta))
@@ -440,7 +455,10 @@ impl Store for TomlStore {
             if dir == tags_dir {
                 break;
             }
-            if fs::read_dir(dir).map(|mut d| d.next().is_none()).unwrap_or(false) {
+            if fs::read_dir(dir)
+                .map(|mut d| d.next().is_none())
+                .unwrap_or(false)
+            {
                 let _ = fs::remove_dir(dir);
             }
             parent = dir.parent();
@@ -499,7 +517,10 @@ mod tests {
         task.notes = Some("Some notes".into());
         task.score_adjustment = 1.5;
         task.long_term = true;
-        task.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 7,
+            snap: None,
+        });
 
         store.save_task(&task).unwrap();
         let loaded = store.get_task(task.id).unwrap();
@@ -514,7 +535,10 @@ mod tests {
         assert!(loaded.long_term);
         assert!(matches!(
             loaded.recurrence,
-            Some(Recurrence::Completion { interval_days: 7, snap: None })
+            Some(Recurrence::Completion {
+                interval_days: 7,
+                snap: None
+            })
         ));
     }
 
@@ -662,7 +686,8 @@ mod tests {
             "active_contexts = [\"@work\"]\n",
         )
         .unwrap();
-        let store = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let store =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
         // Existing state fields must be untouched.
         let state = store.get_state().unwrap();
         assert_eq!(state.active_contexts, vec!["@work"]);
@@ -672,12 +697,9 @@ mod tests {
     #[test]
     fn migrate_empty_tag_descriptions_is_noop() {
         let dir = tempfile::TempDir::new().unwrap();
-        fs::write(
-            dir.path().join("state.toml"),
-            "[tag_descriptions]\n",
-        )
-        .unwrap();
-        let store = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        fs::write(dir.path().join("state.toml"), "[tag_descriptions]\n").unwrap();
+        let store =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
         assert!(store.list_tag_descriptions().unwrap().is_empty());
     }
 
@@ -693,17 +715,32 @@ mod tests {
         )
         .unwrap();
 
-        let store = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let store =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
 
         let descs = store.list_tag_descriptions().unwrap();
-        assert_eq!(descs.get("@work").map(String::as_str), Some("Tasks at the office"));
-        assert_eq!(descs.get("#printer").map(String::as_str), Some("Laser printer"));
+        assert_eq!(
+            descs.get("@work").map(String::as_str),
+            Some("Tasks at the office")
+        );
+        assert_eq!(
+            descs.get("#printer").map(String::as_str),
+            Some("Laser printer")
+        );
         assert_eq!(descs.get("python").map(String::as_str), Some("Python work"));
         assert_eq!(descs.len(), 3);
 
         // Per-tag files created on disk (@ → __context__, # → __resource__).
-        assert!(dir.path().join("tags").join("__context__work.toml").exists());
-        assert!(dir.path().join("tags").join("__resource__printer.toml").exists());
+        assert!(dir
+            .path()
+            .join("tags")
+            .join("__context__work.toml")
+            .exists());
+        assert!(dir
+            .path()
+            .join("tags")
+            .join("__resource__printer.toml")
+            .exists());
         assert!(dir.path().join("tags").join("python.toml").exists());
 
         // Legacy field stripped from state.toml.
@@ -725,15 +762,28 @@ mod tests {
         )
         .unwrap();
 
-        let store = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let store =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
 
         let descs = store.list_tag_descriptions().unwrap();
-        assert_eq!(descs.get("@home/kitchen").map(String::as_str), Some("Kitchen tasks"));
-        assert_eq!(descs.get("#laptop/personal").map(String::as_str), Some("Personal laptop"));
+        assert_eq!(
+            descs.get("@home/kitchen").map(String::as_str),
+            Some("Kitchen tasks")
+        );
+        assert_eq!(
+            descs.get("#laptop/personal").map(String::as_str),
+            Some("Personal laptop")
+        );
 
         // Hierarchical paths turn into real subdirectories (@ and # encoded).
-        assert!(dir.path().join("tags/__context__home/kitchen.toml").exists());
-        assert!(dir.path().join("tags/__resource__laptop/personal.toml").exists());
+        assert!(dir
+            .path()
+            .join("tags/__context__home/kitchen.toml")
+            .exists());
+        assert!(dir
+            .path()
+            .join("tags/__resource__laptop/personal.toml")
+            .exists());
     }
 
     #[test]
@@ -751,7 +801,8 @@ mod tests {
         )
         .unwrap();
 
-        let store = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let store =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
 
         let state = store.get_state().unwrap();
         assert_eq!(state.active_contexts, vec!["@work"]);
@@ -771,7 +822,8 @@ mod tests {
         drop(TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap());
 
         // Second open: no tag_descriptions in state.toml anymore; migration is a no-op.
-        let store = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let store =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
         let descs = store.list_tag_descriptions().unwrap();
         assert_eq!(descs.len(), 1);
         assert_eq!(descs.get("@work").map(String::as_str), Some("Work tasks"));

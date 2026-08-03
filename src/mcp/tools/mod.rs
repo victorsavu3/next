@@ -276,10 +276,18 @@ pub fn server_instructions(ctx: &TaskRepository) -> String {
         if state.active_contexts.is_empty() {
             out.push_str("- Active context: none (tasks from all contexts are shown)\n");
         } else {
-            let _ = writeln!(out, "- Active context: {}", state.active_contexts.join(", "));
+            let _ = writeln!(
+                out,
+                "- Active context: {}",
+                state.active_contexts.join(", ")
+            );
         }
         if !state.excluded_contexts.is_empty() {
-            let _ = writeln!(out, "- Excluded contexts: {}", state.excluded_contexts.join(", "));
+            let _ = writeln!(
+                out,
+                "- Excluded contexts: {}",
+                state.excluded_contexts.join(", ")
+            );
         }
         let mut unavailable: Vec<&String> = state
             .resources
@@ -297,7 +305,11 @@ pub fn server_instructions(ctx: &TaskRepository) -> String {
             let _ = writeln!(out, "- Unavailable resources: {}", names.join(", "));
         }
         if !state.active_users.is_empty() {
-            let _ = writeln!(out, "- Active user filter: {}", state.active_users.join(", "));
+            let _ = writeln!(
+                out,
+                "- Active user filter: {}",
+                state.active_users.join(", ")
+            );
         }
     }
 
@@ -405,15 +417,18 @@ fn call_tool(
     ctx: &mut TaskRepository,
     scheduler: &super::sync_manager::SyncScheduler,
 ) -> anyhow::Result<Value> {
-    let autosync = params.get("autosync").and_then(|v| v.as_bool()).unwrap_or(true);
+    let autosync = params
+        .get("autosync")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
 
     match tool_name {
         // ── Read-only tools (no sync) ────────────────────────────────────────
-        "list_tasks"   => tasks::list_tasks(params, ctx),
-        "get_task"     => tasks::get_task(params, ctx),
-        "get_state"    => state::get_state(params, ctx),
+        "list_tasks" => tasks::list_tasks(params, ctx),
+        "get_task" => tasks::get_task(params, ctx),
+        "get_state" => state::get_state(params, ctx),
         "get_forecast" => view::get_forecast(params, ctx),
-        "get_diff"     => state::get_diff(params, ctx),
+        "get_diff" => state::get_diff(params, ctx),
 
         // ── Mutation tools ────────────────────────────────────────────────────
         "add_task" => {
@@ -492,7 +507,11 @@ fn call_tool(
 
 /// Runs sync inline (autosync=true) or schedules a deferred sync (autosync=false).
 /// Sync errors are logged but don't fail the tool call.
-fn run_autosync(autosync: bool, ctx: &mut TaskRepository, scheduler: &super::sync_manager::SyncScheduler) {
+fn run_autosync(
+    autosync: bool,
+    ctx: &mut TaskRepository,
+    scheduler: &super::sync_manager::SyncScheduler,
+) {
     if autosync {
         if let Err(e) = do_sync(ctx) {
             tracing::error!(cmd = "mcp/autosync", "{e}");
@@ -515,23 +534,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         crate::core::test_git::init_test_repo(dir.path());
         let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let ctx =
+            TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 
     /// Errors include the full chain so callers can diagnose failures.
     #[test]
     fn sanitize_error_returns_full_chain() {
-        let io_err = std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "permission denied",
-        );
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied");
         let app_err = TaskError::Io(io_err);
-        let anyhow_err = anyhow::anyhow!(app_err)
-            .context("reading tasks/foo.toml".to_string());
+        let anyhow_err = anyhow::anyhow!(app_err).context("reading tasks/foo.toml".to_string());
 
         let msg = sanitize_error(&anyhow_err, "add_task");
-        assert!(msg.contains("permission denied"), "expected IO description, got: {msg}");
+        assert!(
+            msg.contains("permission denied"),
+            "expected IO description, got: {msg}"
+        );
     }
 
     /// User-facing errors include their full detail.
@@ -539,16 +558,28 @@ mod tests {
     fn sanitize_error_preserves_user_facing_errors() {
         let not_found = anyhow::anyhow!(TaskError::TaskNotFound("abc123".into()));
         let msg = sanitize_error(&not_found, "get_task");
-        assert!(msg.contains("abc123"), "task-not-found should be verbatim: {msg}");
-        assert!(msg.contains("task not found"), "expected 'task not found': {msg}");
+        assert!(
+            msg.contains("abc123"),
+            "task-not-found should be verbatim: {msg}"
+        );
+        assert!(
+            msg.contains("task not found"),
+            "expected 'task not found': {msg}"
+        );
 
         let ambiguous = anyhow::anyhow!(TaskError::AmbiguousId("ab".into(), 3));
         let msg = sanitize_error(&ambiguous, "get_task");
-        assert!(msg.contains("ambiguous"), "expected ambiguous id message: {msg}");
+        assert!(
+            msg.contains("ambiguous"),
+            "expected ambiguous id message: {msg}"
+        );
 
         let slug = anyhow::anyhow!(TaskError::SlugConflict("my-task".into()));
         let msg = sanitize_error(&slug, "add_task");
-        assert!(msg.contains("my-task"), "slug conflict should mention slug: {msg}");
+        assert!(
+            msg.contains("my-task"),
+            "slug conflict should mention slug: {msg}"
+        );
     }
 
     /// dispatch() surfaces a descriptive error result (is_error=true) when a
@@ -582,12 +613,27 @@ mod tests {
         let text = server_instructions(&ctx);
         assert!(!text.is_empty());
         // Conventions are always present.
-        assert!(text.contains("@context"), "missing context convention: {text}");
-        assert!(text.contains("#resource"), "missing resource convention: {text}");
-        assert!(text.contains("freeform"), "missing freeform convention: {text}");
+        assert!(
+            text.contains("@context"),
+            "missing context convention: {text}"
+        );
+        assert!(
+            text.contains("#resource"),
+            "missing resource convention: {text}"
+        );
+        assert!(
+            text.contains("freeform"),
+            "missing freeform convention: {text}"
+        );
         // No tags exist yet, so no catalog headings are emitted.
-        assert!(!text.contains("## Known contexts"), "unexpected catalog: {text}");
-        assert!(text.contains("Active context: none"), "missing active-context line: {text}");
+        assert!(
+            !text.contains("## Known contexts"),
+            "unexpected catalog: {text}"
+        );
+        assert!(
+            text.contains("Active context: none"),
+            "missing active-context line: {text}"
+        );
     }
 
     /// Known tags and their metadata appear in the snapshot, grouped by kind.
@@ -612,15 +658,27 @@ mod tests {
         .unwrap();
 
         let text = server_instructions(&ctx);
-        assert!(text.contains("## Known contexts"), "missing contexts heading: {text}");
+        assert!(
+            text.contains("## Known contexts"),
+            "missing contexts heading: {text}"
+        );
         assert!(text.contains("`@work`"), "missing @work entry: {text}");
-        assert!(text.contains("Office tasks"), "missing @work description: {text}");
+        assert!(
+            text.contains("Office tasks"),
+            "missing @work description: {text}"
+        );
         assert!(
             text.contains("[default priority: high]"),
             "missing priority annotation: {text}"
         );
-        assert!(text.contains("## Known resources"), "missing resources heading: {text}");
-        assert!(text.contains("`#printer`"), "missing #printer entry: {text}");
+        assert!(
+            text.contains("## Known resources"),
+            "missing resources heading: {text}"
+        );
+        assert!(
+            text.contains("`#printer`"),
+            "missing #printer entry: {text}"
+        );
     }
 
     /// Active context and unavailable resources are reflected in the snapshot.
@@ -628,11 +686,17 @@ mod tests {
     fn instructions_reflect_active_state() {
         let (_dir, mut ctx) = make_ctx();
         state::set_context(&json!({ "contexts": ["@work"] }), &mut ctx).unwrap();
-        state::set_resource(&json!({ "resource": "#printer", "available": false }), &mut ctx)
-            .unwrap();
+        state::set_resource(
+            &json!({ "resource": "#printer", "available": false }),
+            &mut ctx,
+        )
+        .unwrap();
 
         let text = server_instructions(&ctx);
-        assert!(text.contains("Active context: @work"), "missing active context: {text}");
+        assert!(
+            text.contains("Active context: @work"),
+            "missing active context: {text}"
+        );
         assert!(
             text.contains("Unavailable resources: #printer"),
             "missing unavailable resource: {text}"

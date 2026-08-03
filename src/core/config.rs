@@ -5,12 +5,24 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_FORECAST_HORIZON_DAYS: u32 = 90;
 pub const DEFAULT_NEXT_COUNT: usize = 10;
 
-fn default_forecast_horizon_days() -> u32 { DEFAULT_FORECAST_HORIZON_DAYS }
-fn default_next_count() -> usize { DEFAULT_NEXT_COUNT }
-fn default_autopull() -> bool { true }
-fn default_staleness_secs() -> u64 { 3600 }
-fn default_pull_timeout_secs() -> u64 { 10 }
-fn default_plugin_sync_default_secs() -> u64 { 86400 }
+fn default_forecast_horizon_days() -> u32 {
+    DEFAULT_FORECAST_HORIZON_DAYS
+}
+fn default_next_count() -> usize {
+    DEFAULT_NEXT_COUNT
+}
+fn default_autopull() -> bool {
+    true
+}
+fn default_staleness_secs() -> u64 {
+    3600
+}
+fn default_pull_timeout_secs() -> u64 {
+    10
+}
+fn default_plugin_sync_default_secs() -> u64 {
+    86400
+}
 
 // ── SyncConfig ────────────────────────────────────────────────────────────────
 

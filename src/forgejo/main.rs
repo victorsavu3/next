@@ -4,7 +4,9 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
-use next::forgejo::{config, hook, issues::ForgejoApi, reconcile, tasks::LibTaskStore, PLUGIN_NAME};
+use next::forgejo::{
+    config, hook, issues::ForgejoApi, reconcile, tasks::LibTaskStore, PLUGIN_NAME,
+};
 
 #[derive(Parser)]
 #[command(name = "next-forgejo", about = "Forgejo integration plugin for next")]
@@ -54,7 +56,10 @@ fn register() -> Result<()> {
     let cfg = config::load()?;
     let store = LibTaskStore::open(cfg.next_repo.as_deref())?;
     ensure_registered(store.repo_root())?;
-    println!("registered {PLUGIN_NAME} export hook for {}", store.repo_root().display());
+    println!(
+        "registered {PLUGIN_NAME} export hook for {}",
+        store.repo_root().display()
+    );
     Ok(())
 }
 

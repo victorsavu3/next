@@ -4,8 +4,8 @@ mod common;
 
 use chrono::NaiveDate;
 use next::core::archiver::run_archive_pass;
-use next::core::store::TaskQuery;
 use next::core::domain::task::Task;
+use next::core::store::TaskQuery;
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, day).unwrap()
@@ -61,7 +61,10 @@ fn archive_pass_moves_old_closed_tasks() {
     let store = env.ctx.repo.store();
     assert_eq!(store.list_tasks().unwrap().len(), 2);
     let archived = store
-        .query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() })
+        .query_tasks(&TaskQuery {
+            archived: true,
+            ..TaskQuery::unpaginated()
+        })
         .unwrap();
     assert_eq!(archived.total, 2);
     assert_eq!(store.get_task(old_done.id).unwrap().title, "Old done");
@@ -78,7 +81,10 @@ fn archive_pass_moves_old_closed_tasks() {
     drop(vcs2);
     assert_eq!(
         store2
-            .query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() })
+            .query_tasks(&TaskQuery {
+                archived: true,
+                ..TaskQuery::unpaginated()
+            })
             .unwrap()
             .total,
         2
@@ -126,8 +132,7 @@ fn archive_pass_seals_segments_at_cap() {
     assert_eq!(outcome.segments, vec!["archive/2025/10-003.toml"]);
 
     let entries =
-        next::core::storage::archive::read_segment(&root.join("archive/2025/10-003.toml"))
-            .unwrap();
+        next::core::storage::archive::read_segment(&root.join("archive/2025/10-003.toml")).unwrap();
     assert_eq!(entries.len(), 2);
 }
 
@@ -150,11 +155,10 @@ fn archived_tasks_keep_frozen_dates() {
     assert_eq!(after.created_at.timestamp(), before.created_at.timestamp());
 
     // The frozen dates live in the segment file itself.
-    let entries =
-        next::core::storage::archive::read_segment(
-            &env.ctx.repo.repo_root.join("archive/2025/09-001.toml"),
-        )
-        .unwrap();
+    let entries = next::core::storage::archive::read_segment(
+        &env.ctx.repo.repo_root.join("archive/2025/09-001.toml"),
+    )
+    .unwrap();
     assert_eq!(
         entries[0].created_at.unwrap().timestamp(),
         before.created_at.timestamp()
@@ -184,7 +188,10 @@ fn editing_archived_task_resurrects_it() {
     use next::core::service::{apply_edits, EditTaskParams};
     let edited = apply_edits(
         old.id,
-        EditTaskParams { title: Some("Buried, revised".into()), ..Default::default() },
+        EditTaskParams {
+            title: Some("Buried, revised".into()),
+            ..Default::default()
+        },
         today,
         &root,
         &mut *env.ctx.repo.store,
@@ -196,15 +203,20 @@ fn editing_archived_task_resurrects_it() {
     // Back on disk as an individual file; segment shrunk but intact.
     assert!(root.join("tasks/buried.toml").exists());
     let entries =
-        next::core::storage::archive::read_segment(&root.join("archive/2025/08-001.toml"))
-            .unwrap();
+        next::core::storage::archive::read_segment(&root.join("archive/2025/08-001.toml")).unwrap();
     assert_eq!(entries.len(), 1, "only the untouched task stays archived");
     assert_eq!(entries[0].task.id, old2.id);
 
     // Cache agrees: active again, still done-status, frozen created_at kept.
     let store = env.ctx.repo.store();
     assert_eq!(
-        store.query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        store
+            .query_tasks(&TaskQuery {
+                archived: true,
+                ..TaskQuery::unpaginated()
+            })
+            .unwrap()
+            .total,
         1
     );
     assert_eq!(
@@ -221,7 +233,13 @@ fn editing_archived_task_resurrects_it() {
         .current_dir(&root);
     // Strip hook-exported repo scoping so this inspects the temp repo even
     // when the suite runs under the pre-commit hook.
-    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+    ] {
         status_cmd.env_remove(var);
     }
     let dirty = status_cmd.output().unwrap();
@@ -236,8 +254,7 @@ fn editing_archived_task_resurrects_it() {
     assert_eq!(outcome.archived, 1);
     assert!(!root.join("tasks/buried.toml").exists());
     let entries =
-        next::core::storage::archive::read_segment(&root.join("archive/2025/08-001.toml"))
-            .unwrap();
+        next::core::storage::archive::read_segment(&root.join("archive/2025/08-001.toml")).unwrap();
     assert_eq!(entries.len(), 2, "re-archived into the same month segment");
 }
 
@@ -258,7 +275,10 @@ fn resurrecting_last_entry_removes_segment_file() {
     use next::core::service::{apply_edits, EditTaskParams};
     apply_edits(
         only.id,
-        EditTaskParams { notes: Some("back".into()), ..Default::default() },
+        EditTaskParams {
+            notes: Some("back".into()),
+            ..Default::default()
+        },
         today,
         &root,
         &mut *env.ctx.repo.store,
@@ -282,12 +302,23 @@ fn direct_save_and_delete_of_archived_task_are_rejected() {
     let mut edited = old.clone();
     edited.title = "Sneaky edit".into();
     let err = env.ctx.repo.store.save_task(&edited).unwrap_err();
-    assert!(err.to_string().contains("archived"), "unexpected error: {err}");
+    assert!(
+        err.to_string().contains("archived"),
+        "unexpected error: {err}"
+    );
 
     // A blind delete must not remove the whole segment.
     let err = env.ctx.repo.store.delete_task(old.id).unwrap_err();
-    assert!(err.to_string().contains("archived"), "unexpected error: {err}");
-    assert!(env.ctx.repo.repo_root.join("archive/2025/06-001.toml").exists());
+    assert!(
+        err.to_string().contains("archived"),
+        "unexpected error: {err}"
+    );
+    assert!(env
+        .ctx
+        .repo
+        .repo_root
+        .join("archive/2025/06-001.toml")
+        .exists());
 }
 
 #[test]
@@ -296,15 +327,26 @@ fn auto_archive_runs_once_per_day_during_sync() {
     // bare repo as origin.
     let remote = tempfile::TempDir::new().unwrap();
     let mut init_bare = std::process::Command::new("git");
-    init_bare.args(["init", "--bare", "-q"]).current_dir(remote.path());
-    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+    init_bare
+        .args(["init", "--bare", "-q"])
+        .current_dir(remote.path());
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+    ] {
         init_bare.env_remove(var);
     }
     assert!(init_bare.status().unwrap().success());
 
     let mut env = common::setup();
     let root = env.ctx.repo.repo_root.clone();
-    common::git(&root, &["remote", "add", "origin", remote.path().to_str().unwrap()]);
+    common::git(
+        &root,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
 
     let mut old = Task::new("Auto-archived");
     old.mark_done(d(2025, 5, 1));
@@ -323,9 +365,21 @@ fn auto_archive_runs_once_per_day_during_sync() {
     add_committed(&mut env, &old2);
     next::core::sync(&mut env.ctx.repo, false, false).unwrap();
     let state = next::core::sync_state::load(&root).unwrap();
-    assert_eq!(state.last_archive, Some(first_stamp), "throttled sync must not re-stamp");
     assert_eq!(
-        env.ctx.repo.store().query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        state.last_archive,
+        Some(first_stamp),
+        "throttled sync must not re-stamp"
+    );
+    assert_eq!(
+        env.ctx
+            .repo
+            .store()
+            .query_tasks(&TaskQuery {
+                archived: true,
+                ..TaskQuery::unpaginated()
+            })
+            .unwrap()
+            .total,
         1,
         "second task waits for the next day's pass"
     );
@@ -334,7 +388,15 @@ fn auto_archive_runs_once_per_day_during_sync() {
     next::core::sync_state::record_archive(&root, first_stamp - chrono::Duration::days(2)).unwrap();
     next::core::sync(&mut env.ctx.repo, false, false).unwrap();
     assert_eq!(
-        env.ctx.repo.store().query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        env.ctx
+            .repo
+            .store()
+            .query_tasks(&TaskQuery {
+                archived: true,
+                ..TaskQuery::unpaginated()
+            })
+            .unwrap()
+            .total,
         2
     );
 
@@ -347,7 +409,15 @@ fn auto_archive_runs_once_per_day_during_sync() {
     next::core::sync_state::record_archive(&root, first_stamp - chrono::Duration::days(2)).unwrap();
     next::core::sync(&mut env.ctx.repo, false, false).unwrap();
     assert_eq!(
-        env.ctx.repo.store().query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        env.ctx
+            .repo
+            .store()
+            .query_tasks(&TaskQuery {
+                archived: true,
+                ..TaskQuery::unpaginated()
+            })
+            .unwrap()
+            .total,
         2,
         "auto=false must not archive"
     );
@@ -391,7 +461,10 @@ fn prune_moves_segments_to_cold_tier() {
     // Cold tasks stay fully readable: archived query, id and slug lookups.
     let store = env.ctx.repo.store();
     let archived = store
-        .query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() })
+        .query_tasks(&TaskQuery {
+            archived: true,
+            ..TaskQuery::unpaginated()
+        })
         .unwrap();
     assert_eq!(archived.total, 2, "warm + cold both served");
     assert_eq!(store.get_task(ancient.id).unwrap().title, "Ancient");
@@ -399,13 +472,20 @@ fn prune_moves_segments_to_cold_tier() {
 
     // A fresh cache (fresh-clone situation) recovers cold rows from blobs.
     use next::core::store::Store as _;
-    let inner = next::core::storage::TomlStore::open(root.clone(), root.join("state.toml")).unwrap();
+    let inner =
+        next::core::storage::TomlStore::open(root.clone(), root.join("state.toml")).unwrap();
     let vcs = next::core::storage::GitBackend::open(&root).unwrap();
     let head = next::core::store::VcsBackend::head_hash(&vcs).unwrap();
     let store2 =
         next::core::storage::CachedStore::open(inner, root.join(".next-cold.db"), &head).unwrap();
     assert_eq!(
-        store2.query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        store2
+            .query_tasks(&TaskQuery {
+                archived: true,
+                ..TaskQuery::unpaginated()
+            })
+            .unwrap()
+            .total,
         2
     );
     assert_eq!(store2.get_task(ancient.id).unwrap().title, "Ancient");
@@ -442,7 +522,10 @@ fn editing_cold_task_resurrects_it_and_restores_segment() {
     use next::core::service::{apply_edits, EditTaskParams};
     let edited = apply_edits(
         frozen.id,
-        EditTaskParams { notes: Some("thawed".into()), ..Default::default() },
+        EditTaskParams {
+            notes: Some("thawed".into()),
+            ..Default::default()
+        },
         today,
         &root,
         &mut *env.ctx.repo.store,
@@ -453,17 +536,26 @@ fn editing_cold_task_resurrects_it_and_restores_segment() {
 
     // The task is active again; the rest of the segment returned to the
     // checkout (warm) and re-prunes on the next pass.
-    assert!(env.ctx.repo.store().list_tasks().unwrap().iter().any(|t| t.id == frozen.id));
-    let entries = next::core::storage::archive::read_segment(
-        &root.join("archive/2025/02-001.toml"),
-    )
-    .unwrap();
+    assert!(env
+        .ctx
+        .repo
+        .store()
+        .list_tasks()
+        .unwrap()
+        .iter()
+        .any(|t| t.id == frozen.id));
+    let entries =
+        next::core::storage::archive::read_segment(&root.join("archive/2025/02-001.toml")).unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].task.id, neighbour.id);
 
     let outcome = run_archive_pass(&mut env.ctx.repo, today).unwrap();
     assert_eq!(outcome.archived, 1, "the thawed task re-archives");
-    assert_eq!(outcome.pruned, vec!["archive/2025/02-001.toml"], "the restored segment re-prunes");
+    assert_eq!(
+        outcome.pruned,
+        vec!["archive/2025/02-001.toml"],
+        "the restored segment re-prunes"
+    );
     let manifest = next::core::storage::archive::read_manifest(&root).unwrap();
     assert_eq!(manifest.len(), 1, "last manifest line per path wins");
 }
@@ -485,13 +577,18 @@ fn external_prune_reconciles_incrementally() {
     old.mark_done(d(2025, 1, 5));
     add_committed(&mut env, &old);
     // Archive (warm) first, without pruning, on "this" machine's view.
-    std::fs::write(root.join("config/archive.toml"), "archive_after_days = 180\n").unwrap();
+    std::fs::write(
+        root.join("config/archive.toml"),
+        "archive_after_days = 180\n",
+    )
+    .unwrap();
     run_archive_pass(&mut env.ctx.repo, today).unwrap();
 
     // A second store over the same repo — the "other machine" whose cache
     // must pick the prune up via the incremental reconcile.
     use next::core::store::Store as _;
-    let inner = next::core::storage::TomlStore::open(root.clone(), root.join("state.toml")).unwrap();
+    let inner =
+        next::core::storage::TomlStore::open(root.clone(), root.join("state.toml")).unwrap();
     let vcs = next::core::storage::GitBackend::open(&root).unwrap();
     let head = next::core::store::VcsBackend::head_hash(&vcs).unwrap();
     let mut other =
@@ -513,7 +610,13 @@ fn external_prune_reconciles_incrementally() {
     other.after_pull(&new_head).unwrap();
     assert_eq!(other.get_task(old.id).unwrap().title, "Elsewhere-pruned");
     assert_eq!(
-        other.query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        other
+            .query_tasks(&TaskQuery {
+                archived: true,
+                ..TaskQuery::unpaginated()
+            })
+            .unwrap()
+            .total,
         1
     );
 }
@@ -546,11 +649,18 @@ fn pruned_segment_numbers_are_never_reused() {
     let outcome = run_archive_pass(&mut env.ctx.repo, today).unwrap();
     assert_eq!(outcome.archived, 1);
     assert_eq!(outcome.segments, vec!["archive/2025/04-002.toml"]);
-    assert_eq!(outcome.pruned, vec!["archive/2025/04-002.toml"], "and it prunes in turn");
+    assert_eq!(
+        outcome.pruned,
+        vec!["archive/2025/04-002.toml"],
+        "and it prunes in turn"
+    );
 
     let manifest = next::core::storage::archive::read_manifest(&root).unwrap();
     let paths: Vec<_> = manifest.iter().map(|p| p.path.as_str()).collect();
-    assert_eq!(paths, vec!["archive/2025/04-001.toml", "archive/2025/04-002.toml"]);
+    assert_eq!(
+        paths,
+        vec!["archive/2025/04-001.toml", "archive/2025/04-002.toml"]
+    );
 
     // Both cold segments' tasks remain reachable.
     let store = env.ctx.repo.store();
@@ -605,7 +715,13 @@ fn cold_tasks_recover_inside_a_partial_clone() {
     let (store, _vcs) = next::core::storage::open(clone.clone()).unwrap();
     assert_eq!(store.get_task(cold.id).unwrap().title, "Cold in clone");
     assert_eq!(
-        store.query_tasks(&TaskQuery { archived: true, ..TaskQuery::unpaginated() }).unwrap().total,
+        store
+            .query_tasks(&TaskQuery {
+                archived: true,
+                ..TaskQuery::unpaginated()
+            })
+            .unwrap()
+            .total,
         1
     );
     assert_eq!(store.list_tasks().unwrap().len(), 1, "open task is active");

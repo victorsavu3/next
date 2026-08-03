@@ -1,7 +1,7 @@
-use chrono::Local;
-use crate::core::recurrence::parse_recurrence;
 use crate::core::domain::date_parse::parse_date;
+use crate::core::recurrence::parse_recurrence;
 use crate::core::service::{create_task, CreateTaskParams};
+use chrono::Local;
 
 use crate::AppContext;
 
@@ -84,7 +84,10 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
 
     let due = args.due.map(|expr| parse_date(&expr, today)).transpose()?;
-    let start = args.start.map(|expr| parse_date(&expr, today)).transpose()?;
+    let start = args
+        .start
+        .map(|expr| parse_date(&expr, today))
+        .transpose()?;
 
     let anchor = start.or(due).unwrap_or(today);
     let recurrence = parse_recurrence(

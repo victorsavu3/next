@@ -34,7 +34,7 @@ use std::thread::ThreadId;
 
 use fs4::FileExt;
 
-use crate::core::error::{TaskError, Result};
+use crate::core::error::{Result, TaskError};
 
 /// In-process gate guarding one lock file's OS lock.
 struct Gate {
@@ -262,10 +262,18 @@ mod tests {
 
         // Give the waiter a chance to block on the held lock.
         std::thread::sleep(Duration::from_millis(50));
-        assert_eq!(held.load(Ordering::SeqCst), 0, "waiter must block while held");
+        assert_eq!(
+            held.load(Ordering::SeqCst),
+            0,
+            "waiter must block while held"
+        );
 
         drop(outer);
         waiter.join().unwrap();
-        assert_eq!(held.load(Ordering::SeqCst), 1, "waiter proceeds after release");
+        assert_eq!(
+            held.load(Ordering::SeqCst),
+            1,
+            "waiter proceeds after release"
+        );
     }
 }

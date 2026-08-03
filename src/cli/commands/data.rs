@@ -1,5 +1,5 @@
-use crate::core::parse_value;
 use crate::core::domain::task::validate_key;
+use crate::core::parse_value;
 use crate::{core::resolve::resolve_task_id, AppContext};
 
 #[derive(clap::Args, Debug)]
@@ -67,7 +67,13 @@ fn set(ctx: &mut AppContext, args: SetArgs) -> anyhow::Result<()> {
             &[task_path],
             &format!("next: data set {} {} on {}", args.key, value, task.title),
         )?;
-        tracing::info!(cmd = "data", "[{}] set {}={}", &task.id.to_string()[..8], args.key, value);
+        tracing::info!(
+            cmd = "data",
+            "[{}] set {}={}",
+            &task.id.to_string()[..8],
+            args.key,
+            value
+        );
         Ok(())
     })?;
     ctx.repo.record_task_event("data", id);
@@ -83,7 +89,11 @@ fn unset(ctx: &mut AppContext, args: UnsetArgs) -> anyhow::Result<()> {
         let mut task = store.get_task(id)?;
 
         if !task.data.contains_key(&args.key) {
-            anyhow::bail!("task [{}] has no data key {:?}", &task.id.to_string()[..8], args.key);
+            anyhow::bail!(
+                "task [{}] has no data key {:?}",
+                &task.id.to_string()[..8],
+                args.key
+            );
         }
         task.data.remove(&args.key);
 
@@ -93,7 +103,12 @@ fn unset(ctx: &mut AppContext, args: UnsetArgs) -> anyhow::Result<()> {
             &[task_path],
             &format!("next: data unset {} on {}", args.key, task.title),
         )?;
-        tracing::info!(cmd = "data", "[{}] unset {}", &task.id.to_string()[..8], args.key);
+        tracing::info!(
+            cmd = "data",
+            "[{}] unset {}",
+            &task.id.to_string()[..8],
+            args.key
+        );
         Ok(())
     })?;
     ctx.repo.record_task_event("data", id);
@@ -106,10 +121,13 @@ fn get(ctx: &mut AppContext, args: GetArgs) -> anyhow::Result<()> {
     let id = resolve_task_id(&*ctx.repo.store, &args.id)?;
     let task = ctx.repo.store.get_task(id)?;
 
-    let value = task
-        .data
-        .get(&args.key)
-        .ok_or_else(|| anyhow::anyhow!("task [{}] has no data key {:?}", &task.id.to_string()[..8], args.key))?;
+    let value = task.data.get(&args.key).ok_or_else(|| {
+        anyhow::anyhow!(
+            "task [{}] has no data key {:?}",
+            &task.id.to_string()[..8],
+            args.key
+        )
+    })?;
 
     println!("{value}");
     Ok(())

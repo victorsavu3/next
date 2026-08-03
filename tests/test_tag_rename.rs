@@ -87,7 +87,11 @@ fn renames_active_tasks_descendants_and_metadata() {
 
     assert_eq!(tags_of(&env, child.id), vec!["@ai/next"]);
     assert_eq!(tags_of(&env, grandchild.id), vec!["@ai/next/mcp"]);
-    assert_eq!(tags_of(&env, parent.id), vec!["@ai", "python"], "ancestor untouched");
+    assert_eq!(
+        tags_of(&env, parent.id),
+        vec!["@ai", "python"],
+        "ancestor untouched"
+    );
     assert_eq!(
         tags_of(&env, unrelated.id),
         vec!["@aim", "@ai-other"],
@@ -140,7 +144,10 @@ fn renames_archived_tasks_in_warm_segments() {
 
     // The segment file on disk carries the new tag…
     let segment = std::fs::read_to_string(root.join("archive/2025/11-001.toml")).unwrap();
-    assert!(segment.contains("@ai/next"), "segment not rewritten: {segment}");
+    assert!(
+        segment.contains("@ai/next"),
+        "segment not rewritten: {segment}"
+    );
     assert!(!segment.contains("task-manager"));
 
     // …and so does the cache, for both direct lookups and archived queries.
@@ -171,7 +178,10 @@ fn renames_archived_tasks_in_warm_segments() {
 
     // A rebuilt cache (fresh clone) agrees with what was written.
     let (store2, _vcs2) = next::core::storage::open(root.clone()).unwrap();
-    assert_eq!(store2.get_task(archived.id).unwrap().tags, vec!["@ai/next", "python"]);
+    assert_eq!(
+        store2.get_task(archived.id).unwrap().tags,
+        vec!["@ai/next", "python"]
+    );
 }
 
 #[test]
@@ -231,10 +241,17 @@ fn updates_machine_local_state() {
         .unwrap();
 
     let outcome = rename_tag(&mut env.ctx.repo, "@ai/task-manager", "@ai/next", false).unwrap();
-    assert_eq!(outcome.state_fields, vec!["active_contexts", "excluded_contexts"]);
+    assert_eq!(
+        outcome.state_fields,
+        vec!["active_contexts", "excluded_contexts"]
+    );
 
     let state = env.ctx.repo.store().get_state().unwrap();
-    assert_eq!(state.active_contexts, vec!["@ai/next"], "active context not orphaned");
+    assert_eq!(
+        state.active_contexts,
+        vec!["@ai/next"],
+        "active context not orphaned"
+    );
     assert_eq!(state.excluded_contexts, vec!["@ai/next/mcp", "@work"]);
 }
 
@@ -258,8 +275,16 @@ fn renames_resource_availability_keys() {
     assert_eq!(outcome.state_fields, vec!["resources"]);
 
     let state = env.ctx.repo.store().get_state().unwrap();
-    assert_eq!(state.resources.get("hq/printer"), Some(&false), "keyed by bare name");
-    assert_eq!(state.resources.get("garage"), Some(&false), "unrelated key kept");
+    assert_eq!(
+        state.resources.get("hq/printer"),
+        Some(&false),
+        "keyed by bare name"
+    );
+    assert_eq!(
+        state.resources.get("garage"),
+        Some(&false),
+        "unrelated key kept"
+    );
     assert!(!state.resources.contains_key("office/printer"));
     assert!(!state.is_resource_available("#hq/printer"));
 }
@@ -271,9 +296,19 @@ fn rejects_existing_destination_without_merge() {
     add_committed(&mut env, &tagged("New", &["@new"]));
 
     let err = rename_tag(&mut env.ctx.repo, "@old", "@new", false).unwrap_err();
-    assert!(err.to_string().contains("already exists"), "unexpected error: {err}");
-    assert!(err.to_string().contains("--merge"), "error should point at the way out");
-    assert_eq!(git_status(&env.ctx.repo.repo_root), "", "a refused rename changes nothing");
+    assert!(
+        err.to_string().contains("already exists"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        err.to_string().contains("--merge"),
+        "error should point at the way out"
+    );
+    assert_eq!(
+        git_status(&env.ctx.repo.repo_root),
+        "",
+        "a refused rename changes nothing"
+    );
 }
 
 #[test]
@@ -305,7 +340,11 @@ fn merge_folds_tag_into_existing_destination() {
     assert_eq!(outcome.metas_dropped, vec!["@old".to_string()]);
     assert!(outcome.metas_moved.is_empty());
 
-    assert_eq!(tags_of(&env, both.id), vec!["@new", "python"], "no duplicate tag");
+    assert_eq!(
+        tags_of(&env, both.id),
+        vec!["@new", "python"],
+        "no duplicate tag"
+    );
     assert_eq!(tags_of(&env, only_old.id), vec!["@new"]);
     let store = env.ctx.repo.store();
     assert_eq!(
@@ -334,7 +373,10 @@ fn rejects_kind_changes_and_self_renames() {
             "renaming {old} to {new}: unexpected error: {err}"
         );
     }
-    assert_eq!(tags_of(&env, env.ctx.repo.store().list_tasks().unwrap()[0].id), vec!["@work"]);
+    assert_eq!(
+        tags_of(&env, env.ctx.repo.store().list_tasks().unwrap()[0].id),
+        vec!["@work"]
+    );
 }
 
 #[test]

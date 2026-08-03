@@ -64,7 +64,10 @@ pub fn load_archive_config(root: &Path) -> ArchiveConfig {
     match toml::from_str(&content) {
         Ok(cfg) => cfg,
         Err(e) => {
-            tracing::warn!("failed to parse {}: {e}; using default archive policy", path.display());
+            tracing::warn!(
+                "failed to parse {}: {e}; using default archive policy",
+                path.display()
+            );
             ArchiveConfig::default()
         }
     }
@@ -98,7 +101,12 @@ pub fn is_segment_path(rel_path: &str) -> bool {
 /// `archive/2026/07-003.toml`. `n` is 1-based.
 pub fn segment_rel_path(date: chrono::NaiveDate, n: u32) -> String {
     use chrono::Datelike as _;
-    format!("archive/{:04}/{:02}-{:03}.toml", date.year(), date.month(), n)
+    format!(
+        "archive/{:04}/{:02}-{:03}.toml",
+        date.year(),
+        date.month(),
+        n
+    )
 }
 
 /// Reads a segment file into its entries. A missing file is an empty segment.
@@ -113,8 +121,8 @@ pub fn read_segment(path: &Path) -> Result<Vec<ArchivedTask>> {
 
 /// Parses segment content (e.g. fetched from a git blob for the cold tier).
 pub fn parse_segment(content: &str) -> Result<Vec<ArchivedTask>> {
-    let file: SegmentFile = toml::from_str(content)
-        .map_err(|e| TaskError::Other(format!("parse segment: {e}")))?;
+    let file: SegmentFile =
+        toml::from_str(content).map_err(|e| TaskError::Other(format!("parse segment: {e}")))?;
     Ok(file.task)
 }
 
@@ -211,9 +219,7 @@ pub fn write_segment(path: &Path, mut entries: Vec<ArchivedTask>) -> Result<()> 
             Err(e) => return Err(TaskError::Other(format!("remove {}: {e}", path.display()))),
         }
     }
-    entries.sort_by(|a, b| {
-        (a.task.completed_at, a.task.id).cmp(&(b.task.completed_at, b.task.id))
-    });
+    entries.sort_by_key(|e| (e.task.completed_at, e.task.id));
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| TaskError::Other(format!("create {}: {e}", parent.display())))?;
@@ -311,7 +317,11 @@ mod tests {
     fn empty_segment_removes_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("seg.toml");
-        write_segment(&path, vec![archived("X", NaiveDate::from_ymd_opt(2026, 3, 1))]).unwrap();
+        write_segment(
+            &path,
+            vec![archived("X", NaiveDate::from_ymd_opt(2026, 3, 1))],
+        )
+        .unwrap();
         assert!(path.exists());
         write_segment(&path, Vec::new()).unwrap();
         assert!(!path.exists());
@@ -322,7 +332,9 @@ mod tests {
     #[test]
     fn read_missing_segment_is_empty() {
         let dir = tempfile::TempDir::new().unwrap();
-        assert!(read_segment(&dir.path().join("nope.toml")).unwrap().is_empty());
+        assert!(read_segment(&dir.path().join("nope.toml"))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -339,12 +351,23 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let p1 = dir.path().join("archive/2025/12-001.toml");
         let p2 = dir.path().join("archive/2026/01-001.toml");
-        write_segment(&p1, vec![archived("A", NaiveDate::from_ymd_opt(2025, 12, 1))]).unwrap();
-        write_segment(&p2, vec![archived("B", NaiveDate::from_ymd_opt(2026, 1, 1))]).unwrap();
+        write_segment(
+            &p1,
+            vec![archived("A", NaiveDate::from_ymd_opt(2025, 12, 1))],
+        )
+        .unwrap();
+        write_segment(
+            &p2,
+            vec![archived("B", NaiveDate::from_ymd_opt(2026, 1, 1))],
+        )
+        .unwrap();
 
         let found = segment_paths(dir.path()).unwrap();
         let rels: Vec<_> = found.iter().map(|(r, _)| r.as_str()).collect();
-        assert_eq!(rels, vec!["archive/2025/12-001.toml", "archive/2026/01-001.toml"]);
+        assert_eq!(
+            rels,
+            vec!["archive/2025/12-001.toml", "archive/2026/01-001.toml"]
+        );
     }
 
     #[test]

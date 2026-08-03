@@ -1,8 +1,8 @@
-use chrono::Local;
 use crate::core::{domain::filter, listing, scoring};
+use chrono::Local;
 
-use crate::{cli::render, core::FilterArgs};
 use crate::AppContext;
+use crate::{cli::render, core::FilterArgs};
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -100,7 +100,14 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let filtered = filter::apply(candidates.clone(), &filter_set, &state, today);
     let pool = listing::extend_with_parents(ctx.repo.store(), candidates)?;
     let task_dates = ctx.repo.task_git_dates_for(&pool);
-    let scored = scoring::score_and_sort(filtered, &pool, today, &ctx.repo.scoring, &tag_metas, &task_dates);
+    let scored = scoring::score_and_sort(
+        filtered,
+        &pool,
+        today,
+        &ctx.repo.scoring,
+        &tag_metas,
+        &task_dates,
+    );
 
     // Precedence: --page-size, then the legacy --limit / list_limit caps.
     let page_size = args

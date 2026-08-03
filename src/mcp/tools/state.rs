@@ -6,15 +6,25 @@ fn strings_param(params: &Value, key: &str) -> Vec<String> {
     params
         .get(key)
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 // ── sync ──────────────────────────────────────────────────────────────────────
 
 pub fn sync(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
-    let push_only = params.get("push_only").and_then(|v| v.as_bool()).unwrap_or(false);
-    let pull_only = params.get("pull_only").and_then(|v| v.as_bool()).unwrap_or(false);
+    let push_only = params
+        .get("push_only")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let pull_only = params
+        .get("pull_only")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     if !push_only {
         match ctx.vcs.pull()? {
@@ -75,7 +85,12 @@ pub fn set_context(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<V
         store.save_state(&state)?;
         Ok(state)
     })?;
-    tracing::info!(cmd = "mcp/context", "active={:?} excluded={:?}", state.active_contexts, state.excluded_contexts);
+    tracing::info!(
+        cmd = "mcp/context",
+        "active={:?} excluded={:?}",
+        state.active_contexts,
+        state.excluded_contexts
+    );
     Ok(serde_json::to_value(&state)?)
 }
 
@@ -152,7 +167,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         crate::core::test_git::init_test_repo(dir.path());
         let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
-        let ctx = TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        let ctx =
+            TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
         (dir, ctx)
     }
 
@@ -174,11 +190,18 @@ mod tests {
     #[test]
     fn set_resource() {
         let (_dir, mut ctx) = make_ctx();
-        super::set_resource(&json!({ "resource": "#printer", "available": false }), &mut ctx).unwrap();
+        super::set_resource(
+            &json!({ "resource": "#printer", "available": false }),
+            &mut ctx,
+        )
+        .unwrap();
         let state = get_state(&json!({}), &mut ctx).unwrap();
         // Key is stored bare (without `#`) so it matches is_resource_available's lookup.
         assert_eq!(state["resources"]["printer"], false);
-        assert!(state["resources"].get("#printer").is_none(), "key must not carry a '#' prefix");
+        assert!(
+            state["resources"].get("#printer").is_none(),
+            "key must not carry a '#' prefix"
+        );
     }
 
     /// Regression: a resource marked unavailable via MCP must actually be
@@ -187,7 +210,11 @@ mod tests {
     #[test]
     fn set_resource_actually_filters() {
         let (_dir, mut ctx) = make_ctx();
-        super::set_resource(&json!({ "resource": "#printer", "available": false }), &mut ctx).unwrap();
+        super::set_resource(
+            &json!({ "resource": "#printer", "available": false }),
+            &mut ctx,
+        )
+        .unwrap();
         let state = ctx.store.get_state().unwrap();
         assert!(!state.is_resource_available("#printer"));
     }
@@ -195,7 +222,11 @@ mod tests {
     #[test]
     fn set_resource_requires_hash_prefix() {
         let (_dir, mut ctx) = make_ctx();
-        let err = super::set_resource(&json!({ "resource": "printer", "available": true }), &mut ctx).unwrap_err();
+        let err = super::set_resource(
+            &json!({ "resource": "printer", "available": true }),
+            &mut ctx,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("'#'"));
     }
 

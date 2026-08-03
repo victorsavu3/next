@@ -4,15 +4,10 @@
 /// table), then calls `next::core::storage::open()` to simulate a fresh process opening an
 /// existing repository.  The migration runs automatically during `open()`, so these
 /// tests verify the end-to-end behaviour through the full `CachedStore` stack.
-use std::{
-    collections::HashMap,
-    fs,
-    path::Path,
-    process::Command,
-};
+use std::{collections::HashMap, fs, path::Path, process::Command};
 
-use next::core::store::Store as _;
 use next::core::storage::CachedStore;
+use next::core::store::Store as _;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -25,7 +20,13 @@ fn init_git(dir: &Path) {
     let run = |args: &[&str]| {
         let mut cmd = Command::new("git");
         cmd.args(args).current_dir(dir);
-        for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+        ] {
             cmd.env_remove(var);
         }
         let status = cmd.status().unwrap();
@@ -122,7 +123,10 @@ fn migration_creates_per_tag_toml_files() {
 
     let work_path = dir.path().join("tags").join("__context__work.toml");
     let python_path = dir.path().join("tags").join("python.toml");
-    assert!(work_path.exists(), "tags/__context__work.toml should be created");
+    assert!(
+        work_path.exists(),
+        "tags/__context__work.toml should be created"
+    );
     assert!(python_path.exists(), "tags/python.toml should be created");
 }
 
@@ -139,16 +143,29 @@ fn migration_handles_hierarchical_tags() {
     let store = open(&dir);
 
     assert_eq!(
-        store.get_tag_description("@home/kitchen").unwrap().as_deref(),
+        store
+            .get_tag_description("@home/kitchen")
+            .unwrap()
+            .as_deref(),
         Some("Kitchen tasks")
     );
     assert_eq!(
-        store.get_tag_description("@work/frontend").unwrap().as_deref(),
+        store
+            .get_tag_description("@work/frontend")
+            .unwrap()
+            .as_deref(),
         Some("Frontend work")
     );
 
-    let kitchen_path = dir.path().join("tags").join("__context__home").join("kitchen.toml");
-    assert!(kitchen_path.exists(), "tags/__context__home/kitchen.toml should be created");
+    let kitchen_path = dir
+        .path()
+        .join("tags")
+        .join("__context__home")
+        .join("kitchen.toml");
+    assert!(
+        kitchen_path.exists(),
+        "tags/__context__home/kitchen.toml should be created"
+    );
 }
 
 #[test]
@@ -218,11 +235,7 @@ fn migration_with_empty_tag_descriptions_is_noop() {
     let dir = TempDir::new().unwrap();
     init_git(dir.path());
 
-    fs::write(
-        dir.path().join("state.toml"),
-        "[tag_descriptions]\n",
-    )
-    .unwrap();
+    fs::write(dir.path().join("state.toml"), "[tag_descriptions]\n").unwrap();
 
     let store = open(&dir);
     let all = store.list_tag_descriptions().unwrap();
@@ -244,8 +257,14 @@ fn migration_list_returns_all_migrated_descriptions() {
     let all = store.list_tag_descriptions().unwrap();
 
     assert_eq!(all.get("@work").map(String::as_str), Some("Work tasks"));
-    assert_eq!(all.get("#printer").map(String::as_str), Some("Office printer"));
-    assert_eq!(all.get("python").map(String::as_str), Some("Python projects"));
+    assert_eq!(
+        all.get("#printer").map(String::as_str),
+        Some("Office printer")
+    );
+    assert_eq!(
+        all.get("python").map(String::as_str),
+        Some("Python projects")
+    );
     assert_eq!(all.len(), 3);
 }
 

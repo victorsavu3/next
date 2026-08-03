@@ -42,7 +42,10 @@ pub fn parse_config_file(path: &Path) -> Config {
     match toml::from_str::<Config>(&content) {
         Ok(cfg) => cfg,
         Err(e) => {
-            eprintln!("warning: failed to parse config file {}: {e}", path.display());
+            eprintln!(
+                "warning: failed to parse config file {}: {e}",
+                path.display()
+            );
             Config::default()
         }
     }
@@ -71,5 +74,9 @@ pub fn open_repository(root: PathBuf, config: &Config) -> anyhow::Result<TaskRep
     let (store, vcs) =
         crate::core::storage::open(root.clone()).context("failed to open local task store")?;
     let vcs = vcs.with_subprocess(config.sync.git_subprocess);
-    Ok(TaskRepository::with_parts(Box::new(store), Box::new(vcs), root))
+    Ok(TaskRepository::with_parts(
+        Box::new(store),
+        Box::new(vcs),
+        root,
+    ))
 }

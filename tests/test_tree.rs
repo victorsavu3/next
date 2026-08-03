@@ -26,13 +26,21 @@ fn add_args(title: &str) -> add::Args {
 }
 
 fn tree_args(all: bool) -> tree::Args {
-    tree::Args { all, closed: false, json: false }
+    tree::Args {
+        all,
+        closed: false,
+        json: false,
+    }
 }
 
 fn capture_tree_closed(env: &common::TestEnv) -> String {
     let mut buf: Vec<u8> = Vec::new();
     tree::run_with_writer(
-        tree::Args { all: false, closed: true, json: false },
+        tree::Args {
+            all: false,
+            closed: true,
+            json: false,
+        },
         &env.ctx,
         &mut buf,
     )
@@ -111,7 +119,11 @@ fn tree_excludes_done_tasks_by_default() {
     add::run(add_args("Open task"), &mut env.ctx).unwrap();
 
     done::run(
-        done::Args { id: "done-task".into(), completed_at: None, json: false },
+        done::Args {
+            id: "done-task".into(),
+            completed_at: None,
+            json: false,
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -138,7 +150,11 @@ fn tree_all_includes_done_tasks() {
     )
     .unwrap();
     done::run(
-        done::Args { id: "done-task".into(), completed_at: None, json: false },
+        done::Args {
+            id: "done-task".into(),
+            completed_at: None,
+            json: false,
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -154,7 +170,15 @@ fn tree_all_includes_done_tasks() {
 fn tree_json_output() {
     let mut env = common::setup();
     add::run(add_args("Task JSON"), &mut env.ctx).unwrap();
-    tree::run(tree::Args { all: false, closed: false, json: true }, &env.ctx).unwrap();
+    tree::run(
+        tree::Args {
+            all: false,
+            closed: false,
+            json: true,
+        },
+        &env.ctx,
+    )
+    .unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -175,9 +199,18 @@ fn context_single_tag_appears_in_section() {
     .unwrap();
 
     let out = capture_tree(&env, false);
-    assert!(out.contains("── @work ──"), "expected @work section, got:\n{out}");
-    assert!(out.contains("Work task"), "expected task title, got:\n{out}");
-    assert!(!out.contains("No context"), "unexpected No context section:\n{out}");
+    assert!(
+        out.contains("── @work ──"),
+        "expected @work section, got:\n{out}"
+    );
+    assert!(
+        out.contains("Work task"),
+        "expected task title, got:\n{out}"
+    );
+    assert!(
+        !out.contains("No context"),
+        "unexpected No context section:\n{out}"
+    );
 }
 
 /// A task with no context tag appears under "No context".
@@ -187,8 +220,14 @@ fn no_context_task_appears_in_no_context_section() {
     add::run(add_args("Plain task"), &mut env.ctx).unwrap();
 
     let out = capture_tree(&env, false);
-    assert!(out.contains("── No context ──"), "expected No context section, got:\n{out}");
-    assert!(out.contains("Plain task"), "expected task title, got:\n{out}");
+    assert!(
+        out.contains("── No context ──"),
+        "expected No context section, got:\n{out}"
+    );
+    assert!(
+        out.contains("Plain task"),
+        "expected task title, got:\n{out}"
+    );
 }
 
 /// A task with a nested context tag (@work/frontend) appears under @work/frontend
@@ -215,7 +254,10 @@ fn nested_context_most_specific_wins() {
         !out.contains("── @work ──"),
         "unexpected @work section (task should only be in @work/frontend):\n{out}"
     );
-    assert!(out.contains("Frontend task"), "expected task title, got:\n{out}");
+    assert!(
+        out.contains("Frontend task"),
+        "expected task title, got:\n{out}"
+    );
 }
 
 /// A task with both @work and @work/frontend appears only in @work/frontend.
@@ -260,8 +302,14 @@ fn same_depth_multi_context_appears_in_both_sections() {
 
     let out = capture_tree(&env, false);
 
-    assert!(out.contains("── @home ──"), "expected @home section, got:\n{out}");
-    assert!(out.contains("── @work ──"), "expected @work section, got:\n{out}");
+    assert!(
+        out.contains("── @home ──"),
+        "expected @home section, got:\n{out}"
+    );
+    assert!(
+        out.contains("── @work ──"),
+        "expected @work section, got:\n{out}"
+    );
 
     // The task appears in both sections.
     let home_pos = out.find("── @home ──").unwrap();
@@ -315,7 +363,10 @@ fn children_follow_parent_context_section() {
 
     let out = capture_tree(&env, false);
 
-    assert!(out.contains("── @work ──"), "expected @work section, got:\n{out}");
+    assert!(
+        out.contains("── @work ──"),
+        "expected @work section, got:\n{out}"
+    );
     let work_pos = out.find("── @work ──").unwrap();
     let work_section = &out[work_pos..];
     assert!(
@@ -394,7 +445,9 @@ fn no_context_section_comes_last() {
 
     let out = capture_tree(&env, false);
     let work_pos = out.find("── @work ──").expect("@work section missing");
-    let no_ctx_pos = out.find("── No context ──").expect("No context section missing");
+    let no_ctx_pos = out
+        .find("── No context ──")
+        .expect("No context section missing");
     assert!(
         work_pos < no_ctx_pos,
         "@work must appear before No context:\n{out}"
@@ -418,30 +471,52 @@ fn tree_closed_respects_context() {
     .unwrap();
 
     add::run(
-        add::Args { slug: Some("work-done".into()), tags: vec!["@work".into()], ..add_args("Work done task") },
+        add::Args {
+            slug: Some("work-done".into()),
+            tags: vec!["@work".into()],
+            ..add_args("Work done task")
+        },
         &mut env.ctx,
     )
     .unwrap();
     done::run(
-        done::Args { id: "work-done".into(), completed_at: None, json: false },
+        done::Args {
+            id: "work-done".into(),
+            completed_at: None,
+            json: false,
+        },
         &mut env.ctx,
     )
     .unwrap();
 
     add::run(
-        add::Args { slug: Some("home-done".into()), tags: vec!["@home".into()], ..add_args("Home done task") },
+        add::Args {
+            slug: Some("home-done".into()),
+            tags: vec!["@home".into()],
+            ..add_args("Home done task")
+        },
         &mut env.ctx,
     )
     .unwrap();
     done::run(
-        done::Args { id: "home-done".into(), completed_at: None, json: false },
+        done::Args {
+            id: "home-done".into(),
+            completed_at: None,
+            json: false,
+        },
         &mut env.ctx,
     )
     .unwrap();
 
     let out = capture_tree_closed(&env);
-    assert!(out.contains("Work done task"), "expected @work task in output:\n{out}");
-    assert!(!out.contains("Home done task"), "unexpected @home task while @work context is active:\n{out}");
+    assert!(
+        out.contains("Work done task"),
+        "expected @work task in output:\n{out}"
+    );
+    assert!(
+        !out.contains("Home done task"),
+        "unexpected @home task while @work context is active:\n{out}"
+    );
 }
 
 /// Named context sections appear in alphabetical order.

@@ -29,7 +29,12 @@ pub struct JsonRpcError {
 
 impl JsonRpcResponse {
     pub fn ok(id: Option<Value>, result: Value) -> Self {
-        Self { jsonrpc: "2.0", id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
 
     pub fn err(id: Option<Value>, code: i64, message: impl Into<String>) -> Self {
@@ -37,7 +42,10 @@ impl JsonRpcResponse {
             jsonrpc: "2.0",
             id,
             result: None,
-            error: Some(JsonRpcError { code, message: message.into() }),
+            error: Some(JsonRpcError {
+                code,
+                message: message.into(),
+            }),
         }
     }
 
@@ -99,7 +107,9 @@ impl InitializeResult {
         Self {
             protocol_version: "2024-11-05",
             capabilities: ServerCapabilities {
-                tools: ToolsCapability { list_changed: false },
+                tools: ToolsCapability {
+                    list_changed: false,
+                },
             },
             server_info: ServerInfo {
                 name: "next-mcp",
@@ -156,7 +166,10 @@ impl CallToolResult {
 
     pub fn error(message: impl Into<String>) -> Self {
         Self {
-            content: vec![Content { content_type: "text", text: message.into() }],
+            content: vec![Content {
+                content_type: "text",
+                text: message.into(),
+            }],
             is_error: Some(true),
         }
     }
@@ -170,17 +183,18 @@ mod tests {
     #[test]
     fn initialize_omits_instructions_when_absent() {
         let v = serde_json::to_value(InitializeResult::new()).unwrap();
-        assert!(v.get("instructions").is_none(), "instructions must be omitted: {v}");
+        assert!(
+            v.get("instructions").is_none(),
+            "instructions must be omitted: {v}"
+        );
         assert_eq!(v["protocolVersion"], "2024-11-05");
     }
 
     /// `with_instructions` makes the field appear verbatim on the wire.
     #[test]
     fn initialize_serializes_instructions_when_present() {
-        let v = serde_json::to_value(
-            InitializeResult::new().with_instructions("hello guide"),
-        )
-        .unwrap();
+        let v =
+            serde_json::to_value(InitializeResult::new().with_instructions("hello guide")).unwrap();
         assert_eq!(v["instructions"], "hello guide");
     }
 }

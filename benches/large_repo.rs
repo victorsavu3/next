@@ -29,10 +29,19 @@ fn git(dir: &Path, args: &[&str]) {
     let mut cmd = std::process::Command::new("git");
     cmd.args(args).current_dir(dir);
     cmd.stdout(std::process::Stdio::null());
-    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+    ] {
         cmd.env_remove(var);
     }
-    assert!(cmd.status().expect("spawn git").success(), "git {args:?} failed");
+    assert!(
+        cmd.status().expect("spawn git").success(),
+        "git {args:?} failed"
+    );
 }
 
 /// First day of the calendar month `months_ago` before 2026-01 — distinct
@@ -75,10 +84,17 @@ fn build_repo(root: &Path, total: usize) -> (Vec<Task>, usize) {
         let mut t = Task::new(format!("Archived task {i}"));
         // Spread completions over months, ~3000/month → 3 segments per month.
         t.mark_done(month_anchor(month));
-        entries.push(ArchivedTask { created_at: Some(now), updated_at: Some(now), task: t });
+        entries.push(ArchivedTask {
+            created_at: Some(now),
+            updated_at: Some(now),
+            task: t,
+        });
         if entries.len() == 1000 {
             write_segment(
-                &root.join(next::core::storage::archive::segment_rel_path(month_anchor(month), seg_in_month)),
+                &root.join(next::core::storage::archive::segment_rel_path(
+                    month_anchor(month),
+                    seg_in_month,
+                )),
                 std::mem::take(&mut entries),
             )
             .unwrap();
@@ -91,7 +107,10 @@ fn build_repo(root: &Path, total: usize) -> (Vec<Task>, usize) {
     }
     if !entries.is_empty() {
         write_segment(
-            &root.join(next::core::storage::archive::segment_rel_path(month_anchor(month), seg_in_month)),
+            &root.join(next::core::storage::archive::segment_rel_path(
+                month_anchor(month),
+                seg_in_month,
+            )),
             entries,
         )
         .unwrap();
@@ -139,7 +158,11 @@ fn main() {
     let t = Instant::now();
     let inner = TomlStore::open(root.to_path_buf(), root.join("state.toml")).unwrap();
     let mut store = CachedStore::open(inner, root.join(".next.db"), &head).unwrap();
-    results.push(Budget { name: "full rebuild", took: t.elapsed(), limit: Duration::from_secs(600) });
+    results.push(Budget {
+        name: "full rebuild",
+        took: t.elapsed(),
+        limit: Duration::from_secs(600),
+    });
 
     // ── Incremental reconcile: 200 changed files in one commit ──────────────
     let changed = active.iter().take(200).collect::<Vec<_>>();
@@ -155,7 +178,11 @@ fn main() {
     let new_head = vcs.head_hash().unwrap();
     let t = Instant::now();
     store.after_pull(&new_head).unwrap();
-    results.push(Budget { name: "incremental reconcile (200)", took: t.elapsed(), limit: Duration::from_secs(10) });
+    results.push(Budget {
+        name: "incremental reconcile (200)",
+        took: t.elapsed(),
+        limit: Duration::from_secs(10),
+    });
 
     // ── Single edit: save one task + commit its path ────────────────────────
     let mut task = active[0].clone();
@@ -167,7 +194,11 @@ fn main() {
         "bench: single edit",
     )
     .unwrap();
-    results.push(Budget { name: "single edit (save+commit)", took: t.elapsed(), limit: Duration::from_millis(100) });
+    results.push(Budget {
+        name: "single edit (save+commit)",
+        took: t.elapsed(),
+        limit: Duration::from_millis(100),
+    });
 
     // ── Filtered query: tag + status pushdown, first page ───────────────────
     let t = Instant::now();
@@ -177,15 +208,26 @@ fn main() {
             ..TaskQuery::default()
         })
         .unwrap();
-    results.push(Budget { name: "filtered query (page 1)", took: t.elapsed(), limit: Duration::from_secs(1) });
+    results.push(Budget {
+        name: "filtered query (page 1)",
+        took: t.elapsed(),
+        limit: Duration::from_secs(1),
+    });
     assert!(page.total > 0, "filtered query must match the tagged tasks");
 
     // ── Archived query: newest completions, first page ──────────────────────
     let t = Instant::now();
     let archived = store
-        .query_tasks(&TaskQuery { archived: true, ..TaskQuery::default() })
+        .query_tasks(&TaskQuery {
+            archived: true,
+            ..TaskQuery::default()
+        })
         .unwrap();
-    results.push(Budget { name: "archived query (page 1)", took: t.elapsed(), limit: Duration::from_secs(1) });
+    results.push(Budget {
+        name: "archived query (page 1)",
+        took: t.elapsed(),
+        limit: Duration::from_secs(1),
+    });
     assert_eq!(archived.total as usize, archived_count);
 
     // ── Report ───────────────────────────────────────────────────────────────

@@ -51,7 +51,10 @@ pub fn run() -> Result<()> {
     let issues = ForgejoApi::new(&cfg.forgejo_url, &cfg.forgejo_token)?;
     // Closing an already-closed issue is idempotent, so no need to fetch state.
     issues.set_closed(owner, repo_name, number, true)?;
-    tracing::info!("forgejo: closed {repo_full}#{number} (task {id} {})", event.event);
+    tracing::info!(
+        "forgejo: closed {repo_full}#{number} (task {id} {})",
+        event.event
+    );
     Ok(())
 }
 
@@ -61,7 +64,9 @@ fn read_event() -> Result<Event> {
         Ok(v) if !v.is_empty() => v,
         _ => {
             let mut s = String::new();
-            std::io::stdin().read_to_string(&mut s).context("read event from stdin")?;
+            std::io::stdin()
+                .read_to_string(&mut s)
+                .context("read event from stdin")?;
             s
         }
     };

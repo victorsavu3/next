@@ -29,24 +29,46 @@ fn add_args(title: &str) -> add::Args {
 fn move_sets_parent() {
     let mut env = common::setup();
     add::run(
-        add::Args { slug: Some("parent".into()), ..add_args("Parent task") },
+        add::Args {
+            slug: Some("parent".into()),
+            ..add_args("Parent task")
+        },
         &mut env.ctx,
     )
     .unwrap();
     add::run(
-        add::Args { slug: Some("child".into()), ..add_args("Child task") },
+        add::Args {
+            slug: Some("child".into()),
+            ..add_args("Child task")
+        },
         &mut env.ctx,
     )
     .unwrap();
 
     move_cmd::run(
-        move_cmd::Args { id: "child".into(), parent: Some("parent".into()), json: false },
+        move_cmd::Args {
+            id: "child".into(),
+            parent: Some("parent".into()),
+            json: false,
+        },
         &mut env.ctx,
     )
     .unwrap();
 
-    let parent = env.ctx.repo.store.get_task_by_slug("parent").unwrap().unwrap();
-    let child = env.ctx.repo.store.get_task_by_slug("child").unwrap().unwrap();
+    let parent = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("parent")
+        .unwrap()
+        .unwrap();
+    let child = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("child")
+        .unwrap()
+        .unwrap();
     assert_eq!(child.parent_id, Some(parent.id));
 }
 
@@ -54,7 +76,10 @@ fn move_sets_parent() {
 fn move_none_clears_parent() {
     let mut env = common::setup();
     add::run(
-        add::Args { slug: Some("root".into()), ..add_args("Root") },
+        add::Args {
+            slug: Some("root".into()),
+            ..add_args("Root")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -68,16 +93,32 @@ fn move_none_clears_parent() {
     )
     .unwrap();
 
-    let child_before = env.ctx.repo.store.get_task_by_slug("child").unwrap().unwrap();
+    let child_before = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("child")
+        .unwrap()
+        .unwrap();
     assert!(child_before.parent_id.is_some());
 
     move_cmd::run(
-        move_cmd::Args { id: "child".into(), parent: Some("none".into()), json: false },
+        move_cmd::Args {
+            id: "child".into(),
+            parent: Some("none".into()),
+            json: false,
+        },
         &mut env.ctx,
     )
     .unwrap();
 
-    let child_after = env.ctx.repo.store.get_task_by_slug("child").unwrap().unwrap();
+    let child_after = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("child")
+        .unwrap()
+        .unwrap();
     assert!(child_after.parent_id.is_none());
 }
 
@@ -85,18 +126,31 @@ fn move_none_clears_parent() {
 fn move_no_parent_arg_is_noop() {
     let mut env = common::setup();
     add::run(
-        add::Args { slug: Some("task-a".into()), ..add_args("Task A") },
+        add::Args {
+            slug: Some("task-a".into()),
+            ..add_args("Task A")
+        },
         &mut env.ctx,
     )
     .unwrap();
 
     move_cmd::run(
-        move_cmd::Args { id: "task-a".into(), parent: None, json: false },
+        move_cmd::Args {
+            id: "task-a".into(),
+            parent: None,
+            json: false,
+        },
         &mut env.ctx,
     )
     .unwrap();
 
-    let task = env.ctx.repo.store.get_task_by_slug("task-a").unwrap().unwrap();
+    let task = env
+        .ctx
+        .repo
+        .store
+        .get_task_by_slug("task-a")
+        .unwrap()
+        .unwrap();
     assert!(task.parent_id.is_none());
 }
 
@@ -122,13 +176,20 @@ fn move_nonexistent_task_errors() {
 fn move_json_output() {
     let mut env = common::setup();
     add::run(
-        add::Args { slug: Some("json-task".into()), ..add_args("JSON task") },
+        add::Args {
+            slug: Some("json-task".into()),
+            ..add_args("JSON task")
+        },
         &mut env.ctx,
     )
     .unwrap();
 
     move_cmd::run(
-        move_cmd::Args { id: "json-task".into(), parent: None, json: true },
+        move_cmd::Args {
+            id: "json-task".into(),
+            parent: None,
+            json: true,
+        },
         &mut env.ctx,
     )
     .unwrap();

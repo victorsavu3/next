@@ -26,7 +26,12 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&task)?);
     } else {
         println!("stopped [{}] {}", &task.id.to_string()[..8], task.title);
-        tracing::info!(cmd = "stop", "[{}] {}", &task.id.to_string()[..8], task.title);
+        tracing::info!(
+            cmd = "stop",
+            "[{}] {}",
+            &task.id.to_string()[..8],
+            task.title
+        );
     }
     Ok(())
 }

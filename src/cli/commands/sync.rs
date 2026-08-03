@@ -14,7 +14,11 @@ pub struct ConflictsError(pub Vec<PathBuf>);
 impl std::fmt::Display for ConflictsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let names: Vec<_> = self.0.iter().map(|p| p.display().to_string()).collect();
-        write!(f, "Merge conflicts — resolve manually: {}", names.join(", "))
+        write!(
+            f,
+            "Merge conflicts — resolve manually: {}",
+            names.join(", ")
+        )
     }
 }
 

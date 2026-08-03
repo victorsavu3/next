@@ -71,13 +71,24 @@ fn next_default_count_from_config() {
 fn next_excludes_done_tasks() {
     let mut env = common::setup();
     add::run(
-        add::Args { slug: Some("done-task".into()), ..add_args("Done task") },
+        add::Args {
+            slug: Some("done-task".into()),
+            ..add_args("Done task")
+        },
         &mut env.ctx,
     )
     .unwrap();
     add::run(add_args("Open task"), &mut env.ctx).unwrap();
 
-    done::run(done::Args { id: "done-task".into(), completed_at: None, json: false }, &mut env.ctx).unwrap();
+    done::run(
+        done::Args {
+            id: "done-task".into(),
+            completed_at: None,
+            json: false,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     // next only shows open tasks
     next_cmd::run(next_args(None), &env.ctx).unwrap();
@@ -94,7 +105,10 @@ fn next_json_output() {
     let mut env = common::setup();
     add::run(add_args("JSON task"), &mut env.ctx).unwrap();
     next_cmd::run(
-        next_cmd::Args { json: true, ..next_args(None) },
+        next_cmd::Args {
+            json: true,
+            ..next_args(None)
+        },
         &env.ctx,
     )
     .unwrap();
@@ -112,7 +126,10 @@ fn next_typoed_flag_in_filter_tokens_rejected() {
     // error clearly instead of being misread as a tag exclusion.
     let env = common::setup();
     let err = next_cmd::run(
-        next_cmd::Args { tokens: vec!["--al".to_string()], ..next_args(None) },
+        next_cmd::Args {
+            tokens: vec!["--al".to_string()],
+            ..next_args(None)
+        },
         &env.ctx,
     )
     .unwrap_err();

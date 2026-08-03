@@ -14,11 +14,14 @@ use std::{
     path::Path,
 };
 
+use next::core::storage::{CachedStore, GitBackend, TomlStore};
 use next::core::{
-    domain::{state::GlobalState, task::{Priority, Status, Task}},
+    domain::{
+        state::GlobalState,
+        task::{Priority, Status, Task},
+    },
     store::{Store, VcsBackend},
 };
-use next::core::storage::{CachedStore, GitBackend, TomlStore};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -116,7 +119,11 @@ fn assert_sync(dir: &Path, head_hash: &str) {
         assert_eq!(t.id, c.id, "task ID mismatch");
         assert_eq!(t.title, c.title, "title mismatch for task {}", t.id);
         assert_eq!(t.status, c.status, "status mismatch for task {}", t.id);
-        assert_eq!(t.priority, c.priority, "priority mismatch for task {}", t.id);
+        assert_eq!(
+            t.priority, c.priority,
+            "priority mismatch for task {}",
+            t.id
+        );
         assert_eq!(t.slug, c.slug, "slug mismatch for task {}", t.id);
         assert_eq!(t.tags, c.tags, "tags mismatch for task {}", t.id);
     }
@@ -220,7 +227,8 @@ fn done_status_syncs_to_both_stores() {
     let head = vcs.head_hash().unwrap();
     assert_sync(dir.path(), &head);
 
-    let from_toml = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap()
+    let from_toml = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml"))
+        .unwrap()
         .get_task(task.id)
         .unwrap();
     assert_eq!(from_toml.status, Status::Done);
@@ -244,7 +252,8 @@ fn save_state_syncs_to_both_stores() {
     let head = vcs.head_hash().unwrap();
     assert_sync(dir.path(), &head);
 
-    let from_toml = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap()
+    let from_toml = TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml"))
+        .unwrap()
         .get_state()
         .unwrap();
     assert_eq!(from_toml.active_contexts, state.active_contexts);
@@ -416,8 +425,14 @@ fn pull_adds_new_task() {
     // Open a new store — different HEAD triggers rebuild.
     let store2 = open_with_head(dir.path(), &new_head);
     let ids = task_id_set(&store2);
-    assert!(ids.contains(&existing.id.to_string()), "existing task must survive pull");
-    assert!(ids.contains(&pulled.id.to_string()), "pulled task must appear after rebuild");
+    assert!(
+        ids.contains(&existing.id.to_string()),
+        "existing task must survive pull"
+    );
+    assert!(
+        ids.contains(&pulled.id.to_string()),
+        "pulled task must appear after rebuild"
+    );
     assert_sync(dir.path(), &new_head);
 }
 
@@ -434,7 +449,8 @@ fn pull_removes_task() {
 
     let keep_path = next::core::storage::task_path(dir.path(), &keep);
     let remove_path = next::core::storage::task_path(dir.path(), &remove);
-    vcs.commit(&[keep_path, remove_path], "add both tasks").unwrap();
+    vcs.commit(&[keep_path, remove_path], "add both tasks")
+        .unwrap();
 
     // Simulate pull: the remove task is deleted from the working tree and committed.
     fs::remove_file(next::core::storage::task_path(dir.path(), &remove)).unwrap();
@@ -445,8 +461,14 @@ fn pull_removes_task() {
     let store2 = open_with_head(dir.path(), &new_head);
     let ids = task_id_set(&store2);
 
-    assert!(ids.contains(&keep.id.to_string()), "keep task must still be present");
-    assert!(!ids.contains(&remove.id.to_string()), "removed task must be gone from cache");
+    assert!(
+        ids.contains(&keep.id.to_string()),
+        "keep task must still be present"
+    );
+    assert!(
+        !ids.contains(&remove.id.to_string()),
+        "removed task must be gone from cache"
+    );
     assert_sync(dir.path(), &new_head);
 }
 
@@ -536,10 +558,18 @@ fn pull_removes_multiple_tasks() {
     let ids = task_id_set(&store2);
 
     for t in removed {
-        assert!(!ids.contains(&t.id.to_string()), "removed task {} must be gone", t.id);
+        assert!(
+            !ids.contains(&t.id.to_string()),
+            "removed task {} must be gone",
+            t.id
+        );
     }
     for t in kept {
-        assert!(ids.contains(&t.id.to_string()), "kept task {} must survive", t.id);
+        assert!(
+            ids.contains(&t.id.to_string()),
+            "kept task {} must survive",
+            t.id
+        );
     }
     assert_eq!(ids.len(), 3);
     assert_sync(dir.path(), &new_head);
@@ -564,7 +594,8 @@ fn pull_mixed_changes() {
     let path_a = next::core::storage::task_path(dir.path(), &existing_a);
     let path_b = next::core::storage::task_path(dir.path(), &existing_b);
     let path_c = next::core::storage::task_path(dir.path(), &existing_c);
-    vcs.commit(&[path_a.clone(), path_b.clone(), path_c.clone()], "initial").unwrap();
+    vcs.commit(&[path_a.clone(), path_b.clone(), path_c.clone()], "initial")
+        .unwrap();
 
     // Pull: modify A, remove B, add D.
     existing_a.title = "Task A (modified)".into();
@@ -609,7 +640,10 @@ fn pull_updates_state() {
     let (mut store, vcs) = open(dir.path());
 
     // Set initial state.
-    let initial_state = GlobalState { active_contexts: vec!["@home".into()], ..Default::default() };
+    let initial_state = GlobalState {
+        active_contexts: vec!["@home".into()],
+        ..Default::default()
+    };
     store.save_state(&initial_state).unwrap();
 
     // Commit a task to have a real HEAD.
@@ -718,7 +752,10 @@ fn successive_pulls_all_converge() {
         let head = vcs.head_hash().unwrap();
         let store = open_with_head(dir.path(), &head);
         let count = store.list_tasks().unwrap().len();
-        assert_eq!(count, round as usize, "after round {round}, expected {round} tasks");
+        assert_eq!(
+            count, round as usize,
+            "after round {round}, expected {round} tasks"
+        );
         assert_sync(dir.path(), &head);
     }
 }

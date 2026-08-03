@@ -1,10 +1,10 @@
 use std::{fs, path::Path, path::PathBuf, process::Command};
 
+use next::core::storage::{CachedStore, GitBackend};
 use next::{
     core::domain::task::Task,
     core::store::{PullResult, Store, VcsBackend},
 };
-use next::core::storage::{CachedStore, GitBackend};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -16,7 +16,13 @@ fn run_git(dir: &Path, args: &[&str]) {
     cmd.args(args).current_dir(dir);
     // Strip the repo-scoping vars `git commit` exports to hook subprocesses
     // (`GIT_DIR`, …) so a suite run by a pre-commit hook stays in `dir`.
-    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+    ] {
         cmd.env_remove(var);
     }
     let status = cmd.status().unwrap();
@@ -52,7 +58,12 @@ fn clone_of(remote_path: &Path) -> (TempDir, PathBuf, CachedStore, GitBackend) {
     let clone_path = base.path().join("repo");
     run_git(
         base.path(),
-        &["clone", "-q", remote_path.to_str().unwrap(), clone_path.to_str().unwrap()],
+        &[
+            "clone",
+            "-q",
+            remote_path.to_str().unwrap(),
+            clone_path.to_str().unwrap(),
+        ],
     );
     run_git(&clone_path, &["config", "user.email", "test@example.com"]);
     run_git(&clone_path, &["config", "user.name", "Test"]);
@@ -61,16 +72,12 @@ fn clone_of(remote_path: &Path) -> (TempDir, PathBuf, CachedStore, GitBackend) {
 }
 
 /// Saves a task to store and commits via vcs. Returns the task.
-fn commit_task(
-    store: &mut CachedStore,
-    vcs: &GitBackend,
-    repo_root: &Path,
-    title: &str,
-) -> Task {
+fn commit_task(store: &mut CachedStore, vcs: &GitBackend, repo_root: &Path, title: &str) -> Task {
     let task = Task::new(title);
     store.save_task(&task).unwrap();
     let path = next::core::storage::task_path(repo_root, &task);
-    vcs.commit(&[path], &format!("next: add \"{title}\"")).unwrap();
+    vcs.commit(&[path], &format!("next: add \"{title}\""))
+        .unwrap();
     task
 }
 
@@ -93,7 +100,10 @@ fn push_sends_local_commit_to_bare_remote() {
 
     // Verify remote now has at least one commit.
     let remote_repo = git2::Repository::open_bare(remote.path()).unwrap();
-    assert!(remote_repo.head().is_ok(), "remote HEAD should exist after push");
+    assert!(
+        remote_repo.head().is_ok(),
+        "remote HEAD should exist after push"
+    );
 }
 
 #[test]
@@ -114,7 +124,10 @@ fn push_sends_multiple_commits() {
     for _ in walk {
         count += 1;
     }
-    assert!(count >= 2, "expected at least 2 commits on remote, got {count}");
+    assert!(
+        count >= 2,
+        "expected at least 2 commits on remote, got {count}"
+    );
 }
 
 #[test]
@@ -204,9 +217,7 @@ fn pull_initial_checkout_into_fresh_repo() {
     assert!(matches!(result, PullResult::Clean));
 
     // B should now have the task file on disk.
-    let entries: Vec<_> = fs::read_dir(b_dir.path().join("tasks"))
-        .unwrap()
-        .collect();
+    let entries: Vec<_> = fs::read_dir(b_dir.path().join("tasks")).unwrap().collect();
     assert_eq!(entries.len(), 1, "expected 1 task file after initial pull");
 }
 
@@ -247,7 +258,12 @@ fn pull_reports_conflicts() {
     task.slug = Some("shared".into());
     a_store.save_task(&task).unwrap();
     let task_path_a = next::core::storage::task_path(a_dir.path(), &task);
-    a_vcs.commit(std::slice::from_ref(&task_path_a), "next: add \"Shared task\"").unwrap();
+    a_vcs
+        .commit(
+            std::slice::from_ref(&task_path_a),
+            "next: add \"Shared task\"",
+        )
+        .unwrap();
     a_vcs.push().unwrap();
 
     // B clones.
@@ -260,7 +276,9 @@ fn pull_reports_conflicts() {
     a_vcs.push().unwrap();
 
     fs::write(&task_path_b, "title = \"B version\"\nid = \"00000000-0000-0000-0000-000000000001\"\nstatus = \"open\"\npriority = \"low\"\ncreated_at = \"2026-01-01T00:00:00Z\"\nupdated_at = \"2026-01-01T00:00:00Z\"\n").unwrap();
-    b_vcs.commit(std::slice::from_ref(&task_path_b), "next: edit B").unwrap();
+    b_vcs
+        .commit(std::slice::from_ref(&task_path_b), "next: edit B")
+        .unwrap();
 
     // B pulls — should report a conflict.
     let result = b_vcs.pull().unwrap();
@@ -291,7 +309,9 @@ fn push_then_pull_preserves_all_task_data() {
     task.tags = vec!["@work".into(), "#laptop".into()];
     a_store.save_task(&task).unwrap();
     let path = next::core::storage::task_path(a_dir.path(), &task);
-    a_vcs.commit(&[path], "next: add \"Detailed task\"").unwrap();
+    a_vcs
+        .commit(&[path], "next: add \"Detailed task\"")
+        .unwrap();
     a_vcs.push().unwrap();
 
     // B clones and reads the task.
@@ -303,7 +323,10 @@ fn push_then_pull_preserves_all_task_data() {
     let loaded = &tasks[0];
     assert_eq!(loaded.title, "Detailed task");
     assert_eq!(loaded.slug.as_deref(), Some("detailed"));
-    assert_eq!(loaded.description.as_deref(), Some("A multi-line\ndescription"));
+    assert_eq!(
+        loaded.description.as_deref(),
+        Some("A multi-line\ndescription")
+    );
     assert_eq!(loaded.url.as_deref(), Some("https://example.com/ticket"));
     assert!(loaded.tags.contains(&"@work".to_string()));
 }
@@ -338,7 +361,11 @@ fn bidirectional_sync_both_machines_converge() {
     let (_c_base, c_path, _, _) = clone_of(remote.path());
     let store_c = fresh_store(&c_path);
     let tasks = store_c.list_tasks().unwrap();
-    assert_eq!(tasks.len(), 3, "remote should have all 3 tasks after B syncs");
+    assert_eq!(
+        tasks.len(),
+        3,
+        "remote should have all 3 tasks after B syncs"
+    );
 
     let titles: Vec<&str> = tasks.iter().map(|t| t.title.as_str()).collect();
     assert!(titles.contains(&"Task A initial"));
@@ -367,7 +394,12 @@ fn sync_command_returns_conflicts_error() {
     task.slug = Some("shared".into());
     a_store.save_task(&task).unwrap();
     let task_path_a = next::core::storage::task_path(a_dir.path(), &task);
-    a_vcs.commit(std::slice::from_ref(&task_path_a), "next: add \"Shared task\"").unwrap();
+    a_vcs
+        .commit(
+            std::slice::from_ref(&task_path_a),
+            "next: add \"Shared task\"",
+        )
+        .unwrap();
     a_vcs.push().unwrap();
 
     // B clones; both sides edit the same file with conflicting content.
@@ -379,20 +411,29 @@ fn sync_command_returns_conflicts_error() {
     a_vcs.push().unwrap();
 
     fs::write(&task_path_b, "title = \"B version\"\nid = \"00000000-0000-0000-0000-000000000001\"\nstatus = \"open\"\npriority = \"low\"\ncreated_at = \"2026-01-01T00:00:00Z\"\nupdated_at = \"2026-01-01T00:00:00Z\"\n").unwrap();
-    b_vcs.commit(std::slice::from_ref(&task_path_b), "next: edit B").unwrap();
+    b_vcs
+        .commit(std::slice::from_ref(&task_path_b), "next: edit B")
+        .unwrap();
 
     // Run the CLI sync command on B — the pull conflicts.
     let mut ctx = AppContext {
         config: Config::default(),
         repo: TaskRepository::with_parts(Box::new(b_store), Box::new(b_vcs), b_path.clone()),
     };
-    let args = sync_cmd::Args { push_only: false, pull_only: false, quiet: false };
+    let args = sync_cmd::Args {
+        push_only: false,
+        pull_only: false,
+        quiet: false,
+    };
     let err = sync_cmd::run(args, &mut ctx).expect_err("sync over conflicting histories must fail");
 
     let conflicts = err
         .downcast_ref::<sync_cmd::ConflictsError>()
         .expect("error must downcast to ConflictsError so main can exit(2)");
-    assert!(!conflicts.0.is_empty(), "conflict paths should be non-empty");
+    assert!(
+        !conflicts.0.is_empty(),
+        "conflict paths should be non-empty"
+    );
     assert!(
         conflicts.to_string().contains("shared.toml"),
         "message should name the conflicting file: {conflicts}"

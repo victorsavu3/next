@@ -3,8 +3,8 @@ mod common;
 use chrono::Local;
 use next::cli::commands::{add, context};
 use next::core::store::Store as _;
-use next::core::{domain::filter, scoring};
 use next::core::FilterArgs;
+use next::core::{domain::filter, scoring};
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -33,8 +33,20 @@ fn visible_titles(env: &mut common::TestEnv) -> Vec<String> {
     let today = Local::now().date_naive();
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
-    let filtered = filter::apply(all.clone(), &FilterArgs::parse(vec![]).to_filter_set().unwrap(), &state, today);
-    let scored = scoring::score_and_sort(filtered, &all, today, &env.ctx.repo.scoring, &std::collections::HashMap::new(), &std::collections::HashMap::new());
+    let filtered = filter::apply(
+        all.clone(),
+        &FilterArgs::parse(vec![]).to_filter_set().unwrap(),
+        &state,
+        today,
+    );
+    let scored = scoring::score_and_sort(
+        filtered,
+        &all,
+        today,
+        &env.ctx.repo.scoring,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+    );
     scored.into_iter().map(|s| s.task.title).collect()
 }
 
@@ -87,7 +99,9 @@ fn context_clear_removes_active_contexts() {
     )
     .unwrap();
     context::run(
-        context::Args { subcommand: Some(context::ContextSubcommand::Clear) },
+        context::Args {
+            subcommand: Some(context::ContextSubcommand::Clear),
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -110,12 +124,18 @@ fn context_show_does_not_error() {
 fn context_filter_hides_wrong_context_tasks() {
     let mut env = common::setup();
     add::run(
-        add::Args { tags: vec!["@work".into()], ..add_args("Work task") },
+        add::Args {
+            tags: vec!["@work".into()],
+            ..add_args("Work task")
+        },
         &mut env.ctx,
     )
     .unwrap();
     add::run(
-        add::Args { tags: vec!["@home".into()], ..add_args("Home task") },
+        add::Args {
+            tags: vec!["@home".into()],
+            ..add_args("Home task")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -139,7 +159,10 @@ fn context_filter_hides_wrong_context_tasks() {
 fn context_filter_keeps_context_neutral_tasks() {
     let mut env = common::setup();
     add::run(
-        add::Args { tags: vec!["@work".into()], ..add_args("Work task") },
+        add::Args {
+            tags: vec!["@work".into()],
+            ..add_args("Work task")
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -156,7 +179,10 @@ fn context_filter_keeps_context_neutral_tasks() {
     .unwrap();
 
     let titles = visible_titles(&mut env);
-    assert!(titles.contains(&"Work task".to_string()), "work task must be visible");
+    assert!(
+        titles.contains(&"Work task".to_string()),
+        "work task must be visible"
+    );
     assert!(
         titles.contains(&"No-context task".to_string()),
         "context-neutral task must always be visible"
@@ -167,12 +193,18 @@ fn context_filter_keeps_context_neutral_tasks() {
 fn context_filter_shows_all_when_no_context_active() {
     let mut env = common::setup();
     add::run(
-        add::Args { tags: vec!["@work".into()], ..add_args("Work task") },
+        add::Args {
+            tags: vec!["@work".into()],
+            ..add_args("Work task")
+        },
         &mut env.ctx,
     )
     .unwrap();
     add::run(
-        add::Args { tags: vec!["@home".into()], ..add_args("Home task") },
+        add::Args {
+            tags: vec!["@home".into()],
+            ..add_args("Home task")
+        },
         &mut env.ctx,
     )
     .unwrap();

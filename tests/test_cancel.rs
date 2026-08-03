@@ -32,7 +32,14 @@ fn cancel_marks_task_cancelled() {
     add::run(add_args("Unwanted task"), &mut env.ctx).unwrap();
 
     let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
-    cancel::run(cancel::Args { id: task.id.to_string(), json: false }, &mut env.ctx).unwrap();
+    cancel::run(
+        cancel::Args {
+            id: task.id.to_string(),
+            json: false,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     let updated = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(updated.status, Status::Cancelled);
@@ -46,7 +53,14 @@ fn cancel_by_id_prefix() {
     let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     let prefix = task.id.to_string().replace('-', "")[..8].to_string();
 
-    cancel::run(cancel::Args { id: prefix, json: false }, &mut env.ctx).unwrap();
+    cancel::run(
+        cancel::Args {
+            id: prefix,
+            json: false,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     let updated = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(updated.status, Status::Cancelled);
@@ -64,7 +78,14 @@ fn cancel_by_slug() {
     )
     .unwrap();
 
-    cancel::run(cancel::Args { id: "my-task".into(), json: false }, &mut env.ctx).unwrap();
+    cancel::run(
+        cancel::Args {
+            id: "my-task".into(),
+            json: false,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 
     let updated = env.ctx.repo.store.list_tasks().unwrap().remove(0);
     assert_eq!(updated.status, Status::Cancelled);
@@ -74,7 +95,10 @@ fn cancel_by_slug() {
 fn cancel_nonexistent_task_errors() {
     let mut env = common::setup();
     let err = cancel::run(
-        cancel::Args { id: "00000000-0000-0000-0000-000000000000".into(), json: false },
+        cancel::Args {
+            id: "00000000-0000-0000-0000-000000000000".into(),
+            json: false,
+        },
         &mut env.ctx,
     )
     .unwrap_err();
@@ -89,5 +113,12 @@ fn cancel_json_output() {
     let mut env = common::setup();
     add::run(add_args("JSON task"), &mut env.ctx).unwrap();
     let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
-    cancel::run(cancel::Args { id: task.id.to_string(), json: true }, &mut env.ctx).unwrap();
+    cancel::run(
+        cancel::Args {
+            id: task.id.to_string(),
+            json: true,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
 }

@@ -6,12 +6,12 @@
 /// processes would.
 use std::{path::Path, process::Command, sync::Arc};
 
+use next::core::storage::{FileLock, GitBackend, TomlStore};
 use next::core::{
     domain::{state::GlobalState, task::Task},
     service::{apply_edits, EditTaskParams},
     store::{Store as _, VcsBackend as _},
 };
-use next::core::storage::{FileLock, GitBackend, TomlStore};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -24,7 +24,13 @@ use tempfile::TempDir;
 fn run_git(dir: &Path, args: &[&str]) {
     let mut cmd = Command::new("git");
     cmd.args(args).current_dir(dir);
-    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+    ] {
         cmd.env_remove(var);
     }
     let status = cmd.status().unwrap();
@@ -79,7 +85,11 @@ fn concurrent_task_saves_all_persisted() {
 
     let store = fresh_store(dir.path());
     let tasks = store.list_tasks().unwrap();
-    assert_eq!(tasks.len(), N, "all {N} tasks must be persisted without corruption");
+    assert_eq!(
+        tasks.len(),
+        N,
+        "all {N} tasks must be persisted without corruption"
+    );
 }
 
 /// Concurrent saves of tasks that all have the same slug prefix must not cause
@@ -141,9 +151,7 @@ fn concurrent_slug_conflict_detected() {
     let successes = results.iter().filter(|r| r.is_ok()).count();
     let conflicts = results
         .iter()
-        .filter(|r| {
-            matches!(r, Err(next::core::error::TaskError::SlugConflict(_)))
-        })
+        .filter(|r| matches!(r, Err(next::core::error::TaskError::SlugConflict(_))))
         .count();
 
     assert_eq!(successes, 1, "exactly one thread must win the slug");
@@ -236,7 +244,11 @@ fn concurrent_task_and_state_saves_no_corruption() {
     }
 
     let store = fresh_store(dir.path());
-    assert_eq!(store.list_tasks().unwrap().len(), N, "all task files intact");
+    assert_eq!(
+        store.list_tasks().unwrap().len(),
+        N,
+        "all task files intact"
+    );
     store.get_state().unwrap(); // must not error
 }
 
@@ -304,7 +316,12 @@ fn concurrent_tag_edits_do_not_lose_updates() {
     // Re-open fresh and assert every tag survived.
     let (store, _vcs) = next::core::storage::open(dir.path().to_path_buf()).unwrap();
     let task = store.get_task(task_id).unwrap();
-    let mut tags: Vec<String> = task.tags.iter().filter(|t| t.starts_with("tag")).cloned().collect();
+    let mut tags: Vec<String> = task
+        .tags
+        .iter()
+        .filter(|t| t.starts_with("tag"))
+        .cloned()
+        .collect();
     tags.sort();
     let expected: Vec<String> = (0..N).map(|i| format!("tag{i}")).collect();
     let mut expected_sorted = expected.clone();
@@ -493,7 +510,10 @@ fn concurrent_machine_state_sections_do_not_clobber() {
     watched.sort();
     let mut expected_ids = ids;
     expected_ids.sort();
-    assert_eq!(watched, expected_ids, "no plugin subscription lost across sections");
+    assert_eq!(
+        watched, expected_ids,
+        "no plugin subscription lost across sections"
+    );
 
     // last_pull was recorded (sync section preserved).
     assert!(
@@ -555,7 +575,15 @@ fn pull_and_task_save_do_not_trample() {
     // Working repo A: add a task and push.
     let repo_a = TempDir::new().unwrap();
     init_git(repo_a.path());
-    run_git(repo_a.path(), &["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+    run_git(
+        repo_a.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_dir.path().to_str().unwrap(),
+        ],
+    );
 
     let (mut store_a, vcs_a) = next::core::storage::open(repo_a.path().to_path_buf()).unwrap();
     let task_a = Task::new("Remote task");
@@ -567,7 +595,15 @@ fn pull_and_task_save_do_not_trample() {
     // Working repo B: pull from remote while also saving local tasks concurrently.
     let repo_b = TempDir::new().unwrap();
     init_git(repo_b.path());
-    run_git(repo_b.path(), &["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+    run_git(
+        repo_b.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_dir.path().to_str().unwrap(),
+        ],
+    );
     next::core::storage::open(repo_b.path().to_path_buf()).unwrap(); // creates tasks/
 
     let root_b = Arc::new(repo_b.path().to_path_buf());
@@ -596,5 +632,8 @@ fn pull_and_task_save_do_not_trample() {
     // We expect at least the local task; the remote task may or may not be
     // visible depending on whether the pull finished first, but there must be
     // no corruption (no parse error, no missing files).
-    assert!(!tasks.is_empty(), "tasks must not be lost due to concurrent pull");
+    assert!(
+        !tasks.is_empty(),
+        "tasks must not be lost due to concurrent pull"
+    );
 }

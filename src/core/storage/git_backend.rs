@@ -5,11 +5,11 @@ use std::{
     sync::Mutex,
 };
 
-use git2::{build::CheckoutBuilder, Repository};
 use crate::core::{
-    error::{TaskError, Result},
+    error::{Result, TaskError},
     store::{PullResult, VcsBackend},
 };
+use git2::{build::CheckoutBuilder, Repository};
 
 // Repository is Send but not Sync; wrapping in Mutex makes GitBackend Sync.
 pub struct GitBackend {
@@ -97,14 +97,14 @@ fn remote_callbacks<'a>(explicit: Option<(String, String)>) -> git2::RemoteCallb
                 return git2::Cred::userpass_plaintext(u, t);
             }
             // 2. Env-var credentials.
-            let env_user  = std::env::var("NEXT_GIT_USER").ok();
+            let env_user = std::env::var("NEXT_GIT_USER").ok();
             let env_token = std::env::var("NEXT_GIT_TOKEN").ok();
             if let (Some(u), Some(t)) = (env_user.as_deref(), env_token.as_deref()) {
                 return git2::Cred::userpass_plaintext(u, t);
             }
             // 3. System git credential helper.
-            let config = git2::Config::open_default()
-                .map_err(|e| git2::Error::from_str(&e.to_string()))?;
+            let config =
+                git2::Config::open_default().map_err(|e| git2::Error::from_str(&e.to_string()))?;
             return git2::Cred::credential_helper(&config, url, username);
         }
         if allowed.contains(git2::CredentialType::DEFAULT) {
@@ -474,7 +474,10 @@ impl VcsBackend for GitBackend {
             .map_err(|e| TaskError::Other(format!("git fetch: {e}")))?;
         if !fetch.status.success() {
             let stderr = String::from_utf8_lossy(&fetch.stderr);
-            return Err(TaskError::Other(format!("git fetch failed: {}", stderr.trim())));
+            return Err(TaskError::Other(format!(
+                "git fetch failed: {}",
+                stderr.trim()
+            )));
         }
 
         let reset = git_cmd(&self.work_dir)
@@ -483,7 +486,10 @@ impl VcsBackend for GitBackend {
             .map_err(|e| TaskError::Other(format!("git reset: {e}")))?;
         if !reset.status.success() {
             let stderr = String::from_utf8_lossy(&reset.stderr);
-            return Err(TaskError::Other(format!("git reset failed: {}", stderr.trim())));
+            return Err(TaskError::Other(format!(
+                "git reset failed: {}",
+                stderr.trim()
+            )));
         }
 
         // Return the new HEAD so callers can update any caches.
@@ -527,7 +533,9 @@ pub(crate) fn task_git_dates(
         } else if !line.is_empty() {
             let Some(ts) = current_ts else { continue };
             let file = std::path::Path::new(line);
-            let Some(name) = file.file_name().and_then(|n| n.to_str()) else { continue };
+            let Some(name) = file.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
             let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 
             // git log is newest→oldest: the first sighting of a key fixes
@@ -581,7 +589,10 @@ pub(crate) fn blob_content(root: &Path, sha: &str) -> Option<String> {
     if local.is_some() {
         return local;
     }
-    let output = git_cmd(root).args(["cat-file", "blob", sha]).output().ok()?;
+    let output = git_cmd(root)
+        .args(["cat-file", "blob", sha])
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -606,7 +617,11 @@ pub(crate) enum FileChange {
 /// unrepresentable delta — in which case the caller must fall back to a full
 /// scan. Cost is proportional to the number of changed files, not to history
 /// length or tree size.
-pub(crate) fn changed_paths(root: &Path, old_head: &str, new_head: &str) -> Option<Vec<FileChange>> {
+pub(crate) fn changed_paths(
+    root: &Path,
+    old_head: &str,
+    new_head: &str,
+) -> Option<Vec<FileChange>> {
     let repo = Repository::open(root).ok()?;
     let tree_of = |rev: &str| {
         repo.revparse_single(rev)
@@ -693,7 +708,9 @@ mod tests {
 
         let file = dir.path().join("a.txt");
         fs::write(&file, "v1").unwrap();
-        backend.commit(std::slice::from_ref(&file), "first").unwrap();
+        backend
+            .commit(std::slice::from_ref(&file), "first")
+            .unwrap();
         let hash1 = backend.head_hash().unwrap();
 
         fs::write(&file, "v2").unwrap();
@@ -711,7 +728,9 @@ mod tests {
 
         let file = dir.path().join("to-delete.txt");
         fs::write(&file, "data").unwrap();
-        backend.commit(std::slice::from_ref(&file), "add file").unwrap();
+        backend
+            .commit(std::slice::from_ref(&file), "add file")
+            .unwrap();
 
         fs::remove_file(&file).unwrap();
         backend.commit(&[file], "remove file").unwrap();
@@ -754,7 +773,9 @@ mod tests {
         );
 
         // Unknown revisions → None; the caller falls back to a full scan.
-        assert!(changed_paths(dir.path(), "0000000000000000000000000000000000000000", &h2).is_none());
+        assert!(
+            changed_paths(dir.path(), "0000000000000000000000000000000000000000", &h2).is_none()
+        );
         assert!(changed_paths(dir.path(), "unborn", &h2).is_none());
     }
 }

@@ -5,10 +5,10 @@
 mod common;
 
 use next::core::domain::task::Status;
+use next::core::plugin::registry;
 use next::forgejo::issues::{ForgejoIssue, IssueState};
 use next::forgejo::keys;
 use next::forgejo::tasks::{forgejo_link, LibTaskStore, TaskStore};
-use next::core::plugin::registry;
 
 fn issue() -> ForgejoIssue {
     ForgejoIssue {
@@ -29,15 +29,23 @@ fn create_from_issue_links_and_watches() {
     registry::register(dir.path(), "next-forgejo", vec!["x".into(), "hook".into()]).unwrap();
     let mut store = LibTaskStore::open(Some(dir.path())).unwrap();
 
-    let id = store.create_from_issue(&issue(), "@ai/x", "victor/x").unwrap();
+    let id = store
+        .create_from_issue(&issue(), "@ai/x", "victor/x")
+        .unwrap();
 
     let linked = store.list_linked("victor/x").unwrap();
     assert_eq!(linked.len(), 1);
     let task = &linked[0];
     assert_eq!(task.title, "Fix the bug");
     assert_eq!(task.description.as_deref(), Some("steps to reproduce"));
-    assert!(task.tags.contains(&"@ai/x".to_string()), "mapped context tag applied");
-    assert_eq!(task.url.as_deref(), Some("https://forgejo.example.com/victor/x/issues/42"));
+    assert!(
+        task.tags.contains(&"@ai/x".to_string()),
+        "mapped context tag applied"
+    );
+    assert_eq!(
+        task.url.as_deref(),
+        Some("https://forgejo.example.com/victor/x/issues/42")
+    );
     assert_eq!(forgejo_link(task), Some(("victor/x".to_owned(), 42)));
     assert_eq!(
         task.data.get(keys::LABELS).unwrap(),
@@ -66,7 +74,9 @@ fn mark_done_resolves_the_task() {
     // `sync` self-registers; mirror that so per-task watch succeeds.
     registry::register(dir.path(), "next-forgejo", vec!["x".into(), "hook".into()]).unwrap();
     let mut store = LibTaskStore::open(Some(dir.path())).unwrap();
-    let id = store.create_from_issue(&issue(), "@ai/x", "victor/x").unwrap();
+    let id = store
+        .create_from_issue(&issue(), "@ai/x", "victor/x")
+        .unwrap();
 
     store.mark_done(id).unwrap();
 
@@ -81,7 +91,9 @@ fn list_linked_filters_by_repo() {
     // `sync` self-registers; mirror that so per-task watch succeeds.
     registry::register(dir.path(), "next-forgejo", vec!["x".into(), "hook".into()]).unwrap();
     let mut store = LibTaskStore::open(Some(dir.path())).unwrap();
-    store.create_from_issue(&issue(), "@ai/x", "victor/x").unwrap();
+    store
+        .create_from_issue(&issue(), "@ai/x", "victor/x")
+        .unwrap();
 
     assert_eq!(store.list_linked("victor/x").unwrap().len(), 1);
     assert!(store.list_linked("other/repo").unwrap().is_empty());

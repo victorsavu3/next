@@ -52,7 +52,9 @@ fn until_rule_accepted_at_add_time() {
     let tasks = env.ctx.repo.store.list_tasks().unwrap();
     assert_eq!(tasks.len(), 1);
     let task = &tasks[0];
-    assert!(matches!(&task.recurrence, Some(Recurrence::Schedule { rrule, .. }) if rrule.contains("UNTIL")));
+    assert!(
+        matches!(&task.recurrence, Some(Recurrence::Schedule { rrule, .. }) if rrule.contains("UNTIL"))
+    );
 }
 
 #[test]
@@ -73,7 +75,11 @@ fn until_rule_stops_spawning_after_last_occurrence() {
 
     // Complete May 4 → spawns May 11.
     done::run(
-        done::Args { id: "until-stop".into(), completed_at: Some("2026-05-04".into()), json: false },
+        done::Args {
+            id: "until-stop".into(),
+            completed_at: Some("2026-05-04".into()),
+            json: false,
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -157,7 +163,10 @@ fn until_rule_stops_spawning_after_last_occurrence() {
         .into_iter()
         .filter(|t| t.status == Status::Open)
         .collect();
-    assert!(open.is_empty(), "no tasks should remain after UNTIL: {open:?}");
+    assert!(
+        open.is_empty(),
+        "no tasks should remain after UNTIL: {open:?}"
+    );
 }
 
 // ── COUNT: task stops spawning after N total occurrences ─────────────────────
@@ -178,7 +187,9 @@ fn count_rule_accepted_at_add_time() {
 
     let tasks = env.ctx.repo.store.list_tasks().unwrap();
     assert_eq!(tasks.len(), 1);
-    assert!(matches!(&tasks[0].recurrence, Some(Recurrence::Schedule { rrule, .. }) if rrule.contains("COUNT")));
+    assert!(
+        matches!(&tasks[0].recurrence, Some(Recurrence::Schedule { rrule, .. }) if rrule.contains("COUNT"))
+    );
 }
 
 #[test]
@@ -198,7 +209,11 @@ fn count_rule_stops_spawning_after_n_completions() {
 
     // Complete first occurrence (May 4) → spawns second (May 11).
     done::run(
-        done::Args { id: "count-2".into(), completed_at: Some("2026-05-04".into()), json: false },
+        done::Args {
+            id: "count-2".into(),
+            completed_at: Some("2026-05-04".into()),
+            json: false,
+        },
         &mut env.ctx,
     )
     .unwrap();
@@ -235,7 +250,10 @@ fn count_rule_stops_spawning_after_n_completions() {
         .into_iter()
         .filter(|t| t.status == Status::Open)
         .collect();
-    assert!(open.is_empty(), "no tasks should remain after COUNT=2: {open:?}");
+    assert!(
+        open.is_empty(),
+        "no tasks should remain after COUNT=2: {open:?}"
+    );
 }
 
 // ── Positional BYDAY (1MO, -1FR) ────────────────────────────────────────────
@@ -277,9 +295,19 @@ fn first_monday_of_month_rule_accepted_and_spawns_correctly() {
     assert_eq!(open.len(), 1);
     let next_due = open[0].due.unwrap();
     // First Monday of June 2026 is June 1.
-    assert_eq!(next_due.weekday(), Weekday::Mon, "next due must be a Monday");
-    assert!(next_due > d(2026, 5, 31), "next due must be in June or later");
-    assert!(next_due <= d(2026, 6, 7), "next due must be within the first week of June");
+    assert_eq!(
+        next_due.weekday(),
+        Weekday::Mon,
+        "next due must be a Monday"
+    );
+    assert!(
+        next_due > d(2026, 5, 31),
+        "next due must be in June or later"
+    );
+    assert!(
+        next_due <= d(2026, 6, 7),
+        "next due must be within the first week of June"
+    );
 }
 
 #[test]
@@ -319,8 +347,15 @@ fn last_friday_of_month_rule_accepted_and_spawns_correctly() {
     assert_eq!(open.len(), 1);
     let next_due = open[0].due.unwrap();
     // Last Friday of June 2026 is June 26.
-    assert_eq!(next_due.weekday(), Weekday::Fri, "next due must be a Friday");
-    assert!(next_due >= d(2026, 6, 24), "must be within last week of June");
+    assert_eq!(
+        next_due.weekday(),
+        Weekday::Fri,
+        "next due must be a Friday"
+    );
+    assert!(
+        next_due >= d(2026, 6, 24),
+        "must be within last week of June"
+    );
     assert!(next_due <= d(2026, 6, 30));
 }
 

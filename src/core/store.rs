@@ -3,7 +3,11 @@ use std::{collections::HashMap, path::PathBuf};
 use uuid::Uuid;
 
 use crate::core::{
-    domain::{state::GlobalState, tag::TagMeta, task::{Status, Task}},
+    domain::{
+        state::GlobalState,
+        tag::TagMeta,
+        task::{Status, Task},
+    },
     error::Result,
 };
 
@@ -52,7 +56,10 @@ impl TaskQuery {
     /// A query returning every match in one page — for internal pipelines
     /// (filtering, scoring) that need the complete set, not a window.
     pub fn unpaginated() -> Self {
-        Self { page_size: u32::MAX, ..Self::default() }
+        Self {
+            page_size: u32::MAX,
+            ..Self::default()
+        }
     }
 
     /// Whether `task` (assumed active-tier) passes this query's filter gates.
@@ -72,10 +79,18 @@ impl TaskQuery {
                 return false;
             }
         }
-        if !self.required_tags.iter().all(|req| task.tags.iter().any(|t| tag_matches(t, req))) {
+        if !self
+            .required_tags
+            .iter()
+            .all(|req| task.tags.iter().any(|t| tag_matches(t, req)))
+        {
             return false;
         }
-        if self.excluded_tags.iter().any(|exc| task.tags.iter().any(|t| tag_matches(t, exc))) {
+        if self
+            .excluded_tags
+            .iter()
+            .any(|exc| task.tags.iter().any(|t| tag_matches(t, exc)))
+        {
             return false;
         }
         true
@@ -123,12 +138,25 @@ impl<T> Page<T> {
 /// as 1; `page_size` 0 falls back to [`DEFAULT_PAGE_SIZE`]. A page past the
 /// end yields an empty `items`, with `total` still describing the full set.
 pub fn paginate<T>(items: Vec<T>, page: u32, page_size: u32) -> Page<T> {
-    let page_size = if page_size == 0 { DEFAULT_PAGE_SIZE } else { page_size };
+    let page_size = if page_size == 0 {
+        DEFAULT_PAGE_SIZE
+    } else {
+        page_size
+    };
     let page = page.max(1);
     let total = items.len() as u64;
     let offset = (page as usize - 1).saturating_mul(page_size as usize);
-    let items: Vec<T> = items.into_iter().skip(offset).take(page_size as usize).collect();
-    Page { items, page, page_size, total }
+    let items: Vec<T> = items
+        .into_iter()
+        .skip(offset)
+        .take(page_size as usize)
+        .collect();
+    Page {
+        items,
+        page,
+        page_size,
+        total,
+    }
 }
 
 /// Which storage tier holds a task.
@@ -223,9 +251,9 @@ pub trait Store: Send + Sync {
 
     /// Removes the description field for `tag`. Errors if no metadata file exists.
     fn delete_tag_description(&mut self, tag: &str) -> Result<()> {
-        let mut meta = self
-            .get_tag_meta(tag)?
-            .ok_or_else(|| crate::core::error::TaskError::Other(format!("no description set for tag {tag:?}")))?;
+        let mut meta = self.get_tag_meta(tag)?.ok_or_else(|| {
+            crate::core::error::TaskError::Other(format!("no description set for tag {tag:?}"))
+        })?;
         meta.description = None;
         if meta == TagMeta::default() {
             self.delete_tag_meta(tag)
@@ -325,7 +353,10 @@ pub trait Store: Send + Sync {
     /// The default fetches one by one; indexed stores override with a batch
     /// query.
     fn get_tasks(&self, ids: &[Uuid]) -> Result<Vec<Task>> {
-        Ok(ids.iter().filter_map(|id| self.get_task(*id).ok()).collect())
+        Ok(ids
+            .iter()
+            .filter_map(|id| self.get_task(*id).ok())
+            .collect())
     }
 
     /// Returns the tasks matching `q`, paginated.
@@ -380,7 +411,9 @@ pub trait VcsBackend: Send + Sync {
     /// `git diff HEAD` patch. Conflicted files appear in both sections.
     /// Default: returns an error (not supported by non-git backends).
     fn diff(&self) -> Result<String> {
-        Err(crate::core::error::TaskError::Other("diff not supported by this backend".into()))
+        Err(crate::core::error::TaskError::Other(
+            "diff not supported by this backend".into(),
+        ))
     }
 
     /// Fetches from the default remote and hard-resets the working tree to
@@ -389,7 +422,9 @@ pub trait VcsBackend: Send + Sync {
     /// Returns the new HEAD SHA-1 hex string so the caller can update caches.
     /// Default: returns an error (not supported by non-git backends).
     fn force_pull(&self) -> Result<String> {
-        Err(crate::core::error::TaskError::Other("force_pull not supported by this backend".into()))
+        Err(crate::core::error::TaskError::Other(
+            "force_pull not supported by this backend".into(),
+        ))
     }
 }
 
@@ -411,7 +446,10 @@ mod tests {
         let p = paginate(vec![1, 2], 5, 10);
         assert!(p.items.is_empty());
         assert_eq!(p.total, 2);
-        assert!(p.is_paginated(), "an empty window on a non-empty set is paginated");
+        assert!(
+            p.is_paginated(),
+            "an empty window on a non-empty set is paginated"
+        );
     }
 
     #[test]
@@ -430,7 +468,10 @@ mod tests {
         let p = paginate((0..120).collect::<Vec<_>>(), 1, 0);
         assert_eq!(p.items.len(), DEFAULT_PAGE_SIZE as usize);
         assert_eq!(p.total, 120, "total reflects the full result count");
-        assert!(p.is_paginated(), "truncation is detectable from the envelope");
+        assert!(
+            p.is_paginated(),
+            "truncation is detectable from the envelope"
+        );
     }
 
     #[test]

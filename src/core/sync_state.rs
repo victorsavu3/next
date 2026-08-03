@@ -76,7 +76,12 @@ pub fn record_archive(root: &Path, now: DateTime<Utc>) -> Result<()> {
 /// Records a successful periodic sync for `name` at `now`, preserving the rest.
 pub fn record_plugin_sync(root: &Path, name: &str, now: DateTime<Utc>) -> Result<()> {
     update_machine_state(root, |machine| {
-        machine.sync.plugins.entry(name.to_owned()).or_default().last_sync = Some(now);
+        machine
+            .sync
+            .plugins
+            .entry(name.to_owned())
+            .or_default()
+            .last_sync = Some(now);
         Ok(())
     })
 }
@@ -92,9 +97,12 @@ mod tests {
             last_pull: Some(now),
             ..Default::default()
         };
-        state
-            .plugins
-            .insert("forgejo".to_owned(), PluginSyncState { last_sync: Some(now) });
+        state.plugins.insert(
+            "forgejo".to_owned(),
+            PluginSyncState {
+                last_sync: Some(now),
+            },
+        );
 
         let s = toml::to_string_pretty(&state).unwrap();
         let loaded: SyncState = toml::from_str(&s).unwrap();
@@ -133,7 +141,11 @@ mod tests {
 
         let loaded = load(root).unwrap();
         assert_eq!(loaded.plugins["forgejo"].last_sync, Some(now));
-        assert_eq!(loaded.last_pull, Some(earlier), "record_plugin_sync must preserve last_pull");
+        assert_eq!(
+            loaded.last_pull,
+            Some(earlier),
+            "record_plugin_sync must preserve last_pull"
+        );
     }
 
     #[test]
@@ -148,7 +160,9 @@ mod tests {
         update_machine_state(root, |machine| {
             machine.sync.plugins.insert(
                 "forgejo".to_owned(),
-                PluginSyncState { last_sync: Some(Utc::now()) },
+                PluginSyncState {
+                    last_sync: Some(Utc::now()),
+                },
             );
             Ok(())
         })
@@ -159,7 +173,10 @@ mod tests {
 
         let loaded = load(root).unwrap();
         assert_eq!(loaded.last_pull, Some(now));
-        assert!(loaded.plugins.contains_key("forgejo"), "record_pull must preserve plugins");
+        assert!(
+            loaded.plugins.contains_key("forgejo"),
+            "record_pull must preserve plugins"
+        );
     }
 
     #[test]
@@ -189,7 +206,11 @@ mod tests {
 
         let machine = load_machine_state(root).unwrap();
         assert_eq!(machine.global.active_contexts, vec!["@work"]);
-        assert_eq!(machine.plugins.len(), 1, "record_pull must not drop plugins");
+        assert_eq!(
+            machine.plugins.len(),
+            1,
+            "record_pull must not drop plugins"
+        );
         assert!(machine.sync.last_pull.is_some());
     }
 }

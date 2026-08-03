@@ -12,16 +12,16 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use chrono::NaiveDate;
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
+use tui_input::Input;
 
 use crate::core::domain::filter;
 use crate::core::domain::tag::TagMeta;
 use crate::core::domain::task::Task;
 use crate::core::scoring::{self, ScoreBreakdown, ScoredTask, TaskDates};
-use uuid::Uuid;
 use crate::core::{FilterArgs, TaskRepository};
 use crate::Config;
+use uuid::Uuid;
 
 use super::config::ConfigSource;
 use super::state_panel::{Section, StatePanel};
@@ -368,7 +368,12 @@ pub struct App {
 impl App {
     /// Builds a fresh app over the given repository. Call [`App::reload`] before
     /// the first draw to populate the task list.
-    pub fn new(config: Config, repo: TaskRepository, source: ConfigSource, today: NaiveDate) -> Self {
+    pub fn new(
+        config: Config,
+        repo: TaskRepository,
+        source: ConfigSource,
+        today: NaiveDate,
+    ) -> Self {
         let forecast_view = super::forecast::ForecastView::new(config.forecast_horizon_days);
         Self {
             config,
@@ -467,9 +472,12 @@ impl App {
     /// auto-opens any new context sections, and caches the task→section map
     /// for cross-view selection seeding.
     pub fn tree_items(&mut self) -> Vec<tui_tree_widget::TreeItem<'static, uuid::Uuid>> {
-        let filter_set = self.current_filter_set().unwrap_or_else(|_| {
-            filter::FilterSet { include_blocked_parents: true, ..Default::default() }
-        });
+        let filter_set = self
+            .current_filter_set()
+            .unwrap_or_else(|_| filter::FilterSet {
+                include_blocked_parents: true,
+                ..Default::default()
+            });
         let store = self.repo.store();
         let state = store.get_state().unwrap_or_default();
         let build = super::tree::build_items(
@@ -745,7 +753,9 @@ impl App {
     fn normal_common_key(key: KeyEvent) -> Option<Action> {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Some(Action::Quit),
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::Quit)
+            }
             KeyCode::Tab => Some(Action::CycleView),
             KeyCode::Char('1') => Some(Action::SwitchView(View::List)),
             KeyCode::Char('2') => Some(Action::SwitchView(View::Tree)),
@@ -886,15 +896,18 @@ impl App {
     }
 
     fn list_key(key: KeyEvent) -> Option<Action> {
-        Self::probe_layers(key, &[
-            Self::normal_common_key,
-            Self::flag_key,
-            Self::jump_key_list,
-            Self::detail_scroll_key,
-            Self::list_closed_key,
-            Self::list_nav_key,
-            Self::task_action_key,
-        ])
+        Self::probe_layers(
+            key,
+            &[
+                Self::normal_common_key,
+                Self::flag_key,
+                Self::jump_key_list,
+                Self::detail_scroll_key,
+                Self::list_closed_key,
+                Self::list_nav_key,
+                Self::task_action_key,
+            ],
+        )
     }
 
     /// Tree-view keys. Navigation drives the tree widget; `←/→` collapse/expand,
@@ -902,25 +915,31 @@ impl App {
     /// per-task action keys operate on the highlighted node. Ctrl-d/u still
     /// scroll the detail pane.
     fn tree_key(key: KeyEvent) -> Option<Action> {
-        Self::probe_layers(key, &[
-            Self::normal_common_key,
-            Self::flag_key,
-            Self::jump_key_tree,
-            Self::detail_scroll_key,
-            Self::tree_nav_key,
-            Self::task_action_key,
-        ])
+        Self::probe_layers(
+            key,
+            &[
+                Self::normal_common_key,
+                Self::flag_key,
+                Self::jump_key_tree,
+                Self::detail_scroll_key,
+                Self::tree_nav_key,
+                Self::task_action_key,
+            ],
+        )
     }
 
     /// Forecast-view keys: a read-only list, so only view switching, reload,
     /// filtering, horizon adjustment (`+`/`-`), and the global flag toggles are
     /// bound.
     fn forecast_key(key: KeyEvent) -> Option<Action> {
-        Self::probe_layers(key, &[
-            Self::normal_common_key,
-            Self::flag_key,
-            Self::forecast_nav_key,
-        ])
+        Self::probe_layers(
+            key,
+            &[
+                Self::normal_common_key,
+                Self::flag_key,
+                Self::forecast_nav_key,
+            ],
+        )
     }
 
     fn filter_key(key: KeyEvent) -> Option<Action> {
@@ -987,9 +1006,7 @@ impl App {
             KeyCode::Esc => Some(Action::EditCancel),
             KeyCode::Char('s') if ctrl => Some(Action::EditSave),
             KeyCode::Tab | KeyCode::BackTab => {
-                if key.code == KeyCode::BackTab
-                    || key.modifiers.contains(KeyModifiers::SHIFT)
-                {
+                if key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT) {
                     Some(Action::EditFocusPrev)
                 } else {
                     Some(Action::EditFocusNext)
@@ -998,14 +1015,24 @@ impl App {
             // ↑/↓ move between fields, EXCEPT inside a multi-line textarea or
             // when the tag editor is showing autocomplete suggestions.
             KeyCode::Down if !self.edit_focus_is_multiline() => {
-                if self.edit_form.as_ref().map(|f| f.tags_wants_vertical_nav()).unwrap_or(false) {
+                if self
+                    .edit_form
+                    .as_ref()
+                    .map(|f| f.tags_wants_vertical_nav())
+                    .unwrap_or(false)
+                {
                     Some(Action::EditInput(key))
                 } else {
                     Some(Action::EditFocusNext)
                 }
             }
             KeyCode::Up if !self.edit_focus_is_multiline() => {
-                if self.edit_form.as_ref().map(|f| f.tags_wants_vertical_nav()).unwrap_or(false) {
+                if self
+                    .edit_form
+                    .as_ref()
+                    .map(|f| f.tags_wants_vertical_nav())
+                    .unwrap_or(false)
+                {
                     Some(Action::EditInput(key))
                 } else {
                     Some(Action::EditFocusPrev)
@@ -1842,11 +1869,13 @@ impl App {
             return;
         };
         match panel.section {
-            Section::Contexts => self.apply_state_mutation("contexts cleared".to_owned(), |state| {
-                state.active_contexts.clear();
-                state.excluded_contexts.clear();
-                Ok(())
-            }),
+            Section::Contexts => {
+                self.apply_state_mutation("contexts cleared".to_owned(), |state| {
+                    state.active_contexts.clear();
+                    state.excluded_contexts.clear();
+                    Ok(())
+                })
+            }
             Section::Users => self.apply_state_mutation("users cleared".to_owned(), |state| {
                 state.active_users.clear();
                 Ok(())
@@ -2070,9 +2099,7 @@ impl App {
             self.detail_scroll = 0;
             self.status = None;
         } else {
-            self.status = Some(
-                "blocker not in current view — toggle --all to see it".to_owned(),
-            );
+            self.status = Some("blocker not in current view — toggle --all to see it".to_owned());
         }
     }
 }
@@ -2185,8 +2212,14 @@ mod tests {
         let app = app_with_repo_tasks(vec![parent, child]);
 
         let titles = visible_titles(&app);
-        assert!(titles.contains(&"Project".to_string()), "list missing project: {titles:?}");
-        assert!(titles.contains(&"Subtask".to_string()), "list missing subtask: {titles:?}");
+        assert!(
+            titles.contains(&"Project".to_string()),
+            "list missing project: {titles:?}"
+        );
+        assert!(
+            titles.contains(&"Subtask".to_string()),
+            "list missing subtask: {titles:?}"
+        );
 
         // The tree shows the project nested inside a context section.
         let mut app = app;
@@ -2197,7 +2230,11 @@ mod tests {
             .flat_map(|sec| sec.children())
             .find(|i| *i.identifier() == parent_id);
         assert!(root.is_some(), "tree missing project root");
-        assert_eq!(root.unwrap().children().len(), 1, "subtask should nest under the project");
+        assert_eq!(
+            root.unwrap().children().len(),
+            1,
+            "subtask should nest under the project"
+        );
     }
 
     #[test]
@@ -2547,7 +2584,10 @@ mod tests {
             .insert("ticket".to_owned(), serde_json::json!("JIRA-7"));
         app.update(Action::EditSave);
         let stored = app.repo.store.get_task(id).unwrap();
-        assert_eq!(stored.data.get("ticket").and_then(|v| v.as_str()), Some("JIRA-7"));
+        assert_eq!(
+            stored.data.get("ticket").and_then(|v| v.as_str()),
+            Some("JIRA-7")
+        );
     }
 
     #[test]
@@ -2557,7 +2597,11 @@ mod tests {
         // Empty title is invalid → modal stays open with an error status.
         app.edit_form.as_mut().unwrap().title = Input::new(String::new());
         app.update(Action::EditSave);
-        assert_eq!(app.mode(), Mode::Edit, "modal stays open on validation error");
+        assert_eq!(
+            app.mode(),
+            Mode::Edit,
+            "modal stays open on validation error"
+        );
         assert!(app.status().unwrap().contains("edit error"));
         // Store unchanged.
         assert_eq!(app.repo.store.get_task(id).unwrap().title, "Stays");
@@ -2634,8 +2678,9 @@ mod tests {
         assert_eq!(app.status().unwrap(), "completed; spawned next occurrence");
         // Original is done; a fresh open instance now exists in the store.
         let all = app.repo.store.list_tasks().unwrap();
-        assert!(all.iter().any(|t| t.id == task.id
-            && t.status == crate::core::domain::task::Status::Done));
+        assert!(all
+            .iter()
+            .any(|t| t.id == task.id && t.status == crate::core::domain::task::Status::Done));
         assert!(all.iter().any(|t| t.id != task.id
             && t.status == crate::core::domain::task::Status::Open
             && t.title == "recurring"));
@@ -2696,7 +2741,11 @@ mod tests {
         let parent_id = commit_task(&mut app, "parent");
         app.reload().unwrap();
         // Select the child.
-        let idx = app.tasks().iter().position(|s| s.task.id == child_id).unwrap();
+        let idx = app
+            .tasks()
+            .iter()
+            .position(|s| s.task.id == child_id)
+            .unwrap();
         app.selected = idx;
 
         app.update(Action::OpenMove);
@@ -2713,7 +2762,10 @@ mod tests {
         app.update(Action::MoveConfirm);
 
         assert_eq!(app.status().unwrap(), "moved");
-        assert_eq!(app.repo.store.get_task(child_id).unwrap().parent_id, Some(parent_id));
+        assert_eq!(
+            app.repo.store.get_task(child_id).unwrap().parent_id,
+            Some(parent_id)
+        );
     }
 
     #[test]
@@ -2735,7 +2787,11 @@ mod tests {
 
         // Operate through the list selection; Tree is the startup view.
         app.view = View::List;
-        let idx = app.tasks().iter().position(|s| s.task.id == child_id).unwrap();
+        let idx = app
+            .tasks()
+            .iter()
+            .position(|s| s.task.id == child_id)
+            .unwrap();
         app.selected = idx;
         app.update(Action::OpenMove);
         // The top-level option is first.
@@ -2772,7 +2828,11 @@ mod tests {
         app.update(Action::ToggleAll); // reveal parents with open children
         app.reload().unwrap();
 
-        let idx = app.tasks().iter().position(|s| s.task.id == root_id).unwrap();
+        let idx = app
+            .tasks()
+            .iter()
+            .position(|s| s.task.id == root_id)
+            .unwrap();
         app.selected = idx;
         app.update(Action::OpenMove);
         let candidates = app.move_picker().unwrap();
@@ -2811,16 +2871,19 @@ mod tests {
         app.reload().unwrap();
 
         // Moving root: mid must not be a candidate (would create root→mid→root).
-        let idx = app.tasks().iter().position(|s| s.task.id == root_id).unwrap();
+        let idx = app
+            .tasks()
+            .iter()
+            .position(|s| s.task.id == root_id)
+            .unwrap();
         app.selected = idx;
         app.update(Action::OpenMove);
-        assert!(
-            app.move_picker()
-                .unwrap()
-                .filtered()
-                .iter()
-                .all(|c| c.task_id != Some(mid_id))
-        );
+        assert!(app
+            .move_picker()
+            .unwrap()
+            .filtered()
+            .iter()
+            .all(|c| c.task_id != Some(mid_id)));
     }
 
     #[test]
@@ -2836,7 +2899,11 @@ mod tests {
         commit_task(&mut app, "alpha parent");
         commit_task(&mut app, "beta parent");
         app.reload().unwrap();
-        let idx = app.tasks().iter().position(|s| s.task.id == child_id).unwrap();
+        let idx = app
+            .tasks()
+            .iter()
+            .position(|s| s.task.id == child_id)
+            .unwrap();
         app.selected = idx;
         app.update(Action::OpenMove);
 
@@ -2923,7 +2990,11 @@ mod tests {
         );
         app.update(Action::TreeToggleAll);
         assert!(app.tree_include_all());
-        assert_eq!(app.tree_items().len(), 1, "done task visible with include-all");
+        assert_eq!(
+            app.tree_items().len(),
+            1,
+            "done task visible with include-all"
+        );
     }
 
     // ── Delete keeps the cursor near the removed row ──────────────────────────
@@ -3087,14 +3158,22 @@ mod tests {
         let mut app = app_with_repo_tasks(vec![tagged, plain]);
 
         // No filter: both due-today tasks forecast.
-        let titles: Vec<String> = app.forecast_entries().into_iter().map(|e| e.title).collect();
+        let titles: Vec<String> = app
+            .forecast_entries()
+            .into_iter()
+            .map(|e| e.title)
+            .collect();
         assert!(titles.contains(&"tagged".to_owned()));
         assert!(titles.contains(&"plain".to_owned()));
 
         // Require #rust: only the tagged task survives in the forecast.
         app.filter_tokens = vec!["+#rust".to_owned()];
         app.reload().unwrap();
-        let titles: Vec<String> = app.forecast_entries().into_iter().map(|e| e.title).collect();
+        let titles: Vec<String> = app
+            .forecast_entries()
+            .into_iter()
+            .map(|e| e.title)
+            .collect();
         assert_eq!(titles, vec!["tagged".to_owned()]);
     }
 
@@ -3198,7 +3277,10 @@ mod tests {
 
         let state = app.repo.store().get_state().unwrap();
         assert_eq!(state.resources.get("printer"), Some(&false));
-        assert!(visible_titles(&app).is_empty(), "unavailable-resource task hidden");
+        assert!(
+            visible_titles(&app).is_empty(),
+            "unavailable-resource task hidden"
+        );
     }
 
     #[test]
@@ -3235,7 +3317,13 @@ mod tests {
         app.update(Action::OpenStatePanel);
         app.update(Action::StateToggle); // @work active
         app.update(Action::StateToggleExcluded); // @work excluded too
-        assert!(!app.repo.store().get_state().unwrap().active_contexts.is_empty());
+        assert!(!app
+            .repo
+            .store()
+            .get_state()
+            .unwrap()
+            .active_contexts
+            .is_empty());
 
         app.update(Action::StateClear);
         let state = app.repo.store().get_state().unwrap();
@@ -3265,7 +3353,10 @@ mod tests {
         let mut app = app_with_repo_tasks(vec![Task::new("t")]);
         // No prior last_pull recorded → stale → a background sync is kicked off.
         app.start_sync_if_stale();
-        assert!(app.syncing(), "a stale local copy must trigger a background sync");
+        assert!(
+            app.syncing(),
+            "a stale local copy must trigger a background sync"
+        );
         assert!(app.status().unwrap().contains("stale"));
     }
 
@@ -3358,7 +3449,11 @@ mod tests {
         app.reload().unwrap();
 
         // Select the blocker.
-        let idx = app.tasks().iter().position(|s| s.task.id == blocker_id).unwrap();
+        let idx = app
+            .tasks()
+            .iter()
+            .position(|s| s.task.id == blocker_id)
+            .unwrap();
         app.selected = idx;
 
         let detail = app.selected_detail().unwrap();
@@ -3386,7 +3481,11 @@ mod tests {
         app.reload().unwrap();
 
         // Select the blocked task.
-        let blocked_idx = app.tasks().iter().position(|s| s.task.blocked_by.contains(&blocker_id)).unwrap();
+        let blocked_idx = app
+            .tasks()
+            .iter()
+            .position(|s| s.task.blocked_by.contains(&blocker_id))
+            .unwrap();
         app.selected = blocked_idx;
         assert_eq!(app.selected_task().unwrap().title, "blocked task");
 
@@ -3422,7 +3521,10 @@ mod tests {
 
         // The blocker is not in the current view.
         let status = app.status().unwrap();
-        assert!(status.contains("not in current view"), "unexpected status: {status}");
+        assert!(
+            status.contains("not in current view"),
+            "unexpected status: {status}"
+        );
     }
 
     /// The `b` key on a task with no `blocked_by` sets the "no blockers" status.

@@ -24,7 +24,10 @@ pub async fn require_webhook_bearer(
     req: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let token = state.webhook_token.as_deref().ok_or(StatusCode::UNAUTHORIZED)?;
+    let token = state
+        .webhook_token
+        .as_deref()
+        .ok_or(StatusCode::UNAUTHORIZED)?;
     check_bearer(req.headers(), token)?;
     Ok(next.run(req).await)
 }
@@ -35,7 +38,9 @@ fn check_bearer(headers: &axum::http::HeaderMap, expected: &str) -> Result<(), S
         .and_then(|v| v.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let provided = auth.strip_prefix("Bearer ").ok_or(StatusCode::UNAUTHORIZED)?;
+    let provided = auth
+        .strip_prefix("Bearer ")
+        .ok_or(StatusCode::UNAUTHORIZED)?;
 
     // Constant-time comparison to resist timing attacks.
     if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
@@ -51,12 +56,9 @@ fn check_bearer(headers: &axum::http::HeaderMap, expected: &str) -> Result<(), S
 /// so timing is O(b.len()) regardless of how long `a` is.  The final length check
 /// leaks only the length of `a`, which the caller already knows they sent.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    let mismatch = b
-        .iter()
-        .enumerate()
-        .fold(0u8, |acc, (i, &expected)| {
-            acc | (a.get(i).copied().unwrap_or(0) ^ expected)
-        });
+    let mismatch = b.iter().enumerate().fold(0u8, |acc, (i, &expected)| {
+        acc | (a.get(i).copied().unwrap_or(0) ^ expected)
+    });
     mismatch == 0 && a.len() == b.len()
 }
 

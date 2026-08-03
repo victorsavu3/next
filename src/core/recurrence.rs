@@ -6,7 +6,11 @@ use crate::core::domain::task::{Recurrence, Snap, Task};
 // ─── rrule helpers ─────────────────────────────────────────────────────────
 
 fn build_rrule_str(rrule: &str, anchor: NaiveDate) -> String {
-    format!("DTSTART:{}\nRRULE:{}", anchor.format("%Y%m%dT000000Z"), rrule)
+    format!(
+        "DTSTART:{}\nRRULE:{}",
+        anchor.format("%Y%m%dT000000Z"),
+        rrule
+    )
 }
 
 // ─── snap ──────────────────────────────────────────────────────────────────
@@ -31,9 +35,7 @@ pub fn parse_snap(s: &str) -> anyhow::Result<Snap> {
                 anyhow::ensure!((1..=28).contains(&day), "day-of-month must be 1–28");
                 Ok(Snap::DayOfMonth { day })
             } else {
-                anyhow::bail!(
-                    "unknown snap {s:?} — try: next-workday, monday … sunday, dom:N"
-                )
+                anyhow::bail!("unknown snap {s:?} — try: next-workday, monday … sunday, dom:N")
             }
         }
     }
@@ -73,7 +75,11 @@ pub fn apply_snap(mut date: NaiveDate, snap: &Snap) -> NaiveDate {
 }
 
 fn last_day_of_month(year: i32, month: u32) -> NaiveDate {
-    let (ny, nm) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    let (ny, nm) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
     NaiveDate::from_ymd_opt(ny, nm, 1).unwrap() - Duration::days(1)
 }
 
@@ -145,7 +151,10 @@ pub fn validate_rrule(rrule: &str) -> anyhow::Result<()> {
                     .trim()
                     .parse()
                     .map_err(|_| anyhow::anyhow!("BYMONTHDAY must be a non-zero integer"))?;
-                anyhow::ensure!(n != 0, "BYMONTHDAY=0 is invalid (RFC 5545 requires non-zero)");
+                anyhow::ensure!(
+                    n != 0,
+                    "BYMONTHDAY=0 is invalid (RFC 5545 requires non-zero)"
+                );
             }
         }
     }
@@ -212,7 +221,11 @@ pub fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<N
         .unwrap_or(today);
 
     match task.recurrence.as_ref() {
-        Some(Recurrence::Schedule { rrule, anchor, snap }) => {
+        Some(Recurrence::Schedule {
+            rrule,
+            anchor,
+            snap,
+        }) => {
             // Walk the raw (un-snapped) series so each call strictly advances;
             // snap is applied only to the emitted date.
             let mut after = base;
@@ -235,7 +248,10 @@ pub fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<N
             }
             dates
         }
-        Some(Recurrence::Completion { interval_days, snap }) => {
+        Some(Recurrence::Completion {
+            interval_days,
+            snap,
+        }) => {
             // Assume each occurrence is completed on its due date. Walk using the
             // raw (un-snapped) value as the base for the next step so the series
             // always advances by exactly interval_days per iteration.
@@ -283,7 +299,11 @@ pub fn spawn_next(task: &Task, today: NaiveDate) -> anyhow::Result<Option<Task>>
     };
 
     let occurrence = match recurrence {
-        Recurrence::Schedule { rrule, anchor, snap } => {
+        Recurrence::Schedule {
+            rrule,
+            anchor,
+            snap,
+        } => {
             // A "no occurrence" error means the rule is exhausted (UNTIL/COUNT),
             // not a programming error — treat as "nothing to spawn".
             let raw = match next_occurrence(rrule, *anchor, after) {
@@ -292,7 +312,10 @@ pub fn spawn_next(task: &Task, today: NaiveDate) -> anyhow::Result<Option<Task>>
             };
             snap.as_ref().map_or(raw, |s| apply_snap(raw, s))
         }
-        Recurrence::Completion { interval_days, snap } => {
+        Recurrence::Completion {
+            interval_days,
+            snap,
+        } => {
             let raw = today + Duration::days(*interval_days as i64);
             snap.as_ref().map_or(raw, |s| apply_snap(raw, s))
         }
@@ -373,7 +396,11 @@ mod tests {
         let result =
             parse_recurrence(Some("FREQ=WEEKLY;BYDAY=MO".into()), None, None, anchor).unwrap();
         match result {
-            Some(Recurrence::Schedule { rrule, anchor: a, snap }) => {
+            Some(Recurrence::Schedule {
+                rrule,
+                anchor: a,
+                snap,
+            }) => {
                 assert_eq!(rrule, "FREQ=WEEKLY;BYDAY=MO");
                 assert_eq!(a, anchor);
                 assert!(snap.is_none());
@@ -393,7 +420,9 @@ mod tests {
         )
         .unwrap();
         match result {
-            Some(Recurrence::Schedule { snap: Some(snap), .. }) => {
+            Some(Recurrence::Schedule {
+                snap: Some(snap), ..
+            }) => {
                 assert_eq!(snap, Snap::NextWeekday { weekday: 4 });
             }
             other => panic!("expected Schedule with snap, got {other:?}"),
@@ -405,7 +434,10 @@ mod tests {
         let anchor = d(2026, 5, 1);
         let result = parse_recurrence(None, Some(14), None, anchor).unwrap();
         match result {
-            Some(Recurrence::Completion { interval_days, snap }) => {
+            Some(Recurrence::Completion {
+                interval_days,
+                snap,
+            }) => {
                 assert_eq!(interval_days, 14);
                 assert!(snap.is_none());
             }
@@ -418,7 +450,9 @@ mod tests {
         let anchor = d(2026, 5, 1);
         let result = parse_recurrence(None, Some(7), Some("next-workday"), anchor).unwrap();
         match result {
-            Some(Recurrence::Completion { snap: Some(snap), .. }) => {
+            Some(Recurrence::Completion {
+                snap: Some(snap), ..
+            }) => {
                 assert_eq!(snap, Snap::NextWorkday);
             }
             other => panic!("expected Completion with snap, got {other:?}"),
@@ -437,7 +471,9 @@ mod tests {
         let anchor = d(2026, 5, 1);
         let result = parse_recurrence(None, Some(30), Some("dom:15"), anchor).unwrap();
         match result {
-            Some(Recurrence::Completion { snap: Some(snap), .. }) => {
+            Some(Recurrence::Completion {
+                snap: Some(snap), ..
+            }) => {
                 assert_eq!(snap, Snap::DayOfMonth { day: 15 });
             }
             other => panic!("expected Completion with dom snap, got {other:?}"),
@@ -536,7 +572,8 @@ mod tests {
         // anchor=Jan 1, after=Jan 15, INTERVAL=3 → Apr 1
         let anchor = d(2026, 1, 1);
         let after = d(2026, 1, 15);
-        let result = next_occurrence("FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=1", anchor, after).unwrap();
+        let result =
+            next_occurrence("FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=1", anchor, after).unwrap();
         assert_eq!(result, d(2026, 4, 1));
     }
 
@@ -545,7 +582,8 @@ mod tests {
         // anchor=Jan 1, after=Apr 5 → Jul 1
         let anchor = d(2026, 1, 1);
         let after = d(2026, 4, 5);
-        let result = next_occurrence("FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=1", anchor, after).unwrap();
+        let result =
+            next_occurrence("FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=1", anchor, after).unwrap();
         assert_eq!(result, d(2026, 7, 1));
     }
 
@@ -657,7 +695,12 @@ mod tests {
         // Correct rule for "March 15 every year": FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=15
         let anchor = d(2026, 3, 15);
         assert_eq!(
-            next_occurrence("FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=15", anchor, d(2026, 3, 20)).unwrap(),
+            next_occurrence(
+                "FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=15",
+                anchor,
+                d(2026, 3, 20)
+            )
+            .unwrap(),
             d(2027, 3, 15)
         );
         assert_eq!(
@@ -728,7 +771,7 @@ mod tests {
         // after=May 11 (Mon) → May 18 is the next even week from anchor
         let anchor = d(2026, 5, 4); // Monday
         let after = d(2026, 5, 11); // Monday, odd weeks from anchor (1 week after)
-        // Week 0 = May 4, Week 1 = May 11, Week 2 = May 18
+                                    // Week 0 = May 4, Week 1 = May 11, Week 2 = May 18
         let result = next_occurrence("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO", anchor, after).unwrap();
         assert_eq!(result, d(2026, 5, 18));
     }
@@ -884,8 +927,14 @@ mod tests {
         });
         let today = d(2026, 5, 10);
         let next = spawn_next(&task, today).unwrap().unwrap();
-        assert!(next.start.is_some(), "spawned task should have a start date");
-        assert!(next.due.is_none(), "spawned task should not have a due date");
+        assert!(
+            next.start.is_some(),
+            "spawned task should have a start date"
+        );
+        assert!(
+            next.due.is_none(),
+            "spawned task should not have a due date"
+        );
         assert_eq!(next.start, Some(today + Duration::days(7)));
     }
 
@@ -901,7 +950,10 @@ mod tests {
         let today = d(2026, 5, 10);
         let next = spawn_next(&task, today).unwrap().unwrap();
         assert!(next.due.is_some(), "spawned task should have a due date");
-        assert!(next.start.is_none(), "spawned task should not have a start date");
+        assert!(
+            next.start.is_none(),
+            "spawned task should not have a start date"
+        );
         assert_eq!(next.due, Some(today + Duration::days(30)));
     }
 
@@ -916,9 +968,18 @@ mod tests {
         });
         let today = d(2026, 5, 8); // Friday
         let next = spawn_next(&task, today).unwrap().unwrap();
-        assert!(next.start.is_some(), "spawned task should have a start date");
-        assert!(next.due.is_none(), "spawned task should not have a due date");
-        assert!(!matches!(next.start.unwrap().weekday(), Weekday::Sat | Weekday::Sun));
+        assert!(
+            next.start.is_some(),
+            "spawned task should have a start date"
+        );
+        assert!(
+            next.due.is_none(),
+            "spawned task should not have a due date"
+        );
+        assert!(!matches!(
+            next.start.unwrap().weekday(),
+            Weekday::Sat | Weekday::Sun
+        ));
     }
 
     #[test]
@@ -941,7 +1002,7 @@ mod tests {
     fn weekly_without_byday_defaults_to_anchor_weekday() {
         // FREQ=WEEKLY without BYDAY should recur on the same weekday as anchor.
         let anchor = d(2026, 5, 4); // Monday
-        let after = d(2026, 5, 4);  // same day as anchor
+        let after = d(2026, 5, 4); // same day as anchor
         let result = next_occurrence("FREQ=WEEKLY", anchor, after).unwrap();
         // Should return the NEXT Monday (May 11), not the next day (Tuesday)
         assert_eq!(result, d(2026, 5, 11));
@@ -984,12 +1045,23 @@ mod tests {
         // Custom data keys are preserved; time_log is dropped.
         let mut task = Task::new("Reviewed task");
         task.due = Some(d(2026, 5, 1));
-        task.data.insert("ticket".into(), serde_json::Value::String("JIRA-99".into()));
-        task.data.insert("time_log".into(), serde_json::json!([{"event": "start"}]));
-        task.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
+        task.data
+            .insert("ticket".into(), serde_json::Value::String("JIRA-99".into()));
+        task.data
+            .insert("time_log".into(), serde_json::json!([{"event": "start"}]));
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 7,
+            snap: None,
+        });
         let next = spawn_next(&task, d(2026, 5, 5)).unwrap().unwrap();
-        assert_eq!(next.data.get("ticket").and_then(|v| v.as_str()), Some("JIRA-99"));
-        assert!(!next.data.contains_key("time_log"), "time_log must not be copied");
+        assert_eq!(
+            next.data.get("ticket").and_then(|v| v.as_str()),
+            Some("JIRA-99")
+        );
+        assert!(
+            !next.data.contains_key("time_log"),
+            "time_log must not be copied"
+        );
     }
 
     // ── UNTIL / COUNT / new RFC 5545 features ───────────────────────────────
@@ -1122,7 +1194,10 @@ mod tests {
         // projected occurrences: May 11, May 18, ... up to horizon.
         let mut task = Task::new("Water plants");
         task.due = Some(d(2026, 5, 1));
-        task.recurrence = Some(Recurrence::Completion { interval_days: 7, snap: None });
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 7,
+            snap: None,
+        });
         let today = d(2026, 5, 4);
         let cutoff = d(2026, 5, 26);
         let dates = project_series(&task, today, cutoff);
@@ -1135,12 +1210,18 @@ mod tests {
     fn project_series_completion_type_respects_horizon() {
         let mut task = Task::new("Exercise");
         task.due = Some(d(2026, 6, 1));
-        task.recurrence = Some(Recurrence::Completion { interval_days: 30, snap: None });
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 30,
+            snap: None,
+        });
         let today = d(2026, 6, 1);
         let cutoff = d(2026, 6, 30);
         let dates = project_series(&task, today, cutoff);
         // base = June 1; next = July 1 which is > cutoff June 30 → empty.
-        assert!(dates.is_empty(), "single 30-day interval should exceed 29-day horizon");
+        assert!(
+            dates.is_empty(),
+            "single 30-day interval should exceed 29-day horizon"
+        );
     }
 
     #[test]
@@ -1148,7 +1229,10 @@ mod tests {
         // Task due Apr 1 (past), today is May 4.  Base = max(Apr1, May4) = May4.
         let mut task = Task::new("Overdue chore");
         task.due = Some(d(2026, 4, 1));
-        task.recurrence = Some(Recurrence::Completion { interval_days: 14, snap: None });
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 14,
+            snap: None,
+        });
         let today = d(2026, 5, 4);
         let cutoff = d(2026, 5, 20);
         let dates = project_series(&task, today, cutoff);
@@ -1190,6 +1274,9 @@ mod tests {
         let today = d(2026, 5, 30);
         let next = spawn_next(&task, today).unwrap().unwrap();
         let date = next.due.or(next.start).unwrap();
-        assert!(date > today, "spawned date {date} should be after today {today}");
+        assert!(
+            date > today,
+            "spawned date {date} should be after today {today}"
+        );
     }
 }

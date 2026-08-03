@@ -284,7 +284,11 @@ fn reject_destination_conflicts(
 
 /// The machine-local half: contexts and resource availability in
 /// `state.toml`. Returns the names of the fields that changed.
-fn rename_in_state(store: &mut dyn Store, old: &str, new: &str) -> anyhow::Result<Vec<&'static str>> {
+fn rename_in_state(
+    store: &mut dyn Store,
+    old: &str,
+    new: &str,
+) -> anyhow::Result<Vec<&'static str>> {
     let mut state = store.get_state()?;
     let mut changed: Vec<&'static str> = Vec::new();
 
@@ -332,7 +336,10 @@ mod tests {
     #[test]
     fn maps_tag_and_descendants() {
         assert_eq!(map_tag("@ai", "@ai", "@next").as_deref(), Some("@next"));
-        assert_eq!(map_tag("@ai/sub", "@ai", "@next").as_deref(), Some("@next/sub"));
+        assert_eq!(
+            map_tag("@ai/sub", "@ai", "@next").as_deref(),
+            Some("@next/sub")
+        );
         assert_eq!(map_tag("@aim", "@ai", "@next"), None, "no slash boundary");
         assert_eq!(map_tag("@other", "@ai", "@next"), None);
     }
@@ -364,9 +371,18 @@ mod tests {
         assert!(validate_rename("@work", "@work").is_err(), "no-op rename");
         assert!(validate_rename("@work", "#work").is_err(), "kind change");
         assert!(validate_rename("@work", "work").is_err(), "kind change");
-        assert!(validate_rename("@work", "@work/sub").is_err(), "into own subtree");
-        assert!(validate_rename("@work", "@w!").is_err(), "invalid destination");
-        assert!(validate_rename("@work/sub", "@work").is_ok(), "promoting is fine");
+        assert!(
+            validate_rename("@work", "@work/sub").is_err(),
+            "into own subtree"
+        );
+        assert!(
+            validate_rename("@work", "@w!").is_err(),
+            "invalid destination"
+        );
+        assert!(
+            validate_rename("@work/sub", "@work").is_ok(),
+            "promoting is fine"
+        );
         assert!(validate_rename("@work", "@office").is_ok());
     }
 }
