@@ -264,7 +264,14 @@ invocation.
 Every task that passes filtering MUST be assigned a numeric urgency score used to rank
 the default output.
 
-The score MUST be the sum of the following weighted factors:
+A task whose `status` is `done` or `cancelled` MUST score exactly `0.0`, with every factor
+zeroed — urgency ranks what to work on next, which is meaningless for a finished task. The
+rule MUST be enforced in the scoring core so that every surface that displays a score
+(`next list --closed` / `--all`, `next show`, the TUI, the MCP tools) agrees. A consequence
+is that scoring no longer reorders a closed listing: it comes out in the order the store
+produced it (most recent completion first, ties by id), matching `next list --archived`.
+
+For any other task, the score MUST be the sum of the following weighted factors:
 
 | Factor | Condition |
 |--------|-----------|

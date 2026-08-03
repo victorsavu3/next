@@ -60,9 +60,11 @@ with `Tab` (`List → Tree → Forecast → List`). It opens in the **Tree** vie
 - **List** (`1`) — the scored, sorted flat task list, the same pipeline as `next list`
   (filters + scoring + the configured `list_limit`). Overdue / due-today rows are
   highlighted. Closed (done/cancelled) tasks are hidden by default; `.` toggles a
-  closed-only view (like `next list --closed`), flagged as `[closed]` in the chrome.
+  closed-only view (like `next list --closed`), flagged as `[closed]` in the chrome; every
+  closed task scores 0, so that view stays in completion order.
   A detail pane shows the selected task's fields, resolved
-  parent/children/blockers, and its urgency-score breakdown.
+  parent/children/blockers, and its urgency-score breakdown (a bare `0.00` for a closed
+  task).
 - **Tree** (`2`) — the parent/child hierarchy (`tui-tree-widget`), shown by default on
   startup. Nodes expand/collapse; a tree-local toggle includes done/cancelled tasks. The
   detail pane and per-task actions operate on the highlighted node.

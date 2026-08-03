@@ -717,6 +717,7 @@ Resolution order:
 Scores are computed at query time (not stored) by `core::scoring::score_and_sort`.
 
 ```
+score(task) = 0.0                      // status is Done or Cancelled
 score(task) =
     due_factor(task.due, today)
   + priority_factor(task.priority)
@@ -727,6 +728,16 @@ score(task) =
   + started_factor(task.status)
   + task.score_adjustment
 ```
+
+**Closed tasks**: `score` and `score_with_breakdown` return `0.0` / an all-zero
+`ScoreBreakdown` for `Status::Done` and `Status::Cancelled`, gated once at the top of each
+so no factor can leak in. Keeping the rule in `scoring` rather than in the callers means
+every surface agrees. `score_and_sort` sorts by score with no tiebreak and Rust's `sort_by`
+is stable, so a closed listing keeps the store's query order (unresolved first, then most
+recent completion, ties by id) — the same order `list --archived` uses — and a mixed
+`--all` listing puts every scoring open task above the closed ones. In `next show` and the
+TUI detail pane the all-zero breakdown yields no factor list, so a closed task renders a
+bare `0.00`.
 
 ### Default weights
 

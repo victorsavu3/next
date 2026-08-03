@@ -154,6 +154,23 @@ pub struct ScoreBreakdown {
 }
 
 impl ScoreBreakdown {
+    /// The breakdown of a task that scores nothing: every factor 0.0 and no
+    /// `no_time_urgency` marker, so display surfaces render a bare `0.00`.
+    fn zero() -> Self {
+        ScoreBreakdown {
+            due: 0.0,
+            priority: 0.0,
+            project: 0.0,
+            age: 0.0,
+            tags: 0.0,
+            parent_tags: 0.0,
+            started: 0.0,
+            adjustment: 0.0,
+            total: 0.0,
+            no_time_urgency: false,
+        }
+    }
+
     /// The non-zero factors as `(label, value)` pairs, in display order, for a
     /// compact breakdown such as `due 12.00  priority 1.00`. The trailing
     /// `no-time-urgency` marker (value `0.0`) is appended when it applied.
@@ -265,6 +282,14 @@ pub fn started_factor(status: &Status, w: &ScoringConfig) -> f64 {
     if *status == Status::Started { w.started_bonus } else { 0.0 }
 }
 
+/// True for the two terminal states, `Done` and `Cancelled`.
+///
+/// A score is advice about what to work on next, so it does not apply to a
+/// task that is finished: both scoring entry points return 0 for these.
+fn is_closed(status: &Status) -> bool {
+    matches!(status, Status::Done | Status::Cancelled)
+}
+
 /// Returns `true` if any of `tags` has `no_time_urgency = true` in its metadata.
 pub fn tag_no_time_urgency(tags: &[String], tag_metas: &HashMap<String, TagMeta>) -> bool {
     tags.iter()
@@ -277,6 +302,11 @@ pub fn tag_no_time_urgency(tags: &[String], tag_metas: &HashMap<String, TagMeta>
 /// `parent` is the parent task (if any); its priority and tags both contribute.
 /// `task_dates` provides git-derived creation/update times; `None` disables age scoring.
 /// `tag_metas` is the full tag-metadata map from the store.
+///
+/// A closed (done or cancelled) task always scores 0: urgency ranks what to do
+/// next, and a finished task has nothing left to do. The gate lives here rather
+/// than in the callers so every surface — `list --closed`/`--all`, `show`, the
+/// TUI, MCP — agrees without each one having to remember.
 pub fn score(
     task: &Task,
     parent: Option<&Task>,
@@ -285,6 +315,10 @@ pub fn score(
     w: &ScoringConfig,
     tag_metas: &HashMap<String, TagMeta>,
 ) -> f64 {
+    if is_closed(&task.status) {
+        return 0.0;
+    }
+
     let no_time = tag_no_time_urgency(&task.tags, tag_metas);
     let own_tags = tag_factor(&task.tags, tag_metas, w);
     let parent_tags = parent.map_or(0.0, |p| tag_factor(&p.tags, tag_metas, w));
@@ -301,6 +335,9 @@ pub fn score(
 }
 
 /// Like [`score`] but also returns the individual factor contributions.
+///
+/// Closed tasks get the all-zero breakdown, so a detail view shows a plain
+/// `0.00` instead of a factor list that no longer means anything.
 pub fn score_with_breakdown(
     task: &Task,
     parent: Option<&Task>,
@@ -309,6 +346,10 @@ pub fn score_with_breakdown(
     w: &ScoringConfig,
     tag_metas: &HashMap<String, TagMeta>,
 ) -> ScoreBreakdown {
+    if is_closed(&task.status) {
+        return ScoreBreakdown::zero();
+    }
+
     let no_time = tag_no_time_urgency(&task.tags, tag_metas);
     let created_at = task_dates.get(&task.id).map(|d| d.created_at);
     let due       = if no_time { 0.0 } else { due_factor(task.due, today, w) };
@@ -330,6 +371,12 @@ pub fn score_with_breakdown(
 /// It should be the full, unfiltered task list.
 /// `task_dates` provides git-derived creation/update timestamps; pass an empty map
 /// when git history is unavailable (tests, new uncommitted tasks lose age scoring).
+///
+/// The sort is stable and has no tiebreak, so tasks that score the same keep the
+/// order they arrived in. Since every closed task scores 0, a `--closed` listing
+/// comes out in the store's query order (unresolved first, then most recent
+/// completion, ties by id) — the same order `--archived` uses — and a mixed
+/// `--all` listing puts every open task above every closed one.
 pub fn score_and_sort(
     tasks: Vec<Task>,
     all_tasks: &[Task],
@@ -714,6 +761,157 @@ mod tests {
         let orphan_score = scored.iter().find(|s| s.task.title == "no parent").unwrap().score;
         // child gets +1.0 from parent's @work tag
         assert!((child_score - orphan_score - 1.0).abs() < 0.01);
+    }
+
+    // --- closed tasks score 0 ---
+
+    /// A task loaded with every factor that would otherwise contribute: high
+    /// priority, a long-overdue due date, a high-priority tag, a positive
+    /// adjustment, and (via the caller) a far-past creation date.
+    fn loaded_task(title: &str) -> (Task, HashMap<String, TagMeta>, HashMap<Uuid, TaskDates>) {
+        let mut task = Task::new(title);
+        task.priority = Priority::High;
+        task.due = Some(today() - chrono::Duration::days(30));
+        task.tags = vec!["@work".to_string()];
+        task.score_adjustment = 5.0;
+
+        let mut metas = HashMap::new();
+        metas.insert("@work".to_string(), meta_with_priority(Priority::High));
+
+        let old_ts = chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let mut dates = HashMap::new();
+        dates.insert(task.id, TaskDates { created_at: old_ts, updated_at: old_ts });
+
+        (task, metas, dates)
+    }
+
+    #[test]
+    fn score_open_task_with_every_factor_is_nonzero() {
+        // Baseline for the two tests below: this fixture really does score.
+        let (task, metas, dates) = loaded_task("loaded");
+        let s = score(&task, None, &dates, today(), &weights(), &metas);
+        assert!(s > 20.0, "expected a large score for the open fixture, got {s}");
+    }
+
+    #[test]
+    fn score_done_task_is_zero() {
+        let (mut task, metas, dates) = loaded_task("finished");
+        task.mark_done(today());
+        assert_eq!(score(&task, None, &dates, today(), &weights(), &metas), 0.0);
+    }
+
+    #[test]
+    fn score_cancelled_task_is_zero() {
+        let (mut task, metas, dates) = loaded_task("abandoned");
+        task.mark_cancelled();
+        assert_eq!(score(&task, None, &dates, today(), &weights(), &metas), 0.0);
+    }
+
+    #[test]
+    fn score_closed_task_ignores_started_bonus_and_parent() {
+        // A task that was started and then closed keeps neither the started
+        // bonus nor anything inherited from a high-priority parent.
+        let mut parent = Task::new("project");
+        parent.priority = Priority::High;
+        parent.tags = vec!["@work".to_string()];
+        let mut metas = HashMap::new();
+        metas.insert("@work".to_string(), meta_with_priority(Priority::High));
+
+        let mut task = Task::new("was started");
+        task.mark_started();
+        task.mark_done(today());
+
+        let s = score(&task, Some(&parent), &HashMap::new(), today(), &weights(), &metas);
+        assert_eq!(s, 0.0);
+    }
+
+    #[test]
+    fn score_open_and_started_tasks_are_unaffected_by_the_gate() {
+        let open = Task::new("open");
+        let mut started = Task::new("started");
+        started.mark_started();
+        let w = weights();
+        let metas = HashMap::new();
+        let dates: HashMap<Uuid, TaskDates> = HashMap::new();
+
+        assert!((score(&open, None, &dates, today(), &w, &metas) - 1.0).abs() < 0.01);
+        assert!((score(&started, None, &dates, today(), &w, &metas) - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn score_with_breakdown_closed_task_is_all_zero() {
+        for status in [Status::Done, Status::Cancelled] {
+            let (mut task, metas, dates) = loaded_task("closed");
+            task.status = status;
+            let bd = score_with_breakdown(&task, None, &dates, today(), &weights(), &metas);
+            assert_eq!(bd.due, 0.0);
+            assert_eq!(bd.priority, 0.0);
+            assert_eq!(bd.project, 0.0);
+            assert_eq!(bd.age, 0.0);
+            assert_eq!(bd.tags, 0.0);
+            assert_eq!(bd.parent_tags, 0.0);
+            assert_eq!(bd.started, 0.0);
+            assert_eq!(bd.adjustment, 0.0);
+            assert_eq!(bd.total, 0.0);
+            // No marker either: `next show` must render a bare `0.00`.
+            assert!(!bd.no_time_urgency);
+            assert!(bd.nonzero_factors().is_empty());
+        }
+    }
+
+    #[test]
+    fn score_and_sort_keeps_input_order_among_closed_tasks() {
+        // Every closed task scores 0 and the sort is stable with no tiebreak,
+        // so a `--closed` listing must come out in the order the store handed
+        // it over (unresolved first, then most recent completion, ties by id).
+        let mut first = Task::new("closed first");
+        first.priority = Priority::Low;
+        first.mark_done(today());
+        let mut second = Task::new("closed second");
+        second.priority = Priority::High; // would outrank `first` if scored
+        second.mark_done(today() - chrono::Duration::days(10));
+        let mut third = Task::new("closed third");
+        third.score_adjustment = 100.0; // would dominate if scored
+        third.mark_cancelled();
+
+        let input = vec![first.clone(), second.clone(), third.clone()];
+        let all = input.clone();
+        let scored = score_and_sort(input, &all, today(), &weights(), &HashMap::new(), &HashMap::new());
+
+        assert_eq!(titles(&scored), ["closed first", "closed second", "closed third"]);
+        assert!(scored.iter().all(|s| s.score == 0.0));
+    }
+
+    #[test]
+    fn score_and_sort_puts_scoring_open_tasks_above_closed_ones() {
+        // The `--all` reading: live work first, the closed tail in arrival
+        // order. Only open tasks that score above 0 are guaranteed to sort
+        // above the closed ones — a low-priority open task with no other
+        // factor also scores 0 and merely keeps its input position.
+        let mut done_high = Task::new("done high");
+        done_high.priority = Priority::High;
+        done_high.mark_done(today());
+        let mut cancelled = Task::new("cancelled");
+        cancelled.score_adjustment = 50.0;
+        cancelled.mark_cancelled();
+        let medium_open = Task::new("open medium");
+        let mut started_open = Task::new("open started");
+        started_open.mark_started();
+
+        let input = vec![done_high, medium_open, cancelled, started_open];
+        let all = input.clone();
+        let scored = score_and_sort(input, &all, today(), &weights(), &HashMap::new(), &HashMap::new());
+
+        assert_eq!(
+            titles(&scored),
+            ["open started", "open medium", "done high", "cancelled"]
+        );
+    }
+
+    fn titles(scored: &[ScoredTask]) -> Vec<&str> {
+        scored.iter().map(|s| s.task.title.as_str()).collect()
     }
 
     #[test]

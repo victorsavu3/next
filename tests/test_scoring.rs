@@ -1,8 +1,9 @@
 mod common;
 
 use chrono::Local;
-use next::cli::commands::{add, done, start};
+use next::cli::commands::{add, cancel, done, start};
 use next::core::FilterArgs;
+use next::core::listing;
 use next::core::{domain::filter, scoring};
 use next::core::scoring::ScoredTask;
 use next::core::domain::tag::TagMeta;
@@ -375,4 +376,92 @@ fn done_task_does_not_appear_in_scored_list() {
     let t = titles(&ranked);
     assert!(t.contains(&"Open task"));
     assert!(!t.contains(&"Done task"), "done task must not appear in default scored list");
+}
+
+// ---------------------------------------------------------------------------
+// Closed tasks score 0
+// ---------------------------------------------------------------------------
+
+/// Run the `list --closed` pipeline and return both the store's query order
+/// and the scored/sorted result, so a test can compare the two.
+fn closed_listing(env: &mut common::TestEnv) -> (Vec<String>, Vec<ScoredTask>) {
+    let today = Local::now().date_naive();
+    let filter_args = FilterArgs { closed: true, ..Default::default() };
+    let filter_set = filter_args.to_filter_set().unwrap();
+    let state = env.ctx.repo.store.get_state().unwrap();
+    let candidates = listing::load_candidates(env.ctx.repo.store(), &filter_set).unwrap();
+    let store_order: Vec<String> = candidates.iter().map(|t| t.title.clone()).collect();
+    let tag_metas = env.ctx.repo.store.list_tag_metas().unwrap();
+    let filtered = filter::apply(candidates.clone(), &filter_set, &state, today);
+    let scored = scoring::score_and_sort(
+        filtered,
+        &candidates,
+        today,
+        &env.ctx.repo.scoring,
+        &tag_metas,
+        &std::collections::HashMap::new(),
+    );
+    (store_order, scored)
+}
+
+/// Every closed task scores 0, and `score_and_sort` is a stable sort with no
+/// tiebreak, so `--closed` must hand back exactly the store's query order
+/// (most recent completion first, ties by id) — the same order `--archived`
+/// uses. Without the gate the priorities and adjustments below would reorder
+/// the listing.
+#[test]
+fn closed_listing_keeps_store_query_order() {
+    let mut env = common::setup();
+
+    // Deliberately close them in an order that does not match their scores.
+    for (slug, title, priority, adjust, completed) in [
+        ("oldest", "Oldest done", Some("high".to_string()), None, "2026-01-01"),
+        ("middle", "Middle done", None, Some(50.0), "2026-03-01"),
+        ("newest", "Newest done", Some("low".to_string()), None, "2026-05-01"),
+    ] {
+        add::run(
+            add::Args { slug: Some(slug.into()), priority, adjust, ..add_args(title) },
+            &mut env.ctx,
+        )
+        .unwrap();
+        done::run(
+            done::Args { id: slug.into(), completed_at: Some(completed.into()), json: false },
+            &mut env.ctx,
+        )
+        .unwrap();
+    }
+
+    let (store_order, scored) = closed_listing(&mut env);
+
+    assert_eq!(
+        store_order,
+        ["Newest done", "Middle done", "Oldest done"],
+        "store query order is most recent completion first"
+    );
+    assert_eq!(titles(&scored), store_order, "scoring must not reorder closed tasks");
+    assert!(scored.iter().all(|s| s.score == 0.0), "closed tasks all score 0");
+}
+
+/// A started task that is then cancelled keeps neither its started bonus nor
+/// any other factor.
+#[test]
+fn cancelled_task_scores_zero() {
+    let mut env = common::setup();
+
+    add::run(
+        add::Args {
+            slug: Some("dropped".into()),
+            priority: Some("high".to_string()),
+            adjust: Some(10.0),
+            ..add_args("Dropped task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    start::run(start::Args { id: "dropped".into(), json: false }, &mut env.ctx).unwrap();
+    cancel::run(cancel::Args { id: "dropped".into(), json: false }, &mut env.ctx).unwrap();
+
+    let (_, scored) = closed_listing(&mut env);
+    assert_eq!(titles(&scored), ["Dropped task"]);
+    assert_eq!(scored[0].score, 0.0);
 }

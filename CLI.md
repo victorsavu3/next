@@ -194,7 +194,7 @@ next list [filters...]
 |------|------|---------|-------------|
 | `--future` | flag | false | Include tasks with a future `start` date and planned recurrence instances. |
 | `--all` | flag | false | Disable all implicit filtering: contexts, resources, blocked tasks, and future `start` dates. |
-| `--closed` | flag | false | Show only closed tasks (done or cancelled). Can be combined with `--all`. |
+| `--closed` | flag | false | Show only closed tasks (done or cancelled). Can be combined with `--all`. Closed tasks all score 0, so the listing keeps the store order: most recently completed first, the same order as `--archived`. |
 | `--archived` | flag | false | List archived tasks instead, most recently completed first. Tag filters and pagination apply; scoring and the implicit gate do not. Conflicts with `--all`, `--closed`, and `--future`. |
 | `--all-users` | flag | false | Bypass the user filter; show tasks for all assignees. |
 | `-n` / `--limit` | integer | — | Show at most N tasks. Shorthand for `--page-size`; overrides `list_limit` in config. |
@@ -303,7 +303,7 @@ next next --json
 
 ### `next show`
 
-Display the full details of a single task, including its description, URL, data, notes, all tags, subtask list, blockers, recurrence configuration, and urgency score breakdown (due, priority, age, tag, and other factors shown inline).
+Display the full details of a single task, including its description, URL, data, notes, all tags, subtask list, blockers, recurrence configuration, and urgency score breakdown (due, priority, age, tag, and other factors shown inline). A closed (done or cancelled) task scores 0 and shows no breakdown.
 
 **Usage**
 

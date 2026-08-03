@@ -188,6 +188,11 @@ score = due_factor + priority_factor + project_factor + age_factor + score_adjus
 - **Started bonus** — flat +4.0 when `status = started`; moves in-progress tasks above open peers
 - **Adjustment** — manual boost/penalty via `--adjust`
 
+Closed tasks (`done` or `cancelled`) always score exactly 0: a score is advice about what to
+work on next, so it does not apply to a finished task. Since nothing breaks the tie, a
+`--closed` listing keeps the completion order it comes out of the store with (most recently
+completed first), and a `--all` listing puts live work above the closed tail.
+
 Tags can suppress time-based urgency entirely with `next tag set-no-time-urgency <tag>` — useful for wishlist or someday tags where age and deadlines should not drive priority.
 
 ---
