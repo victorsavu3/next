@@ -289,7 +289,7 @@ pub fn parse(input: &str) -> Result<Expr> {
     if input.trim().is_empty() {
         return Ok(Expr::And(Vec::new()));
     }
-    match all_consuming(terminated(expr, multispace0)).parse(input) {
+    match all_consuming(terminated(|i| expr(i, 0), multispace0)).parse(input) {
         Ok((_, parsed)) => Ok(parsed),
         Err(nom::Err::Error(e) | nom::Err::Failure(e)) => Err(TaskError::Other(e.render(input))),
         // Every parser used here is from nom's `complete` family, so a partial
@@ -383,6 +383,25 @@ fn require<'a, T>(result: PResult<'a, T>, at: &str, detail: impl Into<String>) -
 //
 // Adjacency is AND, so precedence runs not > and > or and `a or b c` is
 // `a or (b and c)`.
+//
+// The grammar is recursive descent, so nesting depth is stack depth: every `(`
+// and every `not` costs a frame. `depth` is threaded through the recursive
+// productions and checked in `unary`, which every nesting level passes through
+// exactly once.
+
+/// How deeply an expression may nest before it is rejected.
+///
+/// A stack overflow is a `SIGABRT`, not a catchable panic — the whole process
+/// dies, which for the MCP server means every session, not just the request
+/// that sent the filter.
+///
+/// The number is set from measurement, not taste: these combinators cost
+/// 8–16 KB of stack per level in a debug build (63 levels needed between
+/// 512 KB and 1 MB), so 32 levels stays well inside the 2 MB a tokio worker
+/// or test thread gets, let alone the 8 MB of a main thread. It is also far
+/// beyond any real query — hand-written filters rarely nest past 3, and a
+/// generated one a handful.
+const MAX_DEPTH: usize = 32;
 
 /// Skips leading whitespace before `p`, pinning the error type along the way.
 fn spaced<'a, O, P>(p: P) -> impl Parser<&'a str, Output = O, Error = ExprError>
@@ -392,36 +411,46 @@ where
     preceded(multispace0, p)
 }
 
-fn expr(input: &str) -> PResult<'_, Expr> {
-    or_expr(input)
+fn expr(input: &str, depth: usize) -> PResult<'_, Expr> {
+    or_expr(input, depth)
 }
 
-fn or_expr(input: &str) -> PResult<'_, Expr> {
-    let (rest, first) = and_expr(input)?;
-    let (rest, more) = many0(preceded(or_op, cut(and_expr))).parse(rest)?;
+fn or_expr(input: &str, depth: usize) -> PResult<'_, Expr> {
+    let (rest, first) = and_expr(input, depth)?;
+    let (rest, more) = many0(preceded(or_op, cut(move |i| and_expr(i, depth)))).parse(rest)?;
     Ok((rest, combine(first, more, Expr::Or)))
 }
 
-fn and_expr(input: &str) -> PResult<'_, Expr> {
-    let (rest, first) = unary(input)?;
+fn and_expr(input: &str, depth: usize) -> PResult<'_, Expr> {
+    let (rest, first) = unary(input, depth)?;
     // An explicit `and` commits (a missing right-hand side is an error); plain
     // adjacency does not, so the loop can end at `or`, `)` or end of input.
-    let (rest, more) = many0(alt((preceded(and_op, cut(unary)), unary))).parse(rest)?;
+    let (rest, more) = many0(alt((
+        preceded(and_op, cut(move |i| unary(i, depth))),
+        move |i| unary(i, depth),
+    )))
+    .parse(rest)?;
     Ok((rest, combine(first, more, Expr::And)))
 }
 
-fn unary(input: &str) -> PResult<'_, Expr> {
+fn unary(input: &str, depth: usize) -> PResult<'_, Expr> {
+    if depth >= MAX_DEPTH {
+        return Err(fail(
+            input,
+            format!("expression nests more than {MAX_DEPTH} levels deep"),
+        ));
+    }
     let (rest, negated) = opt(not_op).parse(input)?;
     if negated.is_some() {
-        let (rest, inner) = cut(unary).parse(rest)?;
+        let (rest, inner) = cut(move |i| unary(i, depth + 1)).parse(rest)?;
         return Ok((rest, Expr::Not(Box::new(inner))));
     }
-    alt((group, atom_expr)).parse(input)
+    alt((move |i| group(i, depth), atom_expr)).parse(input)
 }
 
-fn group(input: &str) -> PResult<'_, Expr> {
+fn group(input: &str, depth: usize) -> PResult<'_, Expr> {
     let (rest, _) = spaced(nom_char('(')).parse(input)?;
-    let (rest, inner) = cut(expr).parse(rest)?;
+    let (rest, inner) = cut(move |i| expr(i, depth + 1)).parse(rest)?;
     let (rest, close) = opt(spaced(nom_char(')'))).parse(rest)?;
     if close.is_none() {
         return Err(fail(rest, "missing closing ')'"));
@@ -1503,6 +1532,48 @@ mod tests {
         assert!(err("(a or b").contains("missing closing ')'"));
         let message = err("a)");
         assert!(message.contains("unexpected input at \")\""), "{message}");
+    }
+
+    #[test]
+    fn deep_nesting_is_rejected_not_fatal() {
+        // Before the depth bound this aborted the process with a stack
+        // overflow, which no caller can catch. These inputs are far past the
+        // limit but far below the ~300 levels that used to be fatal, so the
+        // assertion is that an ERROR comes back — a regression here kills the
+        // whole test binary rather than failing this case.
+        for depth in [MAX_DEPTH + 1, 200] {
+            let parens = format!("{}a{}", "(".repeat(depth), ")".repeat(depth));
+            assert!(
+                err(&parens).contains("nests more than"),
+                "{depth} nested parens should be refused"
+            );
+
+            let nots = format!("{}a", "not ".repeat(depth));
+            assert!(
+                err(&nots).contains("nests more than"),
+                "{depth} nested nots should be refused"
+            );
+
+            // Unbalanced input takes a different path through the parser and
+            // must be bounded too.
+            assert!(err(&"(".repeat(depth)).contains("nests more than"));
+        }
+    }
+
+    #[test]
+    fn realistic_nesting_still_parses() {
+        // The bound must not get in the way of an expression a person or an
+        // agent would actually write.
+        let expr = ok("((+@work or +@home) and not (due<+7d or (priority:high and is:blocked)))");
+        assert_eq!(ok(&expr.to_string()), expr, "round-trip survives nesting");
+
+        // Right at the limit: MAX_DEPTH levels are allowed, one more is not.
+        let at_limit = format!(
+            "{}a{}",
+            "(".repeat(MAX_DEPTH - 1),
+            ")".repeat(MAX_DEPTH - 1)
+        );
+        assert_eq!(ok(&at_limit), search("a"));
     }
 
     #[test]
