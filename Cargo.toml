@@ -63,6 +63,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 interim = { version = "0.2", features = ["chrono_0_4"] }
+# Parser combinators for the filter expression grammar (`domain::filter_expr`).
+# nom 8 reworked the `Parser` trait, so follow its API rather than nom 7 recipes.
+nom = "8"
 # storage
 toml = "0.8"
 fs4 = "0.8"

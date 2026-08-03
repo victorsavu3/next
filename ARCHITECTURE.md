@@ -85,6 +85,7 @@ next/                             # crate root (also git repo)
       test_git.rs                 # init_test_repo() helper for unit tests
       domain/                     # pure domain types (no I/O)
         mod.rs  task.rs  state.rs  tag.rs  filter.rs  date_parse.rs
+        filter_expr.rs            # filter expression grammar → Expr AST (parser only; not yet wired in)
       storage/                    # local TOML + SQLite + git backend + archive tiers
         mod.rs                    # open(), task_path(), state_path_for_repo(), load_scoring()
         machine_state.rs          # MachineState (combined state.toml) + load_/update_machine_state
@@ -881,6 +882,7 @@ non-zero exit code.
 | `core::scoring` | `src/core/scoring.rs` | Unit tests with fixed dates; each factor tested independently |
 | `domain::filter` | `src/core/domain/filter.rs` | Unit tests: build `FilterSet` + `Vec<Task>`, assert filtered output |
 | `domain::date_parse` | `src/core/domain/date_parse.rs` | Unit tests: fixed "today", assert parsed date for common expressions |
+| `domain::filter_expr` | `src/core/domain/filter_expr.rs` | Unit tests: one per atom form and operator spelling, precedence and grouping, error messages for malformed input, and `parse(print(e)) == e` round-trips |
 | `TomlStore` | `src/core/storage/toml_store.rs` | Round-trip tests: write task to `tempdir`, read back, assert equal fields; migration unit tests: write legacy `state.toml`, call `TomlStore::open()`, assert per-tag files created and `state.toml` cleaned |
 | `GitBackend` | `src/core/storage/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
 | `CachedStore` | `src/core/storage/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |
@@ -911,6 +913,7 @@ non-zero exit code.
 | `serde`, `serde_json` | serialisation (domain types, `--json` output) |
 | `chrono` | dates in domain types and scoring |
 | `interim` | `date_parse` module (natural-language date expressions) |
+| `nom` | `filter_expr` module (filter expression parser combinators) |
 | `uuid` | `Task::id` |
 | `dirs` | XDG base directory resolution |
 | `anyhow`, `thiserror` | error propagation |
