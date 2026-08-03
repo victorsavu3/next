@@ -18,6 +18,7 @@ pub mod storage;
 pub mod store;
 pub mod sync;
 pub mod sync_state;
+pub mod tag_rename;
 pub mod task_repository;
 #[cfg(test)]
 pub(crate) mod test_git;

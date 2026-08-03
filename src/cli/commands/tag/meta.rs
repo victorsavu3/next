@@ -20,6 +20,20 @@ pub struct DescribeArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct RenameArgs {
+    /// Tag to rename (e.g. @work, #printer, python). Tags nested under it
+    /// move along with it.
+    pub old: String,
+    /// New name. Must keep the same kind: `@` context, `#` resource, or bare.
+    pub new: String,
+    /// Allow the destination tag to exist already, folding the old tag into
+    /// it. Tasks carrying both end up with one copy; where both tags have
+    /// metadata, the destination's is kept.
+    #[arg(long)]
+    pub merge: bool,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct ClearDescriptionArgs {
     /// Tag whose description should be removed.
     pub tag: String,
@@ -89,6 +103,39 @@ pub fn show(ctx: &mut AppContext, args: ShowArgs) -> anyhow::Result<()> {
             println!("    {k} = {}", meta.data[k]);
         }
     }
+    Ok(())
+}
+
+pub fn rename(ctx: &mut AppContext, args: RenameArgs) -> anyhow::Result<()> {
+    let outcome =
+        crate::core::tag_rename::rename_tag(&mut ctx.repo, &args.old, &args.new, args.merge)?;
+
+    if outcome.is_empty() {
+        println!("Nothing to rename: no task, metadata or state references {}.", args.old);
+        return Ok(());
+    }
+
+    println!("Renamed {} to {}.", args.old, args.new);
+    println!("  tasks:     {} active, {} archived", outcome.active_tasks, outcome.archived_tasks);
+    if !outcome.segments.is_empty() {
+        println!("  segments:  {}", outcome.segments.join(", "));
+    }
+    if !outcome.restored_segments.is_empty() {
+        println!(
+            "  restored:  {} (pruned segment(s) brought back into the checkout)",
+            outcome.restored_segments.join(", ")
+        );
+    }
+    for (from, to) in &outcome.metas_moved {
+        println!("  metadata:  {from} -> {to}");
+    }
+    for dropped in &outcome.metas_dropped {
+        println!("  metadata:  {dropped} dropped (destination already had its own)");
+    }
+    if !outcome.state_fields.is_empty() {
+        println!("  state:     updated {}", outcome.state_fields.join(", "));
+    }
+    tracing::info!(cmd = "tag", "renamed {} to {}", args.old, args.new);
     Ok(())
 }
 

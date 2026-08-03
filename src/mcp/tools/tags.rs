@@ -12,7 +12,7 @@ use crate::TaskRepository;
 ///
 /// `action` values:
 ///   read:  "list", "show"
-///   write: "describe", "clear_description", "set_url", "clear_url",
+///   write: "rename", "describe", "clear_description", "set_url", "clear_url",
 ///          "set_priority", "clear_priority",
 ///          "set_no_time_urgency", "clear_no_time_urgency"
 pub fn manage_tag(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<(Value, bool)> {
@@ -24,6 +24,7 @@ pub fn manage_tag(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<(V
     match action {
         "list" => Ok((list(ctx)?, false)),
         "show" => Ok((show(params, ctx)?, false)),
+        "rename" => Ok((rename(params, ctx)?, true)),
         "describe" => Ok((describe(params, ctx)?, true)),
         "clear_description" => Ok((clear_description(params, ctx)?, true)),
         "set_url" => Ok((set_url(params, ctx)?, true)),
@@ -106,6 +107,32 @@ fn show(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
     let meta = ctx.store.get_tag_meta(t)?.unwrap_or_default();
     Ok(json!({ "tag": t, "meta": meta }))
+}
+
+fn rename(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
+    let old = require_tag(params)?;
+    let new = params
+        .get("new_tag")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing required parameter: new_tag"))?;
+    let merge = params.get("merge").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    let outcome = crate::core::tag_rename::rename_tag(ctx, old, new, merge)?;
+    Ok(json!({
+        "tag": old,
+        "new_tag": new,
+        "active_tasks": outcome.active_tasks,
+        "archived_tasks": outcome.archived_tasks,
+        "segments": outcome.segments,
+        "restored_segments": outcome.restored_segments,
+        "metas_moved": outcome
+            .metas_moved
+            .iter()
+            .map(|(from, to)| json!({ "from": from, "to": to }))
+            .collect::<Vec<_>>(),
+        "metas_dropped": outcome.metas_dropped,
+        "state_fields": outcome.state_fields,
+    }))
 }
 
 fn describe(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
@@ -311,6 +338,46 @@ mod tests {
         assert!(err.to_string().contains("'..'"), "unexpected error: {err}");
         assert!(victim.exists(), "file outside the repo was deleted");
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "secret = true\n");
+    }
+
+    #[test]
+    fn rename_moves_tasks_and_metadata() {
+        use crate::core::domain::task::Task;
+
+        let (_dir, mut ctx) = make_ctx();
+        let mut task = Task::new("Tagged");
+        task.tags = vec!["@work/frontend".into(), "python".into()];
+        ctx.transaction(|store, vcs, root| {
+            store.save_task(&task)?;
+            vcs.commit(&[crate::core::storage::task_path(root, &task)], "next: add")?;
+            Ok(())
+        })
+        .unwrap();
+        manage_tag(
+            &json!({ "action": "describe", "tag": "@work", "description": "Office" }),
+            &mut ctx,
+        )
+        .unwrap();
+
+        let (result, is_mutation) = manage_tag(
+            &json!({ "action": "rename", "tag": "@work", "new_tag": "@office" }),
+            &mut ctx,
+        )
+        .unwrap();
+        assert!(is_mutation, "rename must trigger autosync");
+        assert_eq!(result["active_tasks"], 1);
+        assert_eq!(result["metas_moved"][0]["to"], "@office");
+        assert_eq!(
+            ctx.store.get_task(task.id).unwrap().tags,
+            vec!["@office/frontend", "python"]
+        );
+    }
+
+    #[test]
+    fn rename_requires_new_tag() {
+        let (_dir, mut ctx) = make_ctx();
+        let err = manage_tag(&json!({ "action": "rename", "tag": "@work" }), &mut ctx).unwrap_err();
+        assert!(err.to_string().contains("new_tag"), "unexpected error: {err}");
     }
 
     #[test]

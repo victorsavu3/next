@@ -140,6 +140,22 @@ next tag                        # list all tags with their descriptions
 subcommands) — there are no separate describe commands on `next context` or
 `next resource`.
 
+### Renaming a tag
+
+`next tag rename <old> <new>` moves a tag everywhere it is recorded: every active task,
+every archived task (including segments already pruned to the cold tier), the tag's
+metadata file, and machine-local state such as the active context — all in one commit.
+
+```sh
+next tag rename @ai/task-manager @ai/next   # @ai/task-manager/* moves along with it
+next tag rename py python --merge           # fold py into an existing python tag
+```
+
+Renaming is hierarchical: everything nested under the tag moves with it. A tag's kind
+cannot change (`@work` cannot become `#work`), and an existing destination is refused
+unless `--merge` is given — with `--merge`, a task carrying both tags keeps one copy and
+the destination's metadata wins.
+
 ---
 
 ## User filter
@@ -211,7 +227,7 @@ All list commands accept filter tokens in any order:
 | `next move <id>` | Change parent task |
 | `next open <id>` | Open the task's URL in the browser |
 | `next data set/unset/get` | Manage arbitrary key-value data on a task |
-| `next tag [describe/set-priority/set-no-time-urgency/…]` | List tags; manage tag metadata |
+| `next tag [rename/describe/set-priority/set-no-time-urgency/…]` | List tags; rename a tag; manage tag metadata |
 | `next context [set/clear/exclude/clear-excluded]` | Manage global context filter (include and exclude lists) |
 | `next resource [set]` | Manage resource availability |
 | `next user [set/clear/list]` | Manage user filter |
@@ -438,7 +454,7 @@ systemctl --user start next-mcp
 | `set_context` | M | Replace active and/or excluded context filters |
 | `set_resource` | M | Toggle resource availability |
 | `set_user_filter` | M | Replace active user filter |
-| `manage_tag` | R/M | Tag metadata CRUD (list/show/describe/set_priority/set_no_time_urgency/…) |
+| `manage_tag` | R/M | Tag rename plus metadata CRUD (list/show/rename/describe/set_priority/set_no_time_urgency/…) |
 | `manage_task_data` | R/M | Task data key-value pairs (get/list/set/unset) |
 | `get_forecast` | R | Upcoming due dates within a configurable horizon; accepts `context` override |
 

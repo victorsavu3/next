@@ -521,6 +521,7 @@ next resource set <#tag> on|off          # toggle a resource
 
 ```
 next tag                                          # list all tags grouped by kind
+next tag rename <old> <new> [--merge]             # rename a tag and everything nested under it
 next tag describe <tag> <text>                    # set description (any tag kind)
 next tag clear-description <tag>                  # remove description
 next tag set-url <tag> <url>                      # attach a reference URL
@@ -540,6 +541,17 @@ Contexts (`@`), resources (`#`), and freeform tags are all stored identically un
 `tags/` and committed to git. `next tag` is the unified command for all tag metadata —
 there are no separate describe/clear commands on `next context` or `next resource`.
 Descriptions appear in `next context`, `next resource`, and `next tag` output.
+
+**Renaming**: `next tag rename` MUST cover every place a tag is recorded — the tag list
+of every active task, the tag list of every archived task (warm `archive/` segments and
+pruned cold segments), the tag's own metadata file, and the machine-local state that
+references it (active/excluded contexts, resource availability keys). It is hierarchical:
+renaming a tag moves every tag nested under it. The tag's kind (`@`, `#`, freeform) MUST
+NOT change, since the leading character determines how the tag filters. Destination tags
+that already exist are rejected unless `--merge` is given, in which case tasks carrying
+both tags keep one copy and the destination's metadata wins. The committed half is one
+commit; state is machine-local and is never committed. A cold segment can only be
+rewritten by restoring it to the checkout, which a later archive pass prunes again.
 
 **Tag filesystem encoding**: `@` and `#` prefixes are not safe on all platforms and
 cause rendering issues in Forgejo. They are encoded on disk as `__context__` and

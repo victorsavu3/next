@@ -9,7 +9,7 @@ use crate::AppContext;
 pub use data::{DataArgs, DataGetArgs, DataListArgs, DataSetArgs, DataSubcommand, DataUnsetArgs};
 pub use meta::{
     ClearDescriptionArgs, ClearPriorityArgs, ClearUrlArgs, DescribeArgs, NoTimeUrgencyArgs,
-    SetPriorityArgs, SetUrlArgs, ShowArgs,
+    RenameArgs, SetPriorityArgs, SetUrlArgs, ShowArgs,
 };
 
 /// Top-level `next tag` subcommand.
@@ -23,6 +23,8 @@ pub struct Args {
 pub enum TagSubcommand {
     /// Show all metadata for a tag.
     Show(ShowArgs),
+    /// Rename a tag (and everything nested under it) across the repository.
+    Rename(RenameArgs),
     /// Set a human-readable description for a tag.
     Describe(DescribeArgs),
     /// Remove the description for a tag.
@@ -54,6 +56,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     match args.subcommand {
         None => list(ctx),
         Some(TagSubcommand::Show(a)) => meta::show(ctx, a),
+        Some(TagSubcommand::Rename(a)) => meta::rename(ctx, a),
         Some(TagSubcommand::Describe(a)) => meta::describe(ctx, a),
         Some(TagSubcommand::ClearDescription(a)) => meta::clear_description(ctx, a),
         Some(TagSubcommand::SetUrl(a)) => meta::set_url(ctx, a),

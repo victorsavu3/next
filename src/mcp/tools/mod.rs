@@ -192,13 +192,15 @@ pub fn all_tools() -> Vec<Tool> {
         },
         Tool {
             name: "manage_tag",
-            description: "Manage tag metadata. Actions: list, show, describe, clear_description, set_url, clear_url, set_priority, clear_priority, set_no_time_urgency, clear_no_time_urgency.",
+            description: "Manage tags. Actions: list, show, rename, describe, clear_description, set_url, clear_url, set_priority, clear_priority, set_no_time_urgency, clear_no_time_urgency. `rename` moves a tag and everything nested under it across all tasks (active and archived), its metadata file, and machine-local state.",
             input_schema: json!({
                 "type": "object",
                 "required": ["action"],
                 "properties": {
-                    "action": { "type": "string", "enum": ["list", "show", "describe", "clear_description", "set_url", "clear_url", "set_priority", "clear_priority", "set_no_time_urgency", "clear_no_time_urgency"] },
+                    "action": { "type": "string", "enum": ["list", "show", "rename", "describe", "clear_description", "set_url", "clear_url", "set_priority", "clear_priority", "set_no_time_urgency", "clear_no_time_urgency"] },
                     "tag": { "type": "string" },
+                    "new_tag": { "type": "string", "description": "rename only: the new tag name. Must keep the same kind (@context, #resource, or freeform)." },
+                    "merge": { "type": "boolean", "default": false, "description": "rename only: allow the destination tag to already exist, folding the old tag into it." },
                     "description": { "type": "string" },
                     "url": { "type": "string" },
                     "priority": { "type": "string", "enum": ["low", "medium", "high"] },

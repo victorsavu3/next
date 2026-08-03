@@ -81,6 +81,7 @@ next/                             # crate root (also git repo)
       forecast.rs                 # forecast projection shared by cli/mcp/tui
       listing.rs                  # load_candidates() (status pushdown), extend_with_parents()
       archiver.rs                 # run_archive_pass(), resurrect_if_archived(), prune phase
+      tag_rename.rs               # rename_tag(): tags across both tiers + metadata files + state
       test_git.rs                 # init_test_repo() helper for unit tests
       domain/                     # pure domain types (no I/O)
         mod.rs  task.rs  state.rs  tag.rs  filter.rs  date_parse.rs
@@ -368,6 +369,16 @@ individual TOML files under `tags/`. Tag names are encoded on disk: `@` → `__c
 `#` → `__resource__` (e.g. `@work` → `tags/__context__work.toml`,
 `@home/kitchen` → `tags/__context__home/kitchen.toml`).
 A one-time startup migration in `storage::open()` renames any existing unencoded paths.
+
+**Renaming a tag** (`core::tag_rename::rename_tag`, behind `next tag rename` and the
+`manage_tag` `rename` action) is the one operation that has to touch every place a tag
+is recorded at once: the tag lists of active tasks, of warm-tier segment entries, and of
+cold-tier entries recovered from their manifest blob (rewriting one restores it to the
+checkout, like a resurrection); the `tags/` metadata files; and the machine-local
+contexts / resource keys. The committed half runs in a single `TaskRepository::transaction`
+and produces one commit; the state half runs afterwards in a `state_transaction`. The
+rename is hierarchical (descendants move with their parent) and kind-preserving; existing
+destinations are rejected unless the caller opts into merging.
 
 **Contexts and resources are just tags.** `@context` and `#resource` tags are classified
 by their prefix (`@` or `#`) but share the same `tags/` storage as freeform tags. There

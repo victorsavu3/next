@@ -28,6 +28,7 @@ A full-screen terminal front-end, `next-tui`, is also available — see [`TUI.md
 | `next data unset` | Remove a key from the task's data map |
 | `next data get` | Print the value of one key from the task's data map |
 | `next tag` | List all tags with descriptions, grouped by kind |
+| `next tag rename` | Rename a tag (and its descendants) across the repository |
 | `next tag describe` | Set a description for any tag |
 | `next tag clear-description` | Remove a tag description |
 | `next context` | Show active and excluded contexts |
@@ -590,6 +591,46 @@ Freeform. Descriptions are shown inline.
 ```
 next tag
 ```
+
+---
+
+### `next tag rename`
+
+Rename a tag everywhere it appears: every active task, every archived task
+(warm `archive/` segments and pruned cold segments alike), the tag's metadata
+file, and machine-local state (active/excluded contexts, resource
+availability). It is one commit.
+
+Renaming is hierarchical — renaming `@work` also moves `@work/frontend` to
+`<new>/frontend`, because a filter on a parent segment matches every
+descendant.
+
+The tag's kind must not change: `@context` stays a context, `#resource` stays
+a resource, freeform stays freeform. The leading character decides how a tag
+filters, so changing it would be a reclassification, not a rename.
+
+By default the rename refuses to run if any destination tag already exists.
+`--merge` folds the old tag into the existing one instead: a task carrying
+both ends up with a single copy, and where both tags have metadata the
+destination's is kept (the source's is dropped, and reported).
+
+**Usage**
+
+```
+next tag rename <old> <new> [--merge]
+```
+
+**Examples**
+
+```sh
+next tag rename @ai/task-manager @ai/next    # also moves @ai/task-manager/*
+next tag rename #office #hq
+next tag rename py python --merge            # fold py into the existing python
+```
+
+A pruned (cold-tier) segment can only be rewritten by restoring it to the
+checkout, so a rename that touches one brings it back — exactly as editing a
+cold task does. The next archive pass prunes it again.
 
 ---
 
