@@ -2,6 +2,16 @@
 repo = "local"
 
 [[repos.hooks]]
+id = "cargo-fmt"
+name = "cargo fmt (check)"
+language = "system"
+# Checks only — never rewrites files mid-commit, which would stage formatting
+# the author never saw. A failure is fixed by running `cargo fmt --all`.
+entry = "cargo fmt --all --check"
+files = "\\.rs$"
+pass_filenames = false
+
+[[repos.hooks]]
 id = "cargo-clippy"
 name = "cargo clippy (all features)"
 language = "system"
