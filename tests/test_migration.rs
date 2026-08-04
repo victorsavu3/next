@@ -186,9 +186,11 @@ printer = true
 
     let store = open(&dir);
 
+    // The tag-state fields of this pre-unification file are dropped rather
+    // than migrated; the tag descriptions it carries still migrate out to
+    // `tags/`, which is what this test is really about.
     let state = store.get_state().unwrap();
-    assert_eq!(state.active_contexts, vec!["@work", "@home"]);
-    assert_eq!(state.resources.get("printer"), Some(&true));
+    assert!(state.tags.is_empty());
     assert_eq!(
         store.get_tag_description("@work").unwrap().as_deref(),
         Some("Work tasks")

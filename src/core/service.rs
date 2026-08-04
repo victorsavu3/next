@@ -228,11 +228,17 @@ pub fn create_task(
         task.recurrence_id = Some(task.id);
     }
 
-    // Auto-apply active context tags when the task has none of its own.
+    // Auto-apply the included context tags when the task has none of its own,
+    // so a task captured while working in a context lands in it. Only `@` tags:
+    // inheriting an included `#resource` or a freeform label would attach
+    // something the user never asked for, and unlike a context that is not
+    // recoverable from where they were.
     if !task.tags.iter().any(|t| tag::is_context(t)) {
         let state = store.get_state()?;
-        for ctx_tag in state.active_contexts {
-            task.tags.push(ctx_tag);
+        for ctx_tag in state.tags_with(crate::core::domain::state::TagState::Included) {
+            if tag::is_context(ctx_tag) {
+                task.tags.push(ctx_tag.to_owned());
+            }
         }
     }
 
@@ -512,10 +518,15 @@ mod tests {
 
     #[test]
     fn create_task_injects_active_context() {
+        use crate::core::domain::state::TagState;
+
         let (_dir, mut ctx) = make_ctx();
-        // Set up an active context in state.
+        // Include a context tag, plus tags of the other two kinds that must
+        // NOT be inherited: only a context says "where I am working".
         let mut state = ctx.store.get_state().unwrap();
-        state.active_contexts = vec!["@work".into()];
+        state.set_state("@work", Some(TagState::Included));
+        state.set_state("#printer", Some(TagState::Included));
+        state.set_state("urgent", Some(TagState::Included));
         ctx.store.save_state(&state).unwrap();
 
         let task = create_task(
@@ -531,13 +542,20 @@ mod tests {
             task.tags.contains(&"@work".to_owned()),
             "context tag should be injected"
         );
+        assert!(
+            !task.tags.iter().any(|t| t == "#printer" || t == "urgent"),
+            "only contexts are inherited: {:?}",
+            task.tags
+        );
     }
 
     #[test]
     fn create_task_no_injection_when_context_tag_present() {
+        use crate::core::domain::state::TagState;
+
         let (_dir, mut ctx) = make_ctx();
         let mut state = ctx.store.get_state().unwrap();
-        state.active_contexts = vec!["@work".into()];
+        state.set_state("@work", Some(TagState::Included));
         ctx.store.save_state(&state).unwrap();
 
         let params = CreateTaskParams {

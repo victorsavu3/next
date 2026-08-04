@@ -1779,38 +1779,16 @@ impl App {
             return;
         };
         match panel.section {
-            Section::Contexts => {
-                let Some(row) = panel.selected_context() else {
+            Section::Tags => {
+                let Some(row) = panel.selected_tag() else {
                     return;
                 };
                 let tag = row.tag.clone();
-                let now_active = !row.active;
-                let msg = if now_active {
-                    format!("context {tag} active")
-                } else {
-                    format!("context {tag} inactive")
-                };
+                let next = row.cycled();
+                let msg = describe_tag_state(&tag, next);
                 self.apply_state_mutation(msg, move |state| {
-                    crate::core::domain::tag::validate_context_tag(&tag)?;
-                    toggle_vec(&mut state.active_contexts, &tag, now_active);
-                    Ok(())
-                });
-            }
-            Section::Resources => {
-                let Some(row) = panel.selected_resource() else {
-                    return;
-                };
-                let tag = row.tag.clone();
-                let now_available = !row.available;
-                let msg = if now_available {
-                    format!("resource {tag} available")
-                } else {
-                    format!("resource {tag} unavailable")
-                };
-                self.apply_state_mutation(msg, move |state| {
-                    crate::core::domain::tag::validate_resource_tag(&tag)?;
-                    let bare = tag.trim_start_matches('#').to_owned();
-                    state.resources.insert(bare, now_available);
+                    crate::core::domain::tag::validate_tag(&tag)?;
+                    state.set_state(&tag, next);
                     Ok(())
                 });
             }
@@ -1833,56 +1811,43 @@ impl App {
         }
     }
 
-    /// Secondary toggle: only contexts use it, to toggle the highlighted
-    /// context's membership in `excluded_contexts`. A no-op for the other
-    /// sections (with a hint).
+    /// Secondary toggle: runs the tag-state cycle backwards, so a mis-press is
+    /// one key away from undone. A no-op for users (their state is a boolean).
     fn state_toggle_excluded(&mut self) {
         let Some(panel) = self.state_panel.as_ref() else {
             return;
         };
-        if panel.section != Section::Contexts {
-            self.status = Some("exclude toggle applies to contexts only".to_owned());
+        if panel.section != Section::Tags {
+            self.status = Some("reverse toggle applies to tags only".to_owned());
             return;
         }
-        let Some(row) = panel.selected_context() else {
+        let Some(row) = panel.selected_tag() else {
             return;
         };
         let tag = row.tag.clone();
-        let now_excluded = !row.excluded;
-        let msg = if now_excluded {
-            format!("context {tag} excluded")
-        } else {
-            format!("context {tag} not excluded")
-        };
+        let previous = row.cycled_back();
+        let msg = describe_tag_state(&tag, previous);
         self.apply_state_mutation(msg, move |state| {
-            crate::core::domain::tag::validate_context_tag(&tag)?;
-            toggle_vec(&mut state.excluded_contexts, &tag, now_excluded);
+            crate::core::domain::tag::validate_tag(&tag)?;
+            state.set_state(&tag, previous);
             Ok(())
         });
     }
 
-    /// Clears the focused section's set: contexts clear both active and excluded;
-    /// users clear the active filter. Resources have no "clear" (availability is
-    /// a per-resource bool), so this is a no-op there with a hint.
+    /// Clears the focused section: every tag state, or the active-user filter.
     fn state_clear(&mut self) {
         let Some(panel) = self.state_panel.as_ref() else {
             return;
         };
         match panel.section {
-            Section::Contexts => {
-                self.apply_state_mutation("contexts cleared".to_owned(), |state| {
-                    state.active_contexts.clear();
-                    state.excluded_contexts.clear();
-                    Ok(())
-                })
-            }
+            Section::Tags => self.apply_state_mutation("tag state cleared".to_owned(), |state| {
+                state.tags.clear();
+                Ok(())
+            }),
             Section::Users => self.apply_state_mutation("users cleared".to_owned(), |state| {
                 state.active_users.clear();
                 Ok(())
             }),
-            Section::Resources => {
-                self.status = Some("nothing to clear for resources".to_owned());
-            }
         }
     }
 
@@ -2142,6 +2107,17 @@ fn open_url(url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The status line for a tag-state change, naming what the tag now is.
+fn describe_tag_state(tag: &str, state: Option<crate::core::domain::state::TagState>) -> String {
+    use crate::core::domain::state::TagState;
+    match state {
+        Some(TagState::Included) => format!("{tag} included"),
+        Some(TagState::Excluded) => format!("{tag} excluded"),
+        Some(TagState::Default) => format!("{tag} pinned to no state"),
+        None => format!("{tag} state cleared"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2339,9 +2315,12 @@ mod tests {
         done_home.tags = vec!["@home".to_owned()];
         let mut app = app_with_repo_tasks(vec![done_work, done_home]);
 
-        // Pin the active context to @work, then reveal closed tasks.
+        // Include @work, then reveal closed tasks.
         let mut state = app.repo.store().get_state().unwrap();
-        state.active_contexts = vec!["@work".to_owned()];
+        state.set_state(
+            "@work",
+            Some(crate::core::domain::state::TagState::Included),
+        );
         app.repo.store_mut().save_state(&state).unwrap();
         app.update(Action::ToggleClosed);
 
@@ -3197,8 +3176,10 @@ mod tests {
         app.update(Action::OpenStatePanel);
         assert_eq!(app.mode(), Mode::StatePanel);
         let panel = app.state_panel().unwrap();
-        assert!(panel.contexts.iter().any(|r| r.tag == "@work"));
-        assert!(panel.resources.iter().any(|r| r.tag == "#printer"));
+        // One list, both sigils: unification means the panel does not split
+        // contexts from resources.
+        assert!(panel.tags.iter().any(|r| r.tag == "@work"));
+        assert!(panel.tags.iter().any(|r| r.tag == "#printer"));
         assert!(panel.users.iter().any(|r| r.name == "alice"));
         // Esc closes it.
         app.update(Action::StateClose);
@@ -3207,80 +3188,92 @@ mod tests {
     }
 
     #[test]
-    fn toggle_context_active_changes_visible_set() {
-        // A context-tagged task and a neutral task. Activating @work hides
-        // tasks tagged with other contexts; here neutral + @work stay visible,
-        // but a @home task disappears once @work is the only active context.
+    fn toggle_cycles_tag_state_and_changes_visible_set() {
+        use crate::core::domain::state::TagState;
+
         let work = tagged_task("work task", &["@work"], None);
         let home = tagged_task("home task", &["@home"], None);
         let mut app = app_with_repo_tasks(vec![work, home]);
         assert_eq!(visible_titles(&app).len(), 2);
 
         app.update(Action::OpenStatePanel);
-        // Focus contexts, highlight @work, toggle it active.
         let idx = app
             .state_panel()
             .unwrap()
-            .contexts
+            .tags
             .iter()
             .position(|r| r.tag == "@work")
             .unwrap();
-        app.state_panel.as_mut().unwrap().ctx_idx = idx;
-        app.update(Action::StateToggle);
+        app.state_panel.as_mut().unwrap().tag_idx = idx;
 
-        // State now has @work active.
+        // First press includes it: only @work tasks remain.
+        app.update(Action::StateToggle);
         let state = app.repo.store().get_state().unwrap();
-        assert_eq!(state.active_contexts, vec!["@work".to_owned()]);
-        // The @home task is filtered out; the @work task stays.
+        assert_eq!(state.state_of("@work"), Some(TagState::Included));
         let titles = visible_titles(&app);
         assert!(titles.contains(&"work task".to_owned()));
         assert!(!titles.contains(&"home task".to_owned()));
-        // The panel was rebuilt to reflect the new active flag.
-        assert!(
+        assert_eq!(
             app.state_panel()
                 .unwrap()
-                .contexts
+                .tags
                 .iter()
                 .find(|r| r.tag == "@work")
                 .unwrap()
-                .active
+                .own,
+            Some(TagState::Included),
+            "the panel was rebuilt from the new state"
         );
+
+        // Second press excludes it: now @work is the one hidden.
+        app.update(Action::StateToggle);
+        let state = app.repo.store().get_state().unwrap();
+        assert_eq!(state.state_of("@work"), Some(TagState::Excluded));
+        let titles = visible_titles(&app);
+        assert!(!titles.contains(&"work task".to_owned()));
+        assert!(titles.contains(&"home task".to_owned()));
     }
 
     #[test]
-    fn toggle_context_excluded_hides_task() {
+    fn reverse_toggle_walks_the_cycle_backwards() {
+        use crate::core::domain::state::TagState;
+
         let work = tagged_task("work task", &["@work"], None);
         let mut app = app_with_repo_tasks(vec![work]);
         assert_eq!(visible_titles(&app).len(), 1);
 
+        // Tags are focused by default and @work is the only row. Going
+        // backwards from no state lands on the pinned default…
         app.update(Action::OpenStatePanel);
-        // Contexts section is focused by default; @work is the only row.
         app.update(Action::StateToggleExcluded);
         let state = app.repo.store().get_state().unwrap();
-        assert_eq!(state.excluded_contexts, vec!["@work".to_owned()]);
-        // The excluded task disappears from the list.
+        assert_eq!(state.tags.get("@work"), Some(&TagState::Default));
+
+        // …and again on excluded, which hides the task.
+        app.update(Action::StateToggleExcluded);
+        let state = app.repo.store().get_state().unwrap();
+        assert_eq!(state.state_of("@work"), Some(TagState::Excluded));
         assert!(visible_titles(&app).is_empty());
     }
 
     #[test]
-    fn toggle_resource_unavailable_hides_tagged_task() {
-        // A task requiring an unavailable resource is hidden by the default
-        // filter pipeline.
+    fn excluding_a_resource_hides_its_tasks_like_any_other_tag() {
+        use crate::core::domain::state::TagState;
+
+        // A `#resource` is in the same list as everything else now, and takes
+        // the same states.
         let needs = tagged_task("needs printer", &["#printer"], None);
         let mut app = app_with_repo_tasks(vec![needs]);
         assert_eq!(visible_titles(&app), vec!["needs printer".to_owned()]);
 
         app.update(Action::OpenStatePanel);
-        app.update(Action::StateSectionNext); // → Resources
-        assert_eq!(app.state_panel().unwrap().section, Section::Resources);
-        app.update(Action::StateToggle); // mark #printer unavailable
+        assert_eq!(app.state_panel().unwrap().section, Section::Tags);
+        app.update(Action::StateToggle); // included
+        app.update(Action::StateToggle); // excluded
 
         let state = app.repo.store().get_state().unwrap();
-        assert_eq!(state.resources.get("printer"), Some(&false));
-        assert!(
-            visible_titles(&app).is_empty(),
-            "unavailable-resource task hidden"
-        );
+        assert_eq!(state.state_of("#printer"), Some(TagState::Excluded));
+        assert!(visible_titles(&app).is_empty(), "excluded task hidden");
     }
 
     #[test]
@@ -3291,7 +3284,6 @@ mod tests {
         assert_eq!(visible_titles(&app).len(), 2);
 
         app.update(Action::OpenStatePanel);
-        app.update(Action::StateSectionNext); // Resources
         app.update(Action::StateSectionNext); // Users
         assert_eq!(app.state_panel().unwrap().section, Section::Users);
         // Highlight bob and activate him.
@@ -3312,23 +3304,14 @@ mod tests {
     }
 
     #[test]
-    fn state_clear_contexts_resets_active_and_excluded() {
+    fn state_clear_drops_every_tag_entry() {
         let mut app = app_with_repo_tasks(vec![tagged_task("t", &["@work"], None)]);
         app.update(Action::OpenStatePanel);
-        app.update(Action::StateToggle); // @work active
-        app.update(Action::StateToggleExcluded); // @work excluded too
-        assert!(!app
-            .repo
-            .store()
-            .get_state()
-            .unwrap()
-            .active_contexts
-            .is_empty());
+        app.update(Action::StateToggle); // @work included
+        assert!(!app.repo.store().get_state().unwrap().tags.is_empty());
 
         app.update(Action::StateClear);
-        let state = app.repo.store().get_state().unwrap();
-        assert!(state.active_contexts.is_empty());
-        assert!(state.excluded_contexts.is_empty());
+        assert!(app.repo.store().get_state().unwrap().tags.is_empty());
     }
 
     #[test]

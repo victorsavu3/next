@@ -226,6 +226,8 @@ fn renames_archived_tasks_in_pruned_cold_segments() {
 
 #[test]
 fn updates_machine_local_state() {
+    use next::core::domain::state::TagState;
+
     let mut env = common::setup();
     add_committed(&mut env, &tagged("Tagged", &["@ai/task-manager"]));
 
@@ -233,30 +235,39 @@ fn updates_machine_local_state() {
         .repo
         .state_transaction(|store| {
             let mut state = store.get_state()?;
-            state.active_contexts = vec!["@ai/task-manager".into()];
-            state.excluded_contexts = vec!["@ai/task-manager/mcp".into(), "@work".into()];
+            state.set_state("@ai/task-manager", Some(TagState::Included));
+            state.set_state("@ai/task-manager/mcp", Some(TagState::Excluded));
+            state.set_state("@work", Some(TagState::Excluded));
             store.save_state(&state)?;
             Ok(())
         })
         .unwrap();
 
     let outcome = rename_tag(&mut env.ctx.repo, "@ai/task-manager", "@ai/next", false).unwrap();
-    assert_eq!(
-        outcome.state_fields,
-        vec!["active_contexts", "excluded_contexts"]
-    );
+    assert_eq!(outcome.state_fields, vec!["tags"]);
 
     let state = env.ctx.repo.store().get_state().unwrap();
     assert_eq!(
-        state.active_contexts,
-        vec!["@ai/next"],
-        "active context not orphaned"
+        state.state_of("@ai/next"),
+        Some(TagState::Included),
+        "the included tag is not orphaned"
     );
-    assert_eq!(state.excluded_contexts, vec!["@ai/next/mcp", "@work"]);
+    assert_eq!(state.state_of("@ai/next/mcp"), Some(TagState::Excluded));
+    assert_eq!(
+        state.state_of("@work"),
+        Some(TagState::Excluded),
+        "an unrelated entry is untouched"
+    );
+    assert!(!state.tags.contains_key("@ai/task-manager"));
 }
 
 #[test]
-fn renames_resource_availability_keys() {
+fn renames_state_entries_for_every_tag_kind() {
+    use next::core::domain::state::TagState;
+
+    // Unification means the state map is keyed by the full tag, sigil
+    // included, so a resource renames exactly like a context — there is no
+    // bare-name special case left to get wrong.
     let mut env = common::setup();
     add_committed(&mut env, &tagged("Print", &["#office/printer"]));
 
@@ -264,29 +275,24 @@ fn renames_resource_availability_keys() {
         .repo
         .state_transaction(|store| {
             let mut state = store.get_state()?;
-            state.resources.insert("office/printer".into(), false);
-            state.resources.insert("garage".into(), false);
+            state.set_state("#office/printer", Some(TagState::Excluded));
+            state.set_state("#garage", Some(TagState::Excluded));
             store.save_state(&state)?;
             Ok(())
         })
         .unwrap();
 
     let outcome = rename_tag(&mut env.ctx.repo, "#office", "#hq", false).unwrap();
-    assert_eq!(outcome.state_fields, vec!["resources"]);
+    assert_eq!(outcome.state_fields, vec!["tags"]);
 
     let state = env.ctx.repo.store().get_state().unwrap();
+    assert_eq!(state.state_of("#hq/printer"), Some(TagState::Excluded));
     assert_eq!(
-        state.resources.get("hq/printer"),
-        Some(&false),
-        "keyed by bare name"
-    );
-    assert_eq!(
-        state.resources.get("garage"),
-        Some(&false),
+        state.state_of("#garage"),
+        Some(TagState::Excluded),
         "unrelated key kept"
     );
-    assert!(!state.resources.contains_key("office/printer"));
-    assert!(!state.is_resource_available("#hq/printer"));
+    assert!(!state.tags.contains_key("#office/printer"));
 }
 
 #[test]

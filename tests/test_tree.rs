@@ -1,6 +1,6 @@
 mod common;
 
-use next::cli::commands::{add, context, done, tree};
+use next::cli::commands::{add, done, tag, tree};
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -460,9 +460,9 @@ fn no_context_section_comes_last() {
 fn tree_closed_respects_context() {
     let mut env = common::setup();
 
-    context::run(
-        context::Args {
-            subcommand: Some(context::ContextSubcommand::Set(context::ContextTagArgs {
+    tag::run(
+        tag::Args {
+            subcommand: Some(tag::TagSubcommand::Include(tag::TagStateArgs {
                 tags: vec!["@work".into()],
             })),
         },

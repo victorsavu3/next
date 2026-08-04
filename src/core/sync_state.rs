@@ -188,7 +188,7 @@ mod tests {
 
         // Seed a global field and a plugin registration alongside sync state.
         update_machine_state(root, |machine| {
-            machine.global.active_contexts = vec!["@work".into()];
+            machine.global.active_users = vec!["alice".into()];
             machine.plugins.push(crate::core::plugin::registry::Plugin {
                 name: "forgejo".into(),
                 command: vec!["next-forgejo".into()],
@@ -205,7 +205,7 @@ mod tests {
         record_pull(root, Utc::now()).unwrap();
 
         let machine = load_machine_state(root).unwrap();
-        assert_eq!(machine.global.active_contexts, vec!["@work"]);
+        assert_eq!(machine.global.active_users, vec!["alice"]);
         assert_eq!(
             machine.plugins.len(),
             1,

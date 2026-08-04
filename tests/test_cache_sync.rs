@@ -8,16 +8,12 @@
 /// with a real git repo.  Pull scenarios are simulated by writing TOML files
 /// directly to the working tree and committing them with `GitBackend::commit`,
 /// which advances HEAD exactly as a fast-forward pull would.
-use std::{
-    collections::{HashMap, HashSet},
-    fs,
-    path::Path,
-};
+use std::{collections::HashSet, fs, path::Path};
 
 use next::core::storage::{CachedStore, GitBackend, TomlStore};
 use next::core::{
     domain::{
-        state::GlobalState,
+        state::{GlobalState, TagState},
         task::{Priority, Status, Task},
     },
     store::{Store, VcsBackend},
@@ -128,10 +124,7 @@ fn assert_sync(dir: &Path, head_hash: &str) {
         assert_eq!(t.tags, c.tags, "tags mismatch for task {}", t.id);
     }
 
-    assert_eq!(
-        toml_state.active_contexts, cached_state.active_contexts,
-        "active_contexts mismatch"
-    );
+    assert_eq!(toml_state.tags, cached_state.tags, "tag state mismatch");
     assert_eq!(
         toml_state.active_users, cached_state.active_users,
         "active_users mismatch"
@@ -241,12 +234,12 @@ fn save_state_syncs_to_both_stores() {
     init_git(dir.path());
     let (mut store, vcs) = open(dir.path());
 
-    let state = GlobalState {
-        active_contexts: vec!["@work".into(), "@home".into()],
+    let mut state = GlobalState {
         active_users: vec!["alice".into()],
-        resources: HashMap::from([("printer".into(), false)]),
         ..Default::default()
     };
+    state.set_state("@work", Some(TagState::Included));
+    state.set_state("#printer", Some(TagState::Excluded));
     store.save_state(&state).unwrap();
 
     let head = vcs.head_hash().unwrap();
@@ -256,11 +249,11 @@ fn save_state_syncs_to_both_stores() {
         .unwrap()
         .get_state()
         .unwrap();
-    assert_eq!(from_toml.active_contexts, state.active_contexts);
+    assert_eq!(from_toml.tags, state.tags);
     assert_eq!(from_toml.active_users, state.active_users);
 
     let from_cache = store.get_state().unwrap();
-    assert_eq!(from_cache.active_contexts, state.active_contexts);
+    assert_eq!(from_cache.tags, state.tags);
     assert_eq!(from_cache.active_users, state.active_users);
 }
 
@@ -640,10 +633,8 @@ fn pull_updates_state() {
     let (mut store, vcs) = open(dir.path());
 
     // Set initial state.
-    let initial_state = GlobalState {
-        active_contexts: vec!["@home".into()],
-        ..Default::default()
-    };
+    let mut initial_state = GlobalState::default();
+    initial_state.set_state("@home", Some(TagState::Included));
     store.save_state(&initial_state).unwrap();
 
     // Commit a task to have a real HEAD.
@@ -652,12 +643,13 @@ fn pull_updates_state() {
     let task_path = next::core::storage::task_path(dir.path(), &task);
     vcs.commit(&[task_path], "anchor commit").unwrap();
 
-    // Simulate pull: state.toml is replaced externally with new contexts.
-    let new_state = GlobalState {
-        active_contexts: vec!["@work".into(), "@office".into()],
+    // Simulate pull: state.toml is replaced externally with new tag state.
+    let mut new_state = GlobalState {
         active_users: vec!["alice".into()],
         ..Default::default()
     };
+    new_state.set_state("@work", Some(TagState::Included));
+    new_state.set_state("@office", Some(TagState::Included));
     let state_content = toml::to_string_pretty(&new_state).unwrap();
     let state_path = dir.path().join("state.toml");
     fs::write(&state_path, state_content).unwrap();
@@ -667,7 +659,7 @@ fn pull_updates_state() {
     let store2 = open_with_head(dir.path(), &new_head);
     let loaded = store2.get_state().unwrap();
 
-    assert_eq!(loaded.active_contexts, vec!["@work", "@office"]);
+    assert_eq!(loaded.tags, new_state.tags);
     assert_eq!(loaded.active_users, vec!["alice"]);
     assert_sync(dir.path(), &new_head);
 }

@@ -131,21 +131,22 @@ fn acquire_lock(lock_path: &Path) -> Result<storage::FileLock> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     use chrono::Utc;
     use uuid::Uuid;
 
     use super::*;
+    use crate::core::domain::state::TagState;
     use crate::core::sync_state::PluginSyncState;
 
     #[test]
     fn round_trip_all_three_sections() {
         let now = Utc::now();
         let mut m = MachineState::default();
-        m.global.active_contexts = vec!["@work".into(), "@home".into()];
-        m.global.excluded_contexts = vec!["@noise".into()];
-        m.global.resources = HashMap::from([("printer".into(), false)]);
+        m.global.set_state("@work", Some(TagState::Included));
+        m.global.set_state("#printer", Some(TagState::Excluded));
+        m.global.set_state("@work/admin", Some(TagState::Default));
         m.global.active_users = vec!["alice".into()];
         m.plugins.push(Plugin {
             name: "forgejo".into(),
@@ -173,15 +174,29 @@ mod tests {
     }
 
     #[test]
-    fn global_only_file_loads_unchanged() {
-        // A pre-consolidation state.toml with only global fields must load with
-        // empty plugin/sync sections.
-        let toml = "active_contexts = [\"@work\"]\n\n[resources]\nprinter = false\n";
+    fn global_only_file_loads_with_empty_other_sections() {
+        let toml = "[tags]\n\"@work\" = \"included\"\n\"#printer\" = \"excluded\"\n";
         let m: MachineState = toml::from_str(toml).unwrap();
-        assert_eq!(m.global.active_contexts, vec!["@work"]);
-        assert_eq!(m.global.resources.get("printer"), Some(&false));
+        assert_eq!(m.global.state_of("@work"), Some(TagState::Included));
+        assert_eq!(m.global.state_of("#printer"), Some(TagState::Excluded));
         assert!(m.plugins.is_empty());
         assert_eq!(m.sync, SyncState::default());
+    }
+
+    /// A `state.toml` written before tag-state unification carries fields that
+    /// no longer exist. It must still load — dropping the stale keys rather
+    /// than failing — so an upgrade does not leave the tool unusable.
+    #[test]
+    fn pre_unification_file_loads_and_drops_the_old_fields() {
+        let toml = "active_contexts = [\"@work\"]\nactive_users = [\"alice\"]\n\n\
+                    [resources]\nprinter = false\n";
+        let m: MachineState = toml::from_str(toml).expect("old state must not break loading");
+        assert!(m.global.tags.is_empty(), "no tag state is carried over");
+        assert_eq!(
+            m.global.active_users,
+            vec!["alice"],
+            "users survive: that field did not change"
+        );
     }
 
     #[test]

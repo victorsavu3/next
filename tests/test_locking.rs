@@ -8,7 +8,10 @@ use std::{path::Path, process::Command, sync::Arc};
 
 use next::core::storage::{FileLock, GitBackend, TomlStore};
 use next::core::{
-    domain::{state::GlobalState, task::Task},
+    domain::{
+        state::{GlobalState, TagState},
+        task::Task,
+    },
     service::{apply_edits, EditTaskParams},
     store::{Store as _, VcsBackend as _},
 };
@@ -184,10 +187,8 @@ fn concurrent_state_saves_no_corruption() {
             let root = Arc::clone(&root);
             std::thread::spawn(move || {
                 let mut store = fresh_store(&root);
-                let state = GlobalState {
-                    active_contexts: vec![format!("@context{i}")],
-                    ..Default::default()
-                };
+                let mut state = GlobalState::default();
+                state.set_state(&format!("@context{i}"), Some(TagState::Included));
                 store.save_state(&state).unwrap();
             })
         })
@@ -200,11 +201,11 @@ fn concurrent_state_saves_no_corruption() {
     // state.toml must parse cleanly — the last writer's data.
     let store = fresh_store(dir.path());
     let state = store.get_state().unwrap();
-    assert_eq!(state.active_contexts.len(), 1, "state must not be corrupt");
+    assert_eq!(state.tags.len(), 1, "state must not be corrupt");
+    let (tag, _) = state.tags.iter().next().unwrap();
     assert!(
-        state.active_contexts[0].starts_with("@context"),
-        "unexpected context value: {:?}",
-        state.active_contexts[0]
+        tag.starts_with("@context"),
+        "unexpected tag in state: {tag:?}"
     );
 }
 
@@ -231,10 +232,8 @@ fn concurrent_task_and_state_saves_no_corruption() {
         let root = Arc::clone(&root);
         handles.push(std::thread::spawn(move || {
             let mut store = fresh_store(&root);
-            let state = GlobalState {
-                active_contexts: vec![format!("@ctx{i}")],
-                ..Default::default()
-            };
+            let mut state = GlobalState::default();
+            state.set_state(&format!("@ctx{i}"), Some(TagState::Included));
             store.save_state(&state).unwrap();
         }));
     }

@@ -88,8 +88,7 @@ impl FilterArgs {
         Ok(FilterSet {
             required_tags: self.required_tags.clone(),
             excluded_tags: self.excluded_tags.clone(),
-            context_override: self.context_override.as_ref().map(|c| vec![c.clone()]),
-            excluded_context_override: None,
+            include_override: self.context_override.as_ref().map(|c| vec![c.clone()]),
             user_override,
             include_future: self.future,
             disable_implicit: self.all,

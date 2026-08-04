@@ -4,7 +4,7 @@ use chrono::NaiveDate;
 use uuid::Uuid;
 
 use crate::core::domain::{
-    state::GlobalState,
+    state::{GlobalState, TagState},
     tag,
     task::{Status, Task},
 };
@@ -18,15 +18,12 @@ pub struct FilterSet {
     /// Tags that must NOT appear on a task.
     pub excluded_tags: Vec<String>,
 
-    /// Override active contexts for this query.
-    /// `None` → use `state.active_contexts`.
-    /// `Some(v)` → use `v` (pass an empty vec to disable context filtering entirely).
-    pub context_override: Option<Vec<String>>,
-
-    /// Override excluded contexts for this query.
-    /// `None` → use `state.excluded_contexts`.
-    /// `Some(v)` → use `v` (pass an empty vec to disable excluded-context filtering entirely).
-    pub excluded_context_override: Option<Vec<String>>,
+    /// Override the *included* tags for this query.
+    /// `None` → use whatever the state includes.
+    /// `Some(v)` → include exactly these instead (an empty vec includes
+    /// nothing, which is how a caller asks to see every tag's tasks).
+    /// Exclusions always come from the state.
+    pub include_override: Option<Vec<String>>,
 
     /// Override active users for this query.
     /// `None` → use `state.active_users`.
@@ -37,7 +34,8 @@ pub struct FilterSet {
     pub include_future: bool,
 
     /// Skip the implicit visibility gate entirely (show everything regardless
-    /// of status, blocking, resources, context, or user).
+    /// of status, blocking or user). Tag state still applies — see
+    /// [`effective_tag_state`].
     pub disable_implicit: bool,
 
     /// When set, only tasks with status `Done` or `Cancelled` are returned.
@@ -59,8 +57,8 @@ pub struct FilterSet {
 
 /// Applies `filter` to `tasks` and returns those that pass.
 ///
-/// `today` is used for start-date and age checks. `state` supplies the global
-/// context and resource availability when the implicit gate is active.
+/// `today` is used for start-date and age checks. `state` supplies the tag
+/// state and the active users.
 ///
 /// **Implicit gate** (skipped when `filter.disable_implicit` is true):
 /// 1. Task must have `status == Open`.
@@ -68,8 +66,12 @@ pub struct FilterSet {
 /// 3. Task must not be blocked by an open `blocked_by` task.
 /// 4. Task must not be a parent with open children (work on the children
 ///    instead) — unless `include_blocked_parents` is set, which keeps projects visible.
-/// 5. Task must not carry any unavailable `#resource` tag.
-/// 6. If contexts are active, task must have at least one matching `@context` tag.
+/// 5. Task must be assigned to an active user, or unassigned.
+///
+/// **Tag state** ([`GlobalState::admits`]) is applied outside that gate, so a
+/// caller can bypass the status and blocking checks while still respecting
+/// which tags are included and excluded. One rule covers every tag kind — a
+/// context, a resource and a freeform label are filtered identically.
 ///
 /// **Explicit filters** (always applied):
 /// - `required_tags`: task must contain ALL (hierarchical match).
@@ -95,26 +97,8 @@ pub fn apply(
             .unwrap_or_default()
     });
 
-    // Context overrides are respected even when `disable_implicit` is true, so
-    // callers can pin contexts while bypassing the status/blocking/resource gate.
-    // When no override is set, the implicit gate drives context filtering as usual.
-    let active_contexts: &[String] = if filter.disable_implicit {
-        filter.context_override.as_deref().unwrap_or(&[])
-    } else {
-        filter
-            .context_override
-            .as_deref()
-            .unwrap_or(&state.active_contexts)
-    };
-
-    let effective_excluded_contexts: &[String] = if filter.disable_implicit {
-        filter.excluded_context_override.as_deref().unwrap_or(&[])
-    } else {
-        filter
-            .excluded_context_override
-            .as_deref()
-            .unwrap_or(&state.excluded_contexts)
-    };
+    // Tag state is independent of the implicit gate; see `effective_tag_state`.
+    let effective_state = effective_tag_state(filter, state);
 
     let active_users: &[String] = if filter.disable_implicit {
         &[]
@@ -151,13 +135,6 @@ pub fn apply(
                 {
                     return false;
                 }
-                if task
-                    .tags
-                    .iter()
-                    .any(|t| tag::is_resource(t) && !state.is_resource_available(t))
-                {
-                    return false;
-                }
                 // User filter: unassigned tasks are always visible; assigned tasks
                 // must match one of the active users.
                 if !active_users.is_empty() {
@@ -169,16 +146,9 @@ pub fn apply(
                 }
             }
 
-            // ── Context filtering ────────────────────────────────────────────
-            // Applied outside the implicit gate so that callers can pin contexts
-            // via context_override / excluded_context_override while still
-            // bypassing status/blocking/resource checks (e.g. tree include_all).
-            if !active_contexts.is_empty() && !task_matches_contexts(task, active_contexts) {
-                return false;
-            }
-            if !effective_excluded_contexts.is_empty()
-                && task_excluded_by_contexts(task, effective_excluded_contexts)
-            {
+            // ── Tag state ────────────────────────────────────────────────────
+            // One rule for every kind of tag; see `GlobalState::admits`.
+            if !effective_state.admits(&task.tags) {
                 return false;
             }
 
@@ -204,54 +174,27 @@ pub fn apply(
         .collect()
 }
 
-/// Returns `true` if `task` has at least one `@context` tag that is compatible
-/// with one of the `active_contexts`.
+/// The tag state this query runs under.
 ///
-/// Compatibility is bidirectional: `@work` active matches a task tagged
-/// `@work/frontend` (ancestor of task context), and `@work/frontend` active
-/// matches a task tagged `@work` (task context is ancestor of active context).
-/// This ensures general work tasks remain visible when a sub-context is active.
-fn task_matches_contexts(task: &Task, active_contexts: &[String]) -> bool {
-    let task_contexts: Vec<&str> = task
-        .tags
-        .iter()
-        .filter(|t| tag::is_context(t))
-        .map(|t| t.as_str())
-        .collect();
-
-    if task_contexts.is_empty() {
-        return true;
-    }
-
-    active_contexts.iter().any(|active| {
-        task_contexts
-            .iter()
-            .any(|&tc| tag::tag_matches(active, tc) || tag::tag_matches(tc, active))
-    })
-}
-
-/// Returns `true` if `task` should be hidden because one of its `@context`
-/// tags matches an excluded context.
+/// Tag state is independent of the implicit gate: `--all` means "every status",
+/// not "every tag". A tag excluded on purpose stays excluded until it is
+/// un-excluded, which is what makes exclusion worth setting; the tree view
+/// relies on the same rule to keep its filtering while bypassing the status
+/// checks.
 ///
-/// Matching is one-directional: `excluded` is an ancestor of (or equal to)
-/// the task's context tag.  This means excluding `@home` also hides
-/// `@home/kitchen`, but excluding `@home/kitchen` does NOT hide tasks tagged
-/// only with `@home`.  Tasks with no `@` tags are never excluded.
-fn task_excluded_by_contexts(task: &Task, excluded_contexts: &[String]) -> bool {
-    let task_contexts: Vec<&str> = task
-        .tags
-        .iter()
-        .filter(|t| tag::is_context(t))
-        .map(|t| t.as_str())
-        .collect();
-
-    if task_contexts.is_empty() {
-        return false;
+/// `include_override` replaces the *included* set for one query without
+/// touching the stored state — how `context:@x` and the MCP context parameter
+/// pin a view. Exclusions always come from the state.
+fn effective_tag_state(filter: &FilterSet, state: &GlobalState) -> GlobalState {
+    let Some(included) = filter.include_override.as_ref() else {
+        return state.clone();
+    };
+    let mut effective = state.clone();
+    effective.tags.retain(|_, v| *v != TagState::Included);
+    for tag_name in included {
+        effective.set_state(tag_name, Some(TagState::Included));
     }
-
-    excluded_contexts
-        .iter()
-        .any(|exc| task_contexts.iter().any(|&tc| tag::tag_matches(exc, tc)))
+    effective
 }
 
 /// Pre-computes two indexes needed by the implicit gate.
@@ -424,247 +367,206 @@ mod tests {
         assert_eq!(result[0].title, "Project");
     }
 
-    #[test]
-    fn excludes_tasks_with_unavailable_resource() {
-        let mut state = GlobalState::default();
-        state.resources.insert("printer".into(), false);
+    // ── Tag state ────────────────────────────────────────────────────────────
+    //
+    // One model for every kind of tag: `@`, `#` and freeform are filtered by
+    // the same two rules, so these tests deliberately mix the sigils.
 
-        let mut task = Task::new("Print document");
-        task.tags = vec!["#printer".into()];
-
-        let result = apply(vec![task], &FilterSet::default(), &state, today());
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn unavailable_parent_resource_blocks_child_resource() {
-        let mut state = GlobalState::default();
-        state.resources.insert("office".into(), false);
-
-        let mut task = Task::new("Use office printer");
-        task.tags = vec!["#office/printer".into()];
-
-        let result = apply(vec![task], &FilterSet::default(), &state, today());
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn available_resource_not_excluded() {
-        let mut task = Task::new("Print document");
-        task.tags = vec!["#printer".into()];
-        let result = run(vec![task], FilterSet::default());
-        assert_eq!(result.len(), 1);
-    }
-
-    // ── Context filtering ────────────────────────────────────────────────────
-
-    #[test]
-    fn no_active_context_shows_all_tasks() {
-        let mut work = Task::new("Work task");
-        work.tags = vec!["@work".into()];
-        let bare = Task::new("No context");
-        let result = run(vec![work, bare], FilterSet::default());
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn active_context_hides_wrong_context_tasks() {
-        let state = GlobalState {
-            active_contexts: vec!["@work".into()],
+    fn state_with(pairs: &[(&str, TagState)]) -> GlobalState {
+        GlobalState {
+            tags: pairs.iter().map(|(t, s)| (t.to_string(), *s)).collect(),
             ..Default::default()
-        };
+        }
+    }
 
-        let mut work_task = Task::new("Work task");
-        work_task.tags = vec!["@work".into()];
-
-        let mut home_task = Task::new("Home task");
-        home_task.tags = vec!["@home".into()];
-
-        let result = apply(
-            vec![work_task, home_task],
-            &FilterSet::default(),
-            &state,
-            today(),
-        );
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].title, "Work task");
+    fn tagged(title: &str, tags: &[&str]) -> Task {
+        let mut t = Task::new(title);
+        t.tags = tags.iter().map(|s| s.to_string()).collect();
+        t
     }
 
     #[test]
-    fn active_context_keeps_context_neutral_tasks() {
-        let state = GlobalState {
-            active_contexts: vec!["@work".into()],
-            ..Default::default()
-        };
-
-        let mut work_task = Task::new("Work task");
-        work_task.tags = vec!["@work".into()];
-
-        let neutral_task = Task::new("No context task");
-
-        let result = apply(
-            vec![work_task, neutral_task],
-            &FilterSet::default(),
-            &state,
-            today(),
+    fn no_tag_state_shows_everything() {
+        let result = run(
+            vec![tagged("Work", &["@work"]), Task::new("Untagged")],
+            FilterSet::default(),
         );
         assert_eq!(result.len(), 2);
     }
 
     #[test]
-    fn parent_context_active_shows_sub_context_task() {
-        let state = GlobalState {
-            active_contexts: vec!["@work".into()],
-            ..Default::default()
-        };
-
-        let mut task = Task::new("Frontend work");
-        task.tags = vec!["@work/frontend".into()];
-
-        let result = apply(vec![task], &FilterSet::default(), &state, today());
-        assert_eq!(result.len(), 1);
+    fn excluding_hides_the_tag_whatever_its_kind() {
+        for tag_name in ["@home", "#printer", "errand"] {
+            let state = state_with(&[(tag_name, TagState::Excluded)]);
+            let result = apply(
+                vec![tagged("Hidden", &[tag_name]), Task::new("Untagged")],
+                &FilterSet::default(),
+                &state,
+                today(),
+            );
+            assert_eq!(result.len(), 1, "{tag_name}");
+            assert_eq!(result[0].title, "Untagged", "{tag_name}");
+        }
     }
 
     #[test]
-    fn sub_context_active_shows_parent_context_task() {
-        let state = GlobalState {
-            active_contexts: vec!["@work/frontend".into()],
-            ..Default::default()
-        };
-
-        let mut task = Task::new("General work task");
-        task.tags = vec!["@work".into()]; // less specific than active context
-
-        let result = apply(vec![task], &FilterSet::default(), &state, today());
-        assert_eq!(result.len(), 1);
+    fn including_restricts_to_that_tag_whatever_its_kind() {
+        // A resource can be included, not just excluded — the old model had no
+        // way to say "only the things I need the printer for".
+        for tag_name in ["@work", "#printer", "errand"] {
+            let state = state_with(&[(tag_name, TagState::Included)]);
+            let result = apply(
+                vec![
+                    tagged("Kept", &[tag_name]),
+                    tagged("Other", &["@elsewhere"]),
+                ],
+                &FilterSet::default(),
+                &state,
+                today(),
+            );
+            assert_eq!(result.len(), 1, "{tag_name}");
+            assert_eq!(result[0].title, "Kept", "{tag_name}");
+        }
     }
 
     #[test]
-    fn context_override_replaces_state_contexts() {
-        let state = GlobalState {
-            active_contexts: vec!["@work".into()],
-            ..Default::default()
-        };
-
-        let mut home_task = Task::new("Home task");
-        home_task.tags = vec!["@home".into()];
-
-        let filter = FilterSet {
-            context_override: Some(vec!["@home".into()]),
-            ..Default::default()
-        };
-        let result = apply(vec![home_task], &filter, &state, today());
-        assert_eq!(result.len(), 1);
-    }
-
-    #[test]
-    fn context_override_empty_disables_context_filter() {
-        let state = GlobalState {
-            active_contexts: vec!["@work".into()],
-            ..Default::default()
-        };
-
-        let task = Task::new("No context");
-        let filter = FilterSet {
-            context_override: Some(vec![]), // override to "no filter"
-            ..Default::default()
-        };
-        let result = apply(vec![task], &filter, &state, today());
-        assert_eq!(result.len(), 1);
-    }
-
-    // ── Excluded contexts ─────────────────────────────────────────────────────
-
-    #[test]
-    fn excluded_context_hides_matching_task() {
-        let state = GlobalState {
-            excluded_contexts: vec!["@home".into()],
-            ..Default::default()
-        };
-
-        let mut home_task = Task::new("Home task");
-        home_task.tags = vec!["@home".into()];
-        let neutral = Task::new("No context");
-
+    fn an_included_tag_hides_untagged_tasks() {
+        // The context-neutral exemption is gone: including a tag means the
+        // list is that tag's tasks, and a task carrying nothing is not one.
+        let state = state_with(&[("@work", TagState::Included)]);
         let result = apply(
-            vec![home_task, neutral],
+            vec![tagged("Work", &["@work"]), Task::new("Untagged")],
             &FilterSet::default(),
             &state,
             today(),
         );
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].title, "No context");
+        assert_eq!(result[0].title, "Work");
     }
 
     #[test]
-    fn excluded_context_hides_descendant_contexts() {
-        let state = GlobalState {
-            excluded_contexts: vec!["@home".into()],
-            ..Default::default()
-        };
+    fn state_matches_descendants_but_not_ancestors() {
+        // Downward only, uniformly. The old bidirectional context match — where
+        // an active `@work/frontend` also showed plain `@work` tasks — is gone.
+        let state = state_with(&[("@work", TagState::Included)]);
+        let result = apply(
+            vec![tagged("Frontend", &["@work/frontend"])],
+            &FilterSet::default(),
+            &state,
+            today(),
+        );
+        assert_eq!(result.len(), 1, "a parent include covers its descendants");
 
-        let mut kitchen = Task::new("Kitchen task");
-        kitchen.tags = vec!["@home/kitchen".into()];
-
-        let result = apply(vec![kitchen], &FilterSet::default(), &state, today());
+        let state = state_with(&[("@work/frontend", TagState::Included)]);
+        let result = apply(
+            vec![tagged("General work", &["@work"])],
+            &FilterSet::default(),
+            &state,
+            today(),
+        );
         assert!(
             result.is_empty(),
-            "@home excluded should hide @home/kitchen"
+            "a child include does not cover its parent"
         );
     }
 
     #[test]
-    fn excluded_sub_context_does_not_hide_parent_context_task() {
-        let state = GlobalState {
-            excluded_contexts: vec!["@home/kitchen".into()],
-            ..Default::default()
-        };
-
-        let mut home_task = Task::new("General home task");
-        home_task.tags = vec!["@home".into()];
-
-        let result = apply(vec![home_task], &FilterSet::default(), &state, today());
-        assert_eq!(
-            result.len(),
-            1,
-            "@home/kitchen excluded should not hide @home task"
-        );
-    }
-
-    #[test]
-    fn context_neutral_task_not_hidden_by_exclusion() {
-        let state = GlobalState {
-            excluded_contexts: vec!["@home".into()],
-            ..Default::default()
-        };
-
-        let neutral = Task::new("No context task");
-
-        let result = apply(vec![neutral], &FilterSet::default(), &state, today());
-        assert_eq!(result.len(), 1, "context-neutral task must not be excluded");
-    }
-
-    #[test]
-    fn excluded_context_applies_alongside_active_context() {
-        let state = GlobalState {
-            active_contexts: vec!["@home".into()],
-            excluded_contexts: vec!["@home/kitchen".into()],
-            ..Default::default()
-        };
-
-        let mut living_room = Task::new("Living room task");
-        living_room.tags = vec!["@home/living".into()];
-        let mut kitchen = Task::new("Kitchen task");
-        kitchen.tags = vec!["@home/kitchen".into()];
-
+    fn a_pinned_default_opts_a_child_out_of_its_parents_exclusion() {
+        let state = state_with(&[
+            ("@home", TagState::Excluded),
+            ("@home/kitchen", TagState::Default),
+        ]);
         let result = apply(
-            vec![living_room, kitchen],
+            vec![
+                tagged("Kitchen", &["@home/kitchen"]),
+                tagged("Garden", &["@home/garden"]),
+            ],
             &FilterSet::default(),
             &state,
             today(),
         );
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].title, "Living room task");
+        assert_eq!(result[0].title, "Kitchen");
+    }
+
+    #[test]
+    fn exclusion_wins_over_inclusion_on_the_same_task() {
+        let state = state_with(&[
+            ("@work", TagState::Included),
+            ("#printer", TagState::Excluded),
+        ]);
+        let result = apply(
+            vec![
+                tagged("Needs printer", &["@work", "#printer"]),
+                tagged("Plain work", &["@work"]),
+            ],
+            &FilterSet::default(),
+            &state,
+            today(),
+        );
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Plain work");
+    }
+
+    #[test]
+    fn include_override_replaces_the_stored_inclusions() {
+        let state = state_with(&[("@work", TagState::Included)]);
+        let filter = FilterSet {
+            include_override: Some(vec!["@home".into()]),
+            ..Default::default()
+        };
+        let result = apply(
+            vec![tagged("Home task", &["@home"]), tagged("Work", &["@work"])],
+            &filter,
+            &state,
+            today(),
+        );
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Home task");
+    }
+
+    #[test]
+    fn include_override_keeps_the_stored_exclusions() {
+        // Overriding what you are working on should not resurrect what you
+        // deliberately hid.
+        let state = state_with(&[
+            ("@work", TagState::Included),
+            ("#printer", TagState::Excluded),
+        ]);
+        let filter = FilterSet {
+            include_override: Some(vec![]),
+            ..Default::default()
+        };
+        let result = apply(
+            vec![
+                tagged("Printing", &["#printer"]),
+                tagged("Anything", &["@home"]),
+            ],
+            &filter,
+            &state,
+            today(),
+        );
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Anything");
+    }
+
+    #[test]
+    fn tag_state_survives_disable_implicit() {
+        // `--all` means every status, not every tag: the tree view depends on
+        // this to keep filtering while showing closed tasks.
+        let state = state_with(&[("#printer", TagState::Excluded)]);
+        let filter = FilterSet {
+            disable_implicit: true,
+            ..Default::default()
+        };
+        let result = apply(
+            vec![tagged("Printing", &["#printer"]), Task::new("Other")],
+            &filter,
+            &state,
+            today(),
+        );
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Other");
     }
 
     // ── Explicit filters ─────────────────────────────────────────────────────
@@ -770,19 +672,23 @@ mod tests {
     }
 
     #[test]
-    fn disable_implicit_ignores_contexts() {
-        let state = GlobalState {
-            active_contexts: vec!["@work".into()],
-            ..Default::default()
-        };
-
-        let task = Task::new("No context");
+    fn disable_implicit_still_honours_inclusions() {
+        // Changed with tag-state unification: `--all` widens the statuses, not
+        // the tags. To see other tags too, override the inclusions.
+        let state = state_with(&[("@work", TagState::Included)]);
+        let task = Task::new("No tags");
         let filter = FilterSet {
             disable_implicit: true,
             ..Default::default()
         };
-        let result = apply(vec![task], &filter, &state, today());
-        assert_eq!(result.len(), 1);
+        assert!(apply(vec![task.clone()], &filter, &state, today()).is_empty());
+
+        let filter = FilterSet {
+            disable_implicit: true,
+            include_override: Some(vec![]),
+            ..Default::default()
+        };
+        assert_eq!(apply(vec![task], &filter, &state, today()).len(), 1);
     }
 
     // ── User filtering ───────────────────────────────────────────────────────
@@ -920,11 +826,8 @@ mod tests {
     }
 
     #[test]
-    fn closed_only_respects_context() {
-        let state = GlobalState {
-            active_contexts: vec!["@work".into()],
-            ..Default::default()
-        };
+    fn closed_only_respects_tag_state() {
+        let state = state_with(&[("@work", TagState::Included)]);
 
         let mut done_work = Task::new("Done work task");
         done_work.mark_done(today());

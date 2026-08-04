@@ -282,47 +282,28 @@ fn reject_destination_conflicts(
     Ok(())
 }
 
-/// The machine-local half: contexts and resource availability in
-/// `state.toml`. Returns the names of the fields that changed.
+/// The machine-local half: the per-tag state in `state.toml`. Returns the
+/// names of the fields that changed.
+///
+/// Unification made this uniform — one map, keyed by the full tag with its
+/// sigil, for contexts, resources and freeform labels alike. There is no
+/// longer a bare-name special case to get wrong.
 fn rename_in_state(
     store: &mut dyn Store,
     old: &str,
     new: &str,
 ) -> anyhow::Result<Vec<&'static str>> {
     let mut state = store.get_state()?;
-    let mut changed: Vec<&'static str> = Vec::new();
-
-    if tag::is_context(old) {
-        for (field, list) in [
-            ("active_contexts", &mut state.active_contexts),
-            ("excluded_contexts", &mut state.excluded_contexts),
-        ] {
-            if rewrite_tags(list, old, new) {
-                changed.push(field);
-            }
-        }
+    if !state.tags.keys().any(|t| tag_matches(old, t)) {
+        return Ok(Vec::new());
     }
-
-    if tag::is_resource(old) {
-        // Resource availability is keyed by the bare name, without the `#`.
-        let (old_bare, new_bare) = (tag::bare_name(old), tag::bare_name(new));
-        if state.resources.keys().any(|k| tag_matches(old_bare, k)) {
-            state.resources = state
-                .resources
-                .drain()
-                .map(|(k, v)| match map_tag(&k, old_bare, new_bare) {
-                    Some(mapped) => (mapped, v),
-                    None => (k, v),
-                })
-                .collect();
-            changed.push("resources");
-        }
-    }
-
-    if !changed.is_empty() {
-        store.save_state(&state)?;
-    }
-    Ok(changed)
+    state.tags = state
+        .tags
+        .iter()
+        .map(|(t, v)| (map_tag(t, old, new).unwrap_or_else(|| t.clone()), *v))
+        .collect();
+    store.save_state(&state)?;
+    Ok(vec!["tags"])
 }
 
 #[cfg(test)]

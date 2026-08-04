@@ -141,12 +141,14 @@ async fn initialize_handshake() {
 }
 
 #[tokio::test]
-async fn tools_list_returns_15_tools() {
+async fn tools_list_returns_14_tools() {
+    // 14 since tag-state unification folded set_context and set_resource into
+    // one set_tag_state.
     let dir = tempfile::tempdir().unwrap();
     let addr = start_test_server("tok", None, dir.path()).await;
     let resp = mcp_call(&Client::new(), addr, "tok", "tools/list", json!({})).await;
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 15);
+    assert_eq!(tools.len(), 14);
 }
 
 #[tokio::test]
@@ -377,32 +379,45 @@ async fn delete_task() {
 // ── State tools ───────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn context_roundtrip() {
+async fn tag_state_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     let addr = start_test_server("tok", None, dir.path()).await;
     let c = Client::new();
 
+    // One tool for every kind of tag, so set a context and a resource at once.
     tool_call(
         &c,
         addr,
         "tok",
-        "set_context",
-        json!({ "contexts": ["@work"], "autosync": false }),
+        "set_tag_state",
+        json!({ "tags": ["@work"], "state": "included", "autosync": false }),
+    )
+    .await;
+    tool_call(
+        &c,
+        addr,
+        "tok",
+        "set_tag_state",
+        json!({ "tags": ["#printer"], "state": "excluded", "autosync": false }),
     )
     .await;
     let state = result_value(&tool_call(&c, addr, "tok", "get_state", json!({})).await);
-    assert_eq!(state["active_contexts"][0], "@work");
+    assert_eq!(state["tags"]["@work"], "included");
+    assert_eq!(state["tags"]["#printer"], "excluded");
 
     tool_call(
         &c,
         addr,
         "tok",
-        "set_context",
-        json!({ "contexts": [], "autosync": false }),
+        "set_tag_state",
+        json!({ "tags": ["@work", "#printer"], "state": "clear", "autosync": false }),
     )
     .await;
     let state2 = result_value(&tool_call(&c, addr, "tok", "get_state", json!({})).await);
-    assert_eq!(state2["active_contexts"].as_array().unwrap().len(), 0);
+    assert!(
+        state2.get("tags").is_none(),
+        "an empty state map is omitted: {state2}"
+    );
 }
 
 #[tokio::test]

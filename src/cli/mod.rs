@@ -292,12 +292,6 @@ pub enum Command {
     #[command(name = "move")]
     Move(commands::move_cmd::Args),
 
-    /// Manage active contexts.
-    Context(commands::context::Args),
-
-    /// Manage resource availability.
-    Resource(commands::resource::Args),
-
     /// Manage the active user filter.
     User(commands::user::Args),
 

@@ -479,7 +479,6 @@ impl Store for TomlStore {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use crate::core::domain::task::{Priority, Recurrence, Status};
 
@@ -652,19 +651,18 @@ mod tests {
     fn state_round_trip() {
         let (_dir, mut store) = temp_store();
 
-        let default = store.get_state().unwrap();
-        assert!(default.active_contexts.is_empty());
+        use crate::core::domain::state::TagState;
 
-        let state = GlobalState {
-            active_contexts: vec!["@work".into(), "@home".into()],
-            resources: HashMap::from([("printer".into(), false)]),
-            ..Default::default()
-        };
+        let default = store.get_state().unwrap();
+        assert!(default.tags.is_empty());
+
+        let mut state = GlobalState::default();
+        state.set_state("@work", Some(TagState::Included));
+        state.set_state("#printer", Some(TagState::Excluded));
         store.save_state(&state).unwrap();
 
         let loaded = store.get_state().unwrap();
-        assert_eq!(loaded.active_contexts, state.active_contexts);
-        assert!(!loaded.resources["printer"]);
+        assert_eq!(loaded.tags, state.tags);
     }
 
     // -----------------------------------------------------------------------
@@ -683,14 +681,14 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         fs::write(
             dir.path().join("state.toml"),
-            "active_contexts = [\"@work\"]\n",
+            "active_users = [\"alice\"]\n",
         )
         .unwrap();
         let store =
             TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
         // Existing state fields must be untouched.
         let state = store.get_state().unwrap();
-        assert_eq!(state.active_contexts, vec!["@work"]);
+        assert_eq!(state.active_users, vec!["alice"]);
         assert!(store.list_tag_descriptions().unwrap().is_empty());
     }
 
@@ -791,10 +789,10 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         fs::write(
             dir.path().join("state.toml"),
-            "active_contexts = [\"@work\"]\n\
+            "active_users = [\"alice\"]\n\
              \n\
-             [resources]\n\
-             printer = false\n\
+             [tags]\n\
+             \"@work\" = \"included\"\n\
              \n\
              [tag_descriptions]\n\
              \"@work\" = \"Work context\"\n",
@@ -805,8 +803,11 @@ mod tests {
             TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
 
         let state = store.get_state().unwrap();
-        assert_eq!(state.active_contexts, vec!["@work"]);
-        assert_eq!(state.resources.get("printer"), Some(&false));
+        assert_eq!(state.active_users, vec!["alice"]);
+        assert_eq!(
+            state.state_of("@work"),
+            Some(crate::core::domain::state::TagState::Included)
+        );
     }
 
     #[test]

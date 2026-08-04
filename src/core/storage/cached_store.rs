@@ -1051,17 +1051,17 @@ mod tests {
     #[test]
     fn state_round_trip() {
         let (_dir, mut store, _vcs) = setup();
-        let default = store.get_state().unwrap();
-        assert!(default.active_contexts.is_empty());
+        use crate::core::domain::state::TagState;
 
-        let state = GlobalState {
-            active_contexts: vec!["@work".into()],
-            ..Default::default()
-        };
+        let default = store.get_state().unwrap();
+        assert!(default.tags.is_empty());
+
+        let mut state = GlobalState::default();
+        state.set_state("@work", Some(TagState::Included));
         store.save_state(&state).unwrap();
 
         let loaded = store.get_state().unwrap();
-        assert_eq!(loaded.active_contexts, vec!["@work"]);
+        assert_eq!(loaded.state_of("@work"), Some(TagState::Included));
     }
 
     #[test]

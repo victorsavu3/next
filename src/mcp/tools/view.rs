@@ -56,7 +56,7 @@ pub fn get_forecast(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<
                     .collect()
             })
             .unwrap_or_default();
-        filter_set.context_override = Some(ctx_tags);
+        filter_set.include_override = Some(ctx_tags);
     }
 
     let state = ctx.store.get_state()?;

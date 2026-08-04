@@ -56,7 +56,7 @@ pub fn decode_tag_path(encoded: &str) -> String {
 /// The TOML files in `tasks/` remain the source of truth; the SQLite cache at
 /// `.next.db` is rebuilt automatically when the git HEAD changes.
 ///
-/// State (`active_contexts`, `resources`, `active_users`) is stored outside
+/// State (the per-tag `tags` map and `active_users`) is stored outside
 /// the repository at `state_path_for_repo(root)` so it is never synced via git.
 pub fn open(root: PathBuf) -> Result<(CachedStore, GitBackend)> {
     let state_path = state_path_for_repo(&root);

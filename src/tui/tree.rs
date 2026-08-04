@@ -158,25 +158,13 @@ pub fn build_items(
     // Stage 1: apply the user's FilterSet.
     //
     // When the tree-local `include_all` toggle is on we want done/cancelled
-    // tasks to pass through the implicit gate (status/blocking/resource
-    // checks), so we force `disable_implicit = true` in that case.  We
-    // preserve the active/excluded contexts from state via the override fields
-    // so that context filtering still applies even with the implicit gate off.
+    // tasks to pass through the implicit gate (status/blocking checks), so we
+    // force `disable_implicit = true` in that case. Tag state needs no special
+    // handling: it applies independently of that gate, so the tree keeps
+    // filtering by the included and excluded tags either way.
     let effective_filter = if include_all && !filter_set.disable_implicit {
         FilterSet {
             disable_implicit: true,
-            context_override: Some(
-                filter_set
-                    .context_override
-                    .clone()
-                    .unwrap_or_else(|| state.active_contexts.clone()),
-            ),
-            excluded_context_override: Some(
-                filter_set
-                    .excluded_context_override
-                    .clone()
-                    .unwrap_or_else(|| state.excluded_contexts.clone()),
-            ),
             ..filter_set.clone()
         }
     } else {
@@ -410,7 +398,7 @@ mod tests {
     use chrono::NaiveDate;
 
     use super::*;
-    use crate::core::domain::state::GlobalState;
+    use crate::core::domain::state::{GlobalState, TagState};
 
     fn today() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 6, 6).unwrap()
@@ -591,10 +579,8 @@ mod tests {
         let mut home_task = Task::new("home task".to_owned());
         home_task.tags = vec!["@home".to_owned()];
 
-        let state = GlobalState {
-            active_contexts: vec!["@work".to_owned()],
-            ..Default::default()
-        };
+        let mut state = GlobalState::default();
+        state.set_state("@work", Some(TagState::Included));
 
         let build = build_items(
             &[work_task.clone(), home_task.clone()],
@@ -617,10 +603,8 @@ mod tests {
 
         let neutral_task = Task::new("neutral task".to_owned());
 
-        let state = GlobalState {
-            excluded_contexts: vec!["@home".to_owned()],
-            ..Default::default()
-        };
+        let mut state = GlobalState::default();
+        state.set_state("@home", Some(TagState::Excluded));
 
         let build = build_items(
             &[home_task.clone(), neutral_task.clone()],
@@ -646,10 +630,8 @@ mod tests {
         done_home.tags = vec!["@home".to_owned()];
         done_home.mark_done(today());
 
-        let state = GlobalState {
-            active_contexts: vec!["@work".to_owned()],
-            ..Default::default()
-        };
+        let mut state = GlobalState::default();
+        state.set_state("@work", Some(TagState::Included));
 
         let build = build_items(
             &[done_work.clone(), done_home.clone()],

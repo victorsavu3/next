@@ -54,73 +54,46 @@ pub fn get_state(_params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
     Ok(serde_json::to_value(&state)?)
 }
 
-// ── set_context ───────────────────────────────────────────────────────────────
+// ── set_tag_state ────────────────────────────────────────────────────────────
 
-pub fn set_context(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
-    let contexts = strings_param(params, "contexts");
-    for c in &contexts {
-        if !c.starts_with('@') {
-            anyhow::bail!("context tags must start with '@', got: {c}");
+/// Replaces `set_context` and `set_resource`: every tag takes the same three
+/// states, so one tool covers what used to be two with different shapes.
+pub fn set_tag_state(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
+    use crate::core::domain::state::TagState;
+
+    let state_name = params
+        .get("state")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing required parameter: state"))?;
+    let wanted = match state_name {
+        "included" => Some(TagState::Included),
+        "excluded" => Some(TagState::Excluded),
+        "default" => Some(TagState::Default),
+        // Distinct from "default": this removes the entry, so the tag inherits
+        // from its parent again instead of being pinned to no state.
+        "clear" => None,
+        other => {
+            anyhow::bail!("unknown state {other:?} — expected included, excluded, default or clear")
         }
-    }
-    // Optional: also replace excluded_contexts if provided.
-    let excluded = if params.get("excluded_contexts").is_some() {
-        let excluded = strings_param(params, "excluded_contexts");
-        for c in &excluded {
-            if !c.starts_with('@') {
-                anyhow::bail!("excluded context tags must start with '@', got: {c}");
-            }
-        }
-        Some(excluded)
-    } else {
-        None
     };
 
-    let state = ctx.state_transaction(|store| {
-        let mut state = store.get_state()?;
-        state.active_contexts = contexts;
-        if let Some(excluded) = excluded {
-            state.excluded_contexts = excluded;
-        }
-        store.save_state(&state)?;
-        Ok(state)
-    })?;
-    tracing::info!(
-        cmd = "mcp/context",
-        "active={:?} excluded={:?}",
-        state.active_contexts,
-        state.excluded_contexts
-    );
-    Ok(serde_json::to_value(&state)?)
-}
-
-// ── set_resource ──────────────────────────────────────────────────────────────
-
-pub fn set_resource(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
-    let resource = params
-        .get("resource")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("missing required parameter: resource"))?;
-    let available = params
-        .get("available")
-        .and_then(|v| v.as_bool())
-        .ok_or_else(|| anyhow::anyhow!("missing required parameter: available"))?;
-
-    if !resource.starts_with('#') {
-        anyhow::bail!("resource names must start with '#', got: {resource}");
+    let tags = strings_param(params, "tags");
+    if tags.is_empty() {
+        anyhow::bail!("missing required parameter: tags");
+    }
+    for t in &tags {
+        crate::core::domain::tag::validate_tag(t).map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
-    let bare = crate::core::domain::tag::bare_name(resource).to_owned();
     let state = ctx.state_transaction(|store| {
-        let mut state = store.get_state()?;
-        // Store the bare name (without `#`), matching the CLI and the key
-        // convention that `GlobalState::is_resource_available` looks up. Storing
-        // the prefixed form here meant MCP-set resources never actually filtered.
-        state.resources.insert(bare, available);
-        store.save_state(&state)?;
-        Ok(state)
+        let mut global = store.get_state()?;
+        for t in &tags {
+            global.set_state(t, wanted);
+        }
+        store.save_state(&global)?;
+        Ok(global)
     })?;
-    tracing::info!(cmd = "mcp/resource", "set {resource}={available}");
+    tracing::info!(cmd = "mcp/tag_state", "{state_name} {}", tags.join(" "));
     Ok(serde_json::to_value(&state)?)
 }
 
@@ -173,61 +146,74 @@ mod tests {
     }
 
     #[test]
-    fn set_and_get_context() {
+    fn set_and_get_tag_state() {
         let (_dir, mut ctx) = make_ctx();
-        set_context(&json!({ "contexts": ["@work"] }), &mut ctx).unwrap();
+        set_tag_state(&json!({ "tags": ["@work"], "state": "included" }), &mut ctx).unwrap();
         let state = get_state(&json!({}), &mut ctx).unwrap();
-        assert_eq!(state["active_contexts"][0], "@work");
+        assert_eq!(state["tags"]["@work"], "included");
     }
 
     #[test]
-    fn set_context_requires_at_prefix() {
+    fn every_tag_kind_takes_every_state() {
+        // The point of unification: a resource is not exclude-only and a
+        // freeform tag is not a second-class citizen.
         let (_dir, mut ctx) = make_ctx();
-        let err = set_context(&json!({ "contexts": ["work"] }), &mut ctx).unwrap_err();
-        assert!(err.to_string().contains("'@'"));
+        for (tag, want) in [
+            ("#printer", "included"),
+            ("errand", "excluded"),
+            ("@home/kitchen", "default"),
+        ] {
+            set_tag_state(&json!({ "tags": [tag], "state": want }), &mut ctx).unwrap();
+            let state = get_state(&json!({}), &mut ctx).unwrap();
+            assert_eq!(state["tags"][tag], want, "{tag}");
+        }
     }
 
     #[test]
-    fn set_resource() {
+    fn clear_removes_the_entry_rather_than_pinning_it() {
         let (_dir, mut ctx) = make_ctx();
-        super::set_resource(
-            &json!({ "resource": "#printer", "available": false }),
+        set_tag_state(
+            &json!({ "tags": ["#printer"], "state": "excluded" }),
             &mut ctx,
         )
         .unwrap();
-        let state = get_state(&json!({}), &mut ctx).unwrap();
-        // Key is stored bare (without `#`) so it matches is_resource_available's lookup.
-        assert_eq!(state["resources"]["printer"], false);
-        assert!(
-            state["resources"].get("#printer").is_none(),
-            "key must not carry a '#' prefix"
-        );
+        set_tag_state(&json!({ "tags": ["#printer"], "state": "clear" }), &mut ctx).unwrap();
+        let state = ctx.store.get_state().unwrap();
+        assert!(state.tags.is_empty(), "clear drops the key entirely");
     }
 
-    /// Regression: a resource marked unavailable via MCP must actually be
-    /// reported unavailable by `GlobalState::is_resource_available`, which keys
-    /// on the bare name.
     #[test]
-    fn set_resource_actually_filters() {
+    fn excluded_tag_actually_filters() {
         let (_dir, mut ctx) = make_ctx();
-        super::set_resource(
-            &json!({ "resource": "#printer", "available": false }),
+        set_tag_state(
+            &json!({ "tags": ["#printer"], "state": "excluded" }),
             &mut ctx,
         )
         .unwrap();
         let state = ctx.store.get_state().unwrap();
-        assert!(!state.is_resource_available("#printer"));
+        assert!(!state.admits(&["#printer".to_owned()]));
+        assert!(
+            !state.admits(&["#printer/color".to_owned()]),
+            "descendants too"
+        );
     }
 
     #[test]
-    fn set_resource_requires_hash_prefix() {
+    fn unknown_state_and_missing_tags_are_rejected() {
         let (_dir, mut ctx) = make_ctx();
-        let err = super::set_resource(
-            &json!({ "resource": "printer", "available": true }),
-            &mut ctx,
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("'#'"));
+        let err = set_tag_state(&json!({ "tags": ["@work"], "state": "sideways" }), &mut ctx)
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown state"), "{err}");
+
+        let err = set_tag_state(&json!({ "state": "included" }), &mut ctx).unwrap_err();
+        assert!(err.to_string().contains("tags"), "{err}");
+
+        let err =
+            set_tag_state(&json!({ "tags": ["1bad"], "state": "included" }), &mut ctx).unwrap_err();
+        assert!(
+            err.to_string().contains("must start with a letter"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -237,9 +223,11 @@ mod tests {
         let state = get_state(&json!({}), &mut ctx).unwrap();
         assert_eq!(state["active_users"][0], "alice");
 
+        // An empty filter is omitted rather than serialised as `[]`: the state
+        // file stays free of entries that mean "nothing set".
         set_user_filter(&json!({ "users": [] }), &mut ctx).unwrap();
         let state = get_state(&json!({}), &mut ctx).unwrap();
-        assert_eq!(state["active_users"].as_array().unwrap().len(), 0);
+        assert!(state.get("active_users").is_none());
     }
 
     #[test]

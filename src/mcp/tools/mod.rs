@@ -26,7 +26,7 @@ pub fn all_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "filter_tokens": { "type": "array", "items": { "type": "string" }, "description": "Filter tokens e.g. [\"+@work\", \"-done\", \"parent:infra\"]" },
-                    "context": { "type": "array", "items": { "type": "string" }, "description": "Override active context for this call (e.g. [\"@work\"]). Pass [] to disable context filtering. Overrides state." },
+                    "context": { "type": "array", "items": { "type": "string" }, "description": "Override the included tags for this call (e.g. [\"@work\"]). Pass [] to include nothing, which shows every tag that is not excluded. Exclusions still come from the stored state." },
                     "limit": { "type": "integer", "description": "Legacy alias for page_size" },
                     "page_size": { "type": "integer", "description": "Tasks per page (default 50)" },
                     "page": { "type": "integer", "description": "1-indexed page of results (default 1)" },
@@ -149,31 +149,18 @@ pub fn all_tools() -> Vec<Tool> {
         },
         Tool {
             name: "get_state",
-            description: "Get the current machine-local state: active contexts, active users, and resource availability.",
+            description: "Get the current machine-local state: the per-tag state map (included/excluded/default) and the active users.",
             input_schema: json!({ "type": "object", "properties": {} }),
         },
         Tool {
-            name: "set_context",
-            description: "Set the active and/or excluded context filters. Pass an empty array to clear.",
+            name: "set_tag_state",
+            description: "Set the machine-local state of one or more tags. Every tag kind works the same way: `included` limits the list to tasks carrying it, `excluded` hides them, `default` pins the tag to no state so it ignores a parent tag's state, and `clear` removes the entry so it inherits again. Replaces the old set_context and set_resource tools.",
             input_schema: json!({
                 "type": "object",
-                "required": ["contexts"],
+                "required": ["tags", "state"],
                 "properties": {
-                    "contexts": { "type": "array", "items": { "type": "string" }, "description": "@-prefixed active context tags. Pass [] to clear." },
-                    "excluded_contexts": { "type": "array", "items": { "type": "string" }, "description": "@-prefixed context tags to always hide. Omit to leave unchanged." },
-                    "autosync": { "type": "boolean", "default": true }
-                }
-            }),
-        },
-        Tool {
-            name: "set_resource",
-            description: "Toggle availability of a resource tag.",
-            input_schema: json!({
-                "type": "object",
-                "required": ["resource", "available"],
-                "properties": {
-                    "resource": { "type": "string", "description": "#-prefixed resource name" },
-                    "available": { "type": "boolean" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to change, e.g. [\"@work\", \"#printer\", \"errand\"]" },
+                    "state": { "type": "string", "enum": ["included", "excluded", "default", "clear"] },
                     "autosync": { "type": "boolean", "default": true }
                 }
             }),
@@ -245,21 +232,30 @@ pub fn all_tools() -> Vec<Tool> {
 const TAGGING_GUIDE: &str = "\
 # next task manager
 
-Every task is labelled with tags. A tag's leading character classifies it:
-- `@context` — a working environment (e.g. `@work`, `@home`). Tasks carrying an \
-`@` tag are hidden unless that context is active or no context is active; tasks \
-with no `@` tag are always shown.
-- `#resource` — a physical or situational resource (e.g. `#printer`). Tasks are \
-hidden while the resource is marked unavailable.
-- bare `freeform` — a plain label (e.g. `python`, `errand`), no filtering effect.
+Every task is labelled with tags. A tag's leading character is a naming \
+convention that says what the tag is for — it does not change how filtering \
+works:
+- `@context` — a working environment (e.g. `@work`, `@home`).
+- `#resource` — a physical or situational resource (e.g. `#printer`).
+- bare `freeform` — a plain label (e.g. `python`, `errand`).
 
-All three kinds nest with `/` (e.g. `@work/frontend`, `#office/printer`); a \
-filter on a parent segment matches every descendant. A tag may carry metadata: a \
-default `priority` (high/medium/low) added to the urgency of tasks bearing it, \
-and `no_time_urgency` to stop age and deadlines from raising that urgency.
+Every tag, whatever its kind, is in one of three states, set with \
+`set_tag_state`:
+- **included** — while anything is included, only tasks carrying an included \
+tag are listed.
+- **excluded** — tasks carrying it are hidden. Exclusion beats inclusion.
+- **default** — no state. Setting this explicitly also stops the tag \
+inheriting a parent tag's state; `clear` instead removes the entry so it \
+inherits again.
+
+All kinds nest with `/` (e.g. `@work/frontend`, `#office/printer`): a state on \
+a parent applies to every descendant, and a filter on a parent segment matches \
+them too. A tag may carry metadata: a default `priority` (high/medium/low) \
+added to the urgency of tasks bearing it, and `no_time_urgency` to stop age and \
+deadlines from raising that urgency.
 
 When creating tasks, reuse an existing tag from the lists below rather than \
-inventing a near-duplicate, and apply the active context unless the user says \
+inventing a near-duplicate, and apply the included context unless the user says \
 otherwise.";
 
 /// Builds the `instructions` string returned in the MCP `initialize` result.
@@ -273,36 +269,24 @@ pub fn server_instructions(ctx: &TaskRepository) -> String {
 
     if let Ok(state) = ctx.store.get_state() {
         out.push_str("\n\n## Current state\n");
-        if state.active_contexts.is_empty() {
-            out.push_str("- Active context: none (tasks from all contexts are shown)\n");
+        use crate::core::domain::state::TagState;
+        let included = state.tags_with(TagState::Included);
+        if included.is_empty() {
+            out.push_str("- Included tags: none (every tag that is not excluded is shown)\n");
         } else {
+            let _ = writeln!(out, "- Included tags: {}", included.join(", "));
+        }
+        let excluded = state.tags_with(TagState::Excluded);
+        if !excluded.is_empty() {
+            let _ = writeln!(out, "- Excluded tags: {}", excluded.join(", "));
+        }
+        let defaulted = state.tags_with(TagState::Default);
+        if !defaulted.is_empty() {
             let _ = writeln!(
                 out,
-                "- Active context: {}",
-                state.active_contexts.join(", ")
+                "- Tags pinned to no state (ignoring their parent): {}",
+                defaulted.join(", ")
             );
-        }
-        if !state.excluded_contexts.is_empty() {
-            let _ = writeln!(
-                out,
-                "- Excluded contexts: {}",
-                state.excluded_contexts.join(", ")
-            );
-        }
-        let mut unavailable: Vec<&String> = state
-            .resources
-            .iter()
-            .filter(|(_, available)| !**available)
-            .map(|(name, _)| name)
-            .collect();
-        unavailable.sort();
-        if !unavailable.is_empty() {
-            // Normalise to a single `#` prefix regardless of how the key was stored.
-            let names: Vec<String> = unavailable
-                .iter()
-                .map(|n| format!("#{}", crate::core::domain::tag::bare_name(n)))
-                .collect();
-            let _ = writeln!(out, "- Unavailable resources: {}", names.join(", "));
         }
         if !state.active_users.is_empty() {
             let _ = writeln!(
@@ -467,13 +451,8 @@ fn call_tool(
         }
 
         // ── State tools ───────────────────────────────────────────────────────
-        "set_context" => {
-            let result = state::set_context(params, ctx)?;
-            run_autosync(autosync, ctx, scheduler);
-            Ok(result)
-        }
-        "set_resource" => {
-            let result = state::set_resource(params, ctx)?;
+        "set_tag_state" => {
+            let result = state::set_tag_state(params, ctx)?;
             run_autosync(autosync, ctx, scheduler);
             Ok(result)
         }
@@ -631,8 +610,8 @@ mod tests {
             "unexpected catalog: {text}"
         );
         assert!(
-            text.contains("Active context: none"),
-            "missing active-context line: {text}"
+            text.contains("Included tags: none"),
+            "missing tag-state line: {text}"
         );
     }
 
@@ -681,25 +660,25 @@ mod tests {
         );
     }
 
-    /// Active context and unavailable resources are reflected in the snapshot.
+    /// The tag state is reflected in the snapshot, whatever the tag's sigil.
     #[test]
-    fn instructions_reflect_active_state() {
+    fn instructions_reflect_tag_state() {
         let (_dir, mut ctx) = make_ctx();
-        state::set_context(&json!({ "contexts": ["@work"] }), &mut ctx).unwrap();
-        state::set_resource(
-            &json!({ "resource": "#printer", "available": false }),
+        state::set_tag_state(&json!({ "tags": ["@work"], "state": "included" }), &mut ctx).unwrap();
+        state::set_tag_state(
+            &json!({ "tags": ["#printer", "errand"], "state": "excluded" }),
             &mut ctx,
         )
         .unwrap();
 
         let text = server_instructions(&ctx);
         assert!(
-            text.contains("Active context: @work"),
-            "missing active context: {text}"
+            text.contains("Included tags: @work"),
+            "missing included tag: {text}"
         );
         assert!(
-            text.contains("Unavailable resources: #printer"),
-            "missing unavailable resource: {text}"
+            text.contains("Excluded tags: #printer, errand"),
+            "a resource and a freeform tag are listed the same way: {text}"
         );
     }
 }

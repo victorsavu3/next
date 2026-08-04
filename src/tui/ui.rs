@@ -1092,19 +1092,15 @@ mod state_popup {
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
-        // Three equal-ish stacked sections.
+        // Two stacked sections: tags take the space the old contexts and
+        // resources lists shared, since they are now one list.
         let rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(40),
-                Constraint::Percentage(30),
-                Constraint::Percentage(30),
-            ])
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
             .split(inner);
 
-        draw_contexts(frame, rows[0], panel);
-        draw_resources(frame, rows[1], panel);
-        draw_users(frame, rows[2], panel);
+        draw_tags(frame, rows[0], panel);
+        draw_users(frame, rows[1], panel);
     }
 
     /// A 80%×80% centered popup.
@@ -1157,66 +1153,39 @@ mod state_popup {
         frame.render_stateful_widget(list, area, &mut state);
     }
 
-    fn draw_contexts(frame: &mut Frame, area: Rect, panel: &StatePanel) {
-        let focused = panel.section == Section::Contexts;
-        let items: Vec<ListItem> = panel
-            .contexts
-            .iter()
-            .map(|r| {
-                let mut spans = vec![Span::raw(r.tag.clone())];
-                if r.active {
-                    spans.push(Span::styled(
-                        "  [active]",
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                }
-                if r.excluded {
-                    spans.push(Span::styled(
-                        "  [excluded]",
-                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                    ));
-                }
-                ListItem::new(Line::from(spans))
-            })
-            .collect();
-        render_section(
-            frame,
-            area,
-            section_block("Contexts (a active · x excluded · C clear)", focused),
-            focused,
-            panel.ctx_idx,
-            items,
-        );
-    }
+    fn draw_tags(frame: &mut Frame, area: Rect, panel: &StatePanel) {
+        use crate::core::domain::state::TagState;
 
-    fn draw_resources(frame: &mut Frame, area: Rect, panel: &StatePanel) {
-        let focused = panel.section == Section::Resources;
+        let focused = panel.section == Section::Tags;
         let items: Vec<ListItem> = panel
-            .resources
+            .tags
             .iter()
             .map(|r| {
-                let (label, style) = if r.available {
-                    ("available", Style::default().fg(Color::Green))
-                } else {
-                    (
-                        "unavailable",
-                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                    )
+                // Inherited state is dimmed: it is real, but it belongs to a
+                // parent tag, and the row cycles its own entry, not that one.
+                let style = match (r.effective, r.is_inherited()) {
+                    (Some(TagState::Included), false) => Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                    (Some(TagState::Excluded), false) => {
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                    }
+                    (Some(TagState::Included), true) => Style::default().fg(Color::Green),
+                    (Some(TagState::Excluded), true) => Style::default().fg(Color::Red),
+                    _ => Style::default().fg(Color::DarkGray),
                 };
                 ListItem::new(Line::from(vec![
                     Span::raw(format!("{:<22} ", r.tag)),
-                    Span::styled(label, style),
+                    Span::styled(r.state_label(), style),
                 ]))
             })
             .collect();
         render_section(
             frame,
             area,
-            section_block("Resources (Space toggle availability)", focused),
+            section_block("Tags (Space cycles · x reverses · C clear)", focused),
             focused,
-            panel.res_idx,
+            panel.tag_idx,
             items,
         );
     }

@@ -1,8 +1,10 @@
 mod data;
 mod meta;
+mod state;
 
 use std::collections::BTreeSet;
 
+use crate::core::domain::state::TagState;
 use crate::core::domain::tag::{self, TagKind, TagMeta};
 use crate::AppContext;
 
@@ -11,6 +13,7 @@ pub use meta::{
     ClearDescriptionArgs, ClearPriorityArgs, ClearUrlArgs, DescribeArgs, NoTimeUrgencyArgs,
     RenameArgs, SetPriorityArgs, SetUrlArgs, ShowArgs,
 };
+pub use state::{ClearStateArgs, TagStateArgs};
 
 /// Top-level `next tag` subcommand.
 #[derive(clap::Args, Debug)]
@@ -50,6 +53,15 @@ pub enum TagSubcommand {
     ClearNoTimeUrgency(NoTimeUrgencyArgs),
     /// Manage arbitrary key/value data for a tag.
     Data(DataArgs),
+    /// Work on these tags: only their tasks are listed.
+    Include(TagStateArgs),
+    /// Hide tasks carrying these tags.
+    Exclude(TagStateArgs),
+    /// Give these tags no state, ignoring any inherited from a parent tag.
+    Default(TagStateArgs),
+    /// Drop the stored state for these tags (all of them when none is given).
+    #[command(name = "clear-state")]
+    ClearState(ClearStateArgs),
 }
 
 pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
@@ -66,10 +78,16 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         Some(TagSubcommand::SetNoTimeUrgency(a)) => meta::set_no_time_urgency(ctx, a),
         Some(TagSubcommand::ClearNoTimeUrgency(a)) => meta::clear_no_time_urgency(ctx, a),
         Some(TagSubcommand::Data(a)) => data::run(ctx, a),
+        Some(TagSubcommand::Include(a)) => state::set(ctx, a, TagState::Included),
+        Some(TagSubcommand::Exclude(a)) => state::set(ctx, a, TagState::Excluded),
+        Some(TagSubcommand::Default(a)) => state::set(ctx, a, TagState::Default),
+        Some(TagSubcommand::ClearState(a)) => state::clear(ctx, a),
     }
 }
 
 fn list(ctx: &mut AppContext) -> anyhow::Result<()> {
+    state::show(ctx)?;
+    println!();
     let metas = ctx.repo.store.list_tag_metas()?;
     let tasks = ctx.repo.store.list_tasks()?;
 

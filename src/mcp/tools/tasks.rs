@@ -112,7 +112,7 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
 
     // `context` param overrides the active context from state for this call.
     if params.get("context").is_some() {
-        filter_set.context_override = Some(strings_param(params, "context"));
+        filter_set.include_override = Some(strings_param(params, "context"));
     }
 
     let state = ctx.store.get_state()?;
