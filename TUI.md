@@ -116,7 +116,7 @@ These operate on the selected list row or the highlighted tree node.
 | `k` / `Up` | Select previous task |
 | `g` / `Home` | Select first task |
 | `G` / `End` | Select last task |
-| `.` | Toggle showing only closed (done/cancelled) tasks — mirrors `next list --closed`; respects the active context and user filters |
+| `.` | Toggle showing only closed (done/cancelled) tasks — mirrors `next list --closed`; respects the tag state and user filter |
 | `A` (shift) | Toggle the `--all` filter |
 | `F` (shift) | Toggle the `--future` filter |
 | `U` (shift) | Toggle the `--all-users` filter |
@@ -195,8 +195,13 @@ plus a "top-level / no parent" option.
 
 ### State panel (`S`)
 
-Three sections — Contexts, Resources, Users — applied through the same `state_transaction`
-lock the CLI's `context`/`resource`/`user` commands use. The list reloads after each toggle.
+Two sections — Tags and Users — applied through the same `state_transaction` lock the
+CLI's `next tag include|exclude|…` and `next user` commands use. The list reloads after
+each toggle.
+
+Tags are one list regardless of sigil, since every kind takes the same states. A row
+shows the state that applies to it; one inherited from a parent tag is marked as such and
+dimmed, because the row's key cycles its *own* entry, not the parent's.
 
 | Key | Action |
 |-----|--------|
@@ -204,9 +209,9 @@ lock the CLI's `context`/`resource`/`user` commands use. The list reloads after 
 | `Tab` / `Shift-Tab` (`BackTab`) | Focus the next / previous section |
 | `j` / `Down` | Highlight the next row in the section |
 | `k` / `Up` | Highlight the previous row in the section |
-| `Space` / `Enter` / `a` | Primary toggle (context active / resource availability / user membership) |
-| `x` | Toggle the highlighted context's *excluded* flag (Contexts section only) |
-| `C` (shift) | Clear the focused section's set (active+excluded contexts / all users; no-op for resources) |
+| `Space` / `Enter` / `a` | Cycle the highlighted tag: none → included → excluded → default → none (Tags section); toggle membership (Users section) |
+| `x` | Run the tag cycle backwards, so a mis-press is one key away from undone (Tags section only) |
+| `C` (shift) | Clear the focused section (every tag state / all users) |
 
 ---
 
@@ -214,7 +219,7 @@ lock the CLI's `context`/`resource`/`user` commands use. The list reloads after 
 
 `next-tui` covers the same day-to-day operations as the CLI: browse (list/tree/forecast),
 filter, edit, complete (recurrence-aware), cancel, start/stop, move, delete, open URL,
-manage machine-local state (contexts/resources/users), and sync. Every mutation goes
+manage machine-local state (tag state and the user filter), and sync. Every mutation goes
 through the shared `core` services and `TaskRepository` transactions — the same code paths,
 validation, git commits, and plugin export hooks as `next` and `next-mcp` — so running the
 TUI alongside the CLI or the MCP server is safe. Sync runs on a background worker thread so

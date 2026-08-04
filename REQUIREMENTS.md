@@ -76,18 +76,21 @@ before writing the TOML file.
 
 ### 1.3 Global state
 
-Machine-local state (active contexts, active users, resource availability) MUST be stored
+Machine-local state (the per-tag state and the active users) MUST be stored
 at `$XDG_STATE_HOME/task-manager/<fnv1a-hash-of-repo-path>/state.toml`.  This path is
 never inside the repository and MUST NOT be committed to git.
 
 ```toml
-active_contexts   = ["@home"]       # active @ tags (empty = no filter)
-excluded_contexts = ["@work"]       # always hide tasks with these contexts
-active_users      = ["alice"]       # active user filter (empty = no filter)
-[resources]
-printer  = true
-vacation = false
+active_users = ["alice"]            # active user filter (empty = no filter)
+
+[tags]                              # one entry per tag with a state; absent = inherit
+"@home"          = "included"
+"#printer"       = "excluded"
+"@home/kitchen"  = "default"        # pinned: ignores any state on @home
 ```
+
+The tag map MUST be keyed by the full tag including its sigil, so every kind of tag lives
+in one namespace and no bare-name conversion is needed.
 
 Tag descriptions are human-readable notes attached to any tag (context, resource, or
 freeform). They are stored as individual TOML files under `tags/` in the repository
@@ -203,46 +206,53 @@ across all tiers; `list` and scored views serve the active tier only, and
 
 ## 3. Tag system
 
-Tags are strings in the `tags` array of a task. Prefix conventions:
+Tags are strings in the `tags` array of a task. The prefix is a **naming convention**
+that says what a tag is for; it MUST NOT change how the tag is filtered:
 
-| Prefix | Kind | Example |
-|--------|------|---------|
-| `@` | Context | `@home`, `@work` |
-| `#` | Resource | `#printer`, `#vacation` |
-| *(none)* | Freeform | `python`, `reading`, `project` |
+| Prefix | Kind | Example | Usually names |
+|--------|------|---------|---------------|
+| `@` | Context | `@home`, `@work` | A working environment |
+| `#` | Resource | `#printer`, `#vacation` | Something that must be available |
+| *(none)* | Freeform | `python`, `reading`, `project` | Anything else |
 
-### 3.1 Context filtering
+The kinds MAY be used to group tags for display (the tag catalogue does), and MAY be
+queried (`has:context`), but MUST NOT be given distinct filtering rules.
 
-When one or more `@` contexts are active:
-- Tasks with **no** `@` tags MUST always be included
-- Tasks with at least one `@` tag MUST be included only if they share at least one `@` tag with the active set
-- Tasks whose `@` tags are all outside the active set MUST be excluded
+### 3.1 Tag filtering
 
-When **no** context is active, all tasks MUST be shown regardless of their `@` tags.
+All filtering by tag is governed by the tag state in §3.1.1. When no tag has a state, all
+tasks MUST be shown regardless of their tags.
 
-A query-time `context:@name` filter MUST override the global active-context set for that
-single invocation.
+A query-time `context:@name` filter MUST replace the *included* set for that single
+invocation, leaving exclusions in force.
 
-### 3.1.1 Excluded contexts
+### 3.1.1 Tag state
 
-`state.toml` MAY contain an `excluded_contexts` list. Tasks whose `@context` tags match
-any excluded context MUST be hidden, even when they would otherwise pass the active-context
-filter. Context-neutral tasks (no `@` tags) are never excluded.
+Every tag MUST take the same three states, whatever its sigil: `included`, `excluded`, or
+`default`. `@` and `#` are naming conventions and MUST NOT change how a tag filters — in
+particular a `#resource` is not restricted to being excluded, and an `@context` gets no
+special treatment.
 
-Exclusion matching is one-directional: excluding `@home` hides tasks tagged `@home` or any
-descendant (e.g. `@home/kitchen`), but excluding `@home/kitchen` does NOT hide tasks tagged
-only with `@home`.
+Two rules, applied to every tag alike:
 
-CLI: `next context exclude <@tag>...` / `next context clear-excluded`
-MCP: `set_context` accepts an optional `excluded_contexts` array.
+1. a task carrying any tag that resolves to `excluded` MUST be hidden;
+2. while any tag is `included`, a task MUST carry at least one tag resolving to
+   `included` to be shown. Included tags are a disjunction.
 
-### 3.2 Resource filtering
+Rule 1 takes precedence over rule 2. A task carrying no tags at all is therefore hidden
+whenever anything is included.
 
-A resource `#<name>` is available when `resources.<name> = true` in `state.toml` (absent
-keys default to **available**).
+**Inheritance.** A tag with no entry inherits the state of its nearest ancestor that has
+one, so excluding `#office` also excludes `#office/printer`. The most specific entry
+wins. An explicit `default` MUST stop that inheritance, which is the only way for a child
+to opt out of its parent's state. Matching is downward only: including `@work` covers
+`@work/frontend`, but including `@work/frontend` does NOT cover `@work`.
 
-Tasks that carry a `#<name>` tag where `<name>` is **unavailable** MUST be excluded from
-the default list and from score computation.
+**Independence from `--all`.** The tag state MUST still apply when the implicit gate is
+disabled: `--all` widens the statuses shown, not the tags.
+
+CLI: `next tag include|exclude|default <tag>...` / `next tag clear-state [<tag>...]`
+MCP: `set_tag_state` with `tags` and `state` (`included`/`excluded`/`default`/`clear`).
 
 ### 3.3 User filtering
 
@@ -290,9 +300,10 @@ repository (not in machine-local config), every consumer — the CLI, the MCP se
 plugins — MUST share the same scoring view. `next init` seeds the file with the defaults;
 absent or partial files fall back to the built-in defaults.
 
-Tasks excluded from the default view (blocked, resource-unavailable, future `start`,
+Tasks excluded from the default view (blocked, hidden by the tag state, future `start`,
 parent awaiting subtasks) MUST NOT receive a score and MUST NOT appear in `next list` /
-`next next` output unless `--all` is passed.
+`next next` output unless `--all` is passed. Note that `--all` does not lift the tag
+state (§3.1.1).
 
 ---
 
@@ -457,9 +468,11 @@ next add <title> [options]
 | `--adjust <float>` | Sets `score_adjustment` |
 | `--assignee <name>` | Sets `assignee` |
 
-When `active_contexts` is non-empty and the new task carries no `@context` tags,
-the active contexts MUST be automatically appended to the task's `tags` array.
-If the user supplies any `@` tag, auto-apply is skipped.
+When any `@context` tag is included and the new task carries no `@context` tags, those
+included contexts MUST be automatically appended to the task's `tags` array. If the user
+supplies any `@` tag, auto-apply is skipped. Only contexts are inherited this way: an
+included `#resource` or freeform tag MUST NOT be attached to a new task, since unlike a
+working environment it is not implied by where the task was captured.
 
 ### 8.2 `next list` and `next next`
 
@@ -511,17 +524,17 @@ recurrence scheduling (completion-based: `completed_at + interval_days`; schedul
 
 `next open` MUST fail with an error when the task has no `url` field set.
 
-### 8.4 Context and resource management
+### 8.4 Tag state management
+
+One set of commands for every kind of tag (see §3.1.1); there are no context-specific or
+resource-specific commands.
 
 ```
-next context                             # show active and excluded contexts (with descriptions)
-next context set <@tag>...               # replace active context set
-next context clear                       # clear all active contexts
-next context exclude <@tag>...           # replace excluded context set (see §3.1.1)
-next context clear-excluded              # clear all excluded contexts
-
-next resource                            # list resources and availability (with descriptions)
-next resource set <#tag> on|off          # toggle a resource
+next tag                                 # show the current state, then the tag catalogue
+next tag include <tag>...                # only these tags' tasks are listed
+next tag exclude <tag>...                # hide tasks carrying these tags
+next tag default <tag>...                # pin to no state, ignoring a parent tag's state
+next tag clear-state [<tag>...]          # drop entries (all of them when none given)
 ```
 
 ### 8.5 Tag metadata
@@ -545,14 +558,13 @@ next tag show <tag>                               # display all metadata for a t
 ```
 
 Contexts (`@`), resources (`#`), and freeform tags are all stored identically under
-`tags/` and committed to git. `next tag` is the unified command for all tag metadata —
-there are no separate describe/clear commands on `next context` or `next resource`.
-Descriptions appear in `next context`, `next resource`, and `next tag` output.
+`tags/` and committed to git. `next tag` is the unified command for tag metadata and tag
+state alike; there are no kind-specific commands.
 
 **Renaming**: `next tag rename` MUST cover every place a tag is recorded — the tag list
 of every active task, the tag list of every archived task (warm `archive/` segments and
-pruned cold segments), the tag's own metadata file, and the machine-local state that
-references it (active/excluded contexts, resource availability keys). It is hierarchical:
+pruned cold segments), the tag's own metadata file, and the machine-local tag state that
+references it. It is hierarchical:
 renaming a tag moves every tag nested under it. The tag's kind (`@`, `#`, freeform) MUST
 NOT change, since the leading character determines how the tag filters. Destination tags
 that already exist are rejected unless `--merge` is given, in which case tasks carrying
@@ -897,11 +909,11 @@ in the config file), defaulting to `next-mcp` / `next-mcp@unknown`.
   length through response-time differences (always process all bytes of the expected token)
 - Request bodies MUST be limited to a small maximum size (≤ 64 KB) to resist memory-exhaustion attacks
 
-### 12.5 MCP tools (15 total)
+### 12.5 MCP tools (14 total)
 
 All existing CLI operations MUST be exposed as MCP tools: `list_tasks`, `get_task`,
 `add_task`, `update_task`, `delete_task`, `sync`, `get_diff`, `force_sync`,
-`get_state`, `set_context`, `set_resource`, `set_user_filter`, `manage_tag`,
+`get_state`, `set_tag_state`, `set_user_filter`, `manage_tag`,
 `manage_task_data`, `get_forecast`. Mutation tools MUST accept an
 `autosync: bool` parameter (default `true`):
 - `autosync = true`: sync runs inline before the response is returned; sync errors are logged but MUST NOT fail the tool call

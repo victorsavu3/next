@@ -52,7 +52,7 @@ one brings it back automatically. Thresholds live in the committed
 `config/archive.toml` (defaults: archive after 180 days; optional cold-tier pruning
 off). See REQUIREMENTS.md §2.3 for the full lifecycle.
 
-Machine-local state (active contexts, active users, resource availability) is stored
+Machine-local state (the per-tag state and the active users) is stored
 outside the repository in `$XDG_STATE_HOME/task-manager/<repo-hash>/state.toml` so it
 is never committed or synced.
 
@@ -76,7 +76,7 @@ my-tasks/
   .next.db                     # SQLite read cache — not committed
 
 ~/.local/state/task-manager/<repo-hash>/
-  state.toml                   # machine-local: active contexts, users, resource availability
+  state.toml                   # machine-local: per-tag state, active users
 ```
 
 ---
@@ -100,33 +100,49 @@ next show launch-blog          # show full details for a single task
 
 ## Tag system
 
-All labels on a task are tags. Prefix conventions give some tags special meaning:
+All labels on a task are tags, and every tag behaves the same way. The prefix is a
+**naming convention** that says what a tag is for — it does not change how the tag
+filters:
 
-| Prefix | Kind | Example | Effect |
-|--------|------|---------|--------|
-| `@` | Context | `@home`, `@work` | Hidden when a different context is active |
-| `#` | Resource | `#printer`, `#vacation` | Hidden when resource is unavailable |
-| *(none)* | Freeform | `python`, `urgent` | No implicit filter |
+| Prefix | Kind | Example | What it usually names |
+|--------|------|---------|-----------------------|
+| `@` | Context | `@home`, `@work` | A working environment |
+| `#` | Resource | `#printer`, `#vacation` | Something you need available |
+| *(none)* | Freeform | `python`, `urgent` | Anything else |
 
-Tasks with no `@` tag are always shown regardless of the active context.
+Tags nest with `/` (`@work/frontend`, `#office/printer`), and a filter or state on a
+parent applies to every descendant.
+
+### Tag state
+
+Each tag is **included**, **excluded**, or **default**, and the same three states apply
+to every kind:
 
 ```sh
-next context set @home          # global context filter
-next context clear              # show all contexts
-next context exclude @work      # always hide @work tasks
-next context clear-excluded     # remove exclusions
-
-next resource set #printer off  # hide printer tasks
-next resource set #printer on   # show them again
+next tag include @home           # only @home tasks (and nothing untagged)
+next tag include @home @errands  # either one — inclusion is a disjunction
+next tag exclude '#printer'      # the printer is broken; hide its tasks
+next tag clear-state             # back to showing everything
 ```
+
+While anything is included, only tasks carrying an included tag are listed. An excluded
+tag hides a task even if another of its tags is included. State is inherited by
+descendants, and `next tag default <tag>` pins a tag to no state so it can opt out of
+its parent's:
+
+```sh
+next tag exclude @home           # not doing home tasks…
+next tag default @home/kitchen   # …except in the kitchen
+```
+
+`next tag` shows the current state at the top of its listing.
 
 ### Tag descriptions
 
-Any tag (context, resource, or freeform) can carry a human-readable description. These
-descriptions are stored as individual TOML files under `tags/` in the repository and are
-committed to git, making them visible to all machines. They appear in `next tag`,
-`next context`, and `next resource` output and serve as structured metadata for AI agents
-reading the repository.
+Any tag can carry a human-readable description. These descriptions are stored as
+individual TOML files under `tags/` in the repository and are committed to git, making
+them visible to all machines. They appear in `next tag` output and serve as structured
+metadata for AI agents reading the repository.
 
 ```sh
 next tag describe @work "Tasks at the standing desk — laptop required"
@@ -135,16 +151,16 @@ next tag describe #printer "Office laser printer, 2nd floor"
 next tag                        # list all tags with their descriptions
 ```
 
-`next tag` is the single command for all tag metadata (`describe`, `set-url`,
+`next tag` is the single command for everything about tags: the state
+(`include`, `exclude`, `default`, `clear-state`), the metadata (`describe`, `set-url`,
 `set-priority`, `set-no-time-urgency`, `data`, `show`, and the matching `clear-*`
-subcommands) — there are no separate describe commands on `next context` or
-`next resource`.
+subcommands), and `rename`.
 
 ### Renaming a tag
 
 `next tag rename <old> <new>` moves a tag everywhere it is recorded: every active task,
 every archived task (including segments already pruned to the cold tier), the tag's
-metadata file, and machine-local state such as the active context — all in one commit.
+metadata file, and the machine-local tag state — all in one commit.
 
 ```sh
 next tag rename @ai/task-manager @ai/next   # @ai/task-manager/* moves along with it
@@ -206,7 +222,7 @@ All list commands accept filter tokens in any order:
 | `+<tag>` | `+@home`, `+python` | Task must have this tag |
 | `-<tag>` | `-@work` | Task must not have this tag |
 | `parent:<slug>` | `parent:launch-blog` | Task is a descendant of (or is) the task with this slug |
-| `context:<@tag>` | `context:@home` | Override active context for this query |
+| `context:<@tag>` | `context:@home` | Include exactly this tag for this query, ignoring the stored inclusions |
 | `user:<name>` | `user:alice` | Override user filter for this query |
 | `--future` | | Include tasks with a future `start` date |
 | `--all` | | Disable all implicit filtering |
@@ -233,8 +249,7 @@ All list commands accept filter tokens in any order:
 | `next open <id>` | Open the task's URL in the browser |
 | `next data set/unset/get` | Manage arbitrary key-value data on a task |
 | `next tag [rename/describe/set-priority/set-no-time-urgency/…]` | List tags; rename a tag; manage tag metadata |
-| `next context [set/clear/exclude/clear-excluded]` | Manage global context filter (include and exclude lists) |
-| `next resource [set]` | Manage resource availability |
+| `next tag [include/exclude/default/clear-state]` | Set which tags are included, excluded, or pinned to no state |
 | `next user [set/clear/list]` | Manage user filter |
 | `next plugin [register/watch/unwatch/unregister/set-sync/set-interval/enable/disable/list]` | Manage export plugins and their periodic syncs (see [Plugins](#plugins)) |
 | `next forecast` | Upcoming due dates grouped by time, including projected schedule-recurrence occurrences over the horizon |
@@ -329,7 +344,7 @@ Remote access is provided via MCP — see the MCP server section below.
 It links the core library directly (no shelling out to `next`) and edits the repository
 through the same transactions and git commits as the CLI, so it is safe to run alongside
 the CLI and the MCP server. It offers list / tree / forecast views, a full edit modal,
-per-task actions, a context/resource/user state panel, and background sync.
+per-task actions, a tag/user state panel, and background sync.
 
 ```sh
 cargo build --release --features tui --bin next-tui
@@ -433,7 +448,7 @@ Three named volumes are used — Podman creates them automatically on first star
 | Volume | Mount | Contents |
 |--------|-------|----------|
 | `next-tasks` | `/data/tasks` | Cloned tasks git repository |
-| `next-state` | `/data/state` | Machine-local state (active context, user filter, resources) |
+| `next-state` | `/data/state` | Machine-local state (per-tag state, user filter) |
 | `next-config` | `/data/config` | `config.toml` at `next-mcp/config.toml` (see above) |
 
 Then:
@@ -449,15 +464,14 @@ systemctl --user start next-mcp
 |------|-----|-------------|
 | `list_tasks` | R | List scored tasks; accepts filter tokens + `context` override, `page`/`page_size` pagination, and `archived: true` for the archive |
 | `get_task` | R | Full details of one task + direct children + score breakdown |
-| `add_task` | M | Create a task (auto-applies active context if task has none) |
+| `add_task` | M | Create a task (inherits the included `@context` tags if the task has none) |
 | `update_task` | M | Edit fields or transition state (start/stop/done/cancel/move); `done` accepts `completed_at` |
 | `delete_task` | M | Permanently remove a task |
 | `sync` | M | Pull then push (`push_only`/`pull_only` optional); fails fast if sync already in progress |
 | `get_diff` | R | Working-tree diff (git status + diff HEAD) for inspecting conflicts/uncommitted changes |
 | `force_sync` | M | Fetch + hard-reset to FETCH_HEAD, discarding local changes; recovery from stuck conflicts |
-| `get_state` | R | Active contexts, excluded contexts, users, resource availability |
-| `set_context` | M | Replace active and/or excluded context filters |
-| `set_resource` | M | Toggle resource availability |
+| `get_state` | R | The per-tag state map and the active users |
+| `set_tag_state` | M | Set tags to `included`/`excluded`/`default`, or `clear` their entry |
 | `set_user_filter` | M | Replace active user filter |
 | `manage_tag` | R/M | Tag rename plus metadata CRUD (list/show/rename/describe/set_priority/set_no_time_urgency/…) |
 | `manage_task_data` | R/M | Task data key-value pairs (get/list/set/unset) |
@@ -481,12 +495,12 @@ reflect other machines' pushes.
 
 The `initialize` response includes an `instructions` string (a standard MCP field) that
 clients MAY inject into the model's system prompt. It carries the tagging conventions
-(`@context`, `#resource`, freeform; `/` hierarchy; tag priority / no-time-urgency
-metadata) plus a connect-time snapshot of the active context, unavailable resources, and
-the catalog of known tags with their descriptions. This pushes tag knowledge onto the AI
-up front so it reuses existing tags and respects the active context without having to call
-`manage_tag list` / `get_state` first. The snapshot is taken at connection time and
-refreshes on reconnect.
+(`@context`, `#resource`, freeform as naming conventions; the three tag states; `/`
+hierarchy; tag priority / no-time-urgency metadata) plus a connect-time snapshot of the
+current tag state and the catalog of known tags with their descriptions. This pushes tag
+knowledge onto the AI up front so it reuses existing tags and respects the tag state
+without having to call `manage_tag list` / `get_state` first. The snapshot is taken at
+connection time and refreshes on reconnect.
 
 ### Webhook
 

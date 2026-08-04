@@ -118,13 +118,11 @@ fn list(ctx: &mut AppContext) -> anyhow::Result<()> {
         }
     }
 
-    println!("Tag conventions:");
-    println!(
-        "  @context   Tasks are hidden unless this context is active (or no context is active)."
-    );
-    println!("  #resource  Tasks are hidden while this resource is marked unavailable.");
-    println!("  freeform   Plain label — no filtering effect.");
-    println!("  a/b        Nested tags: filtering on 'a' matches all 'a/*' descendants.");
+    println!("Tag conventions (naming only — every kind filters the same way):");
+    println!("  @context   Names a working environment, e.g. @home, @work.");
+    println!("  #resource  Names something that must be available, e.g. #printer.");
+    println!("  freeform   Anything else, e.g. python, errand.");
+    println!("  a/b        Nested tags: a filter or state on 'a' covers all 'a/*'.");
     println!();
 
     print_group("Contexts (@)", &contexts, &metas);

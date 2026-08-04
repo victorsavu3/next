@@ -87,28 +87,33 @@ next tag                            # list all tags
 
 ---
 
-## Active context
+## Tag state
 
-Focus on one environment — only tasks tagged with that context (plus untagged tasks) are shown:
+Every tag — `@context`, `#resource` or plain — is included, excluded, or neither. The
+sigil says what a tag is for; it does not change how it filters.
+
+Focus on one environment by **including** it. Only tasks carrying an included tag are
+then listed:
 
 ```sh
-next context set @work      # show @work tasks + untagged tasks
-next context clear          # show everything
-next context                # show current context
+next tag include @work      # only @work tasks
+next tag clear-state        # show everything again
+next tag                    # show the current state, then the tag list
 ```
 
-Context-neutral tasks (no `@` tags) are always visible regardless of the active context.
-
----
-
-## Resource availability
-
-Hide tasks that require unavailable hardware:
+Hide things by **excluding** them — the same command whatever the tag is:
 
 ```sh
-next resource set #laptop off   # travelling without laptop
-next list                       # #laptop tasks hidden
-next resource set #laptop on    # back — tasks reappear
+next tag exclude '#laptop'  # travelling without the laptop
+next list                   # #laptop tasks hidden
+next tag clear-state '#laptop'
+```
+
+State is inherited by nested tags, and `default` lets a child opt out of its parent's:
+
+```sh
+next tag exclude @home            # not doing home tasks…
+next tag default @home/kitchen    # …except in the kitchen
 ```
 
 ---
@@ -313,9 +318,8 @@ next move <id> --parent <pid>
 next tree [--all]
 next forecast [--days N]
 next sync [--pull-only | --push-only]
-next tag [describe | set-url | set-priority | data | show | clear-description | clear-url | clear-priority]
-next context [set <@tag>... | clear | exclude <@tag>... | clear-excluded]
-next resource [set <#tag> on|off]
+next tag [describe | set-url | set-priority | data | show | rename | clear-description | clear-url | clear-priority]
+next tag [include <tag>... | exclude <tag>... | default <tag>... | clear-state [<tag>...]]
 next user [set <name>... | clear | list]
 next config [get <key> | set <key> <value>]
 ```

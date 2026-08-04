@@ -115,7 +115,7 @@ next/                             # crate root (also git repo)
       config.rs                   # ConfigSource + tui.toml -> config.toml -> defaults loader; bootstrap()
       edit.rs                     # EditForm: the edit-modal field model + validation
       tree.rs  forecast.rs        # TreeView / ForecastView state (build on cached tasks)
-      state_panel.rs              # StatePanel: contexts/resources/users panel model
+      state_panel.rs              # StatePanel: tags/users panel model (TagRow state cycle)
       sync.rs                     # background sync worker (worker thread + mpsc channel)
   benches/
     large_repo.rs                 # archiving budget benchmark (harness = false; opt-in)
@@ -179,7 +179,7 @@ enabled.
 | Module | Contents |
 |--------|----------|
 | `task` | `Task`, `Status` (`Open`/`Started`/`Done`/`Cancelled`), `Priority`, `Recurrence`, `Snap` |
-| `state` | `GlobalState` (active contexts, excluded contexts, active users, resource availability map) |
+| `state` | `GlobalState` (per-tag `TagState` map — `Included`/`Excluded`/`Default` — plus active users); `state_of` resolves inheritance, `admits` applies the two filtering rules |
 | `tag` | `TagKind` (Context / Resource / Freeform); `validate_tag` (allowlist: segments start with letter, contain `a-zA-Z0-9-_`, `/` separator allowed, `..` explicitly rejected); `validate_context_tag` (enforces `@` prefix); `validate_resource_tag` (enforces `#` prefix) |
 | `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
 | `date_parse` | `fn parse_date(expr, today) -> Result<NaiveDate>` |
@@ -382,19 +382,20 @@ rename is hierarchical (descendants move with their parent) and kind-preserving;
 destinations are rejected unless the caller opts into merging.
 
 **Contexts and resources are just tags.** `@context` and `#resource` tags are classified
-by their prefix (`@` or `#`) but share the same `tags/` storage as freeform tags. There
-are no separate metadata commands for contexts or resources — use `next tag describe`,
-`next tag set-url`, `next tag set-priority`, etc. for all tag kinds.  The `next context`
-and `next resource` commands only manage the machine-local active-context / resource-availability
-state stored in `state.toml`; they do not touch tag metadata.
+by their prefix (`@` or `#`) but share the same `tags/` storage as freeform tags, and —
+since tag-state unification — the same filtering rules. The prefix is a naming
+convention: it groups tags for display and can be queried, but it does not change
+behaviour. `next tag describe`, `set-url`, `set-priority` etc. manage committed metadata
+for all kinds; `next tag include|exclude|default|clear-state` manage the machine-local
+state in `state.toml` and do not touch metadata.
 
 All machine-local state lives in a single `state.toml` at
 `$XDG_STATE_HOME/task-manager/<fnv1a-hash-of-canonical-repo-path>/state.toml`, computed by
 `next::storage::state_path_for_repo(root)` and never committed to git.  It holds three
 sections (see `storage/machine_state.rs`, `MachineState`):
 
-* the global runtime state — active contexts, excluded contexts, resource availability,
-  active users — flattened at the top level (unchanged on-disk format);
+* the global runtime state — the `[tags]` state map and the active users — flattened at
+  the top level;
 * the plugin registry as a `[[plugin]]` array;
 * the sync state under `[sync]` (`last_pull`, `last_archive` for the daily
   auto-archive throttle, plus per-plugin `last_sync`).
@@ -487,7 +488,7 @@ Remote access is provided via MCP — connect with `claude mcp add --transport h
    run with any disabling flag (`--no-autopull`/`--no-autopush`/`--no-autosync`/`--offline`)
 6. Execute command logic (reads from ctx.repo.store; writes via ctx.repo.transaction)
 7. Task mutations (add/edit/start/stop/done/cancel/delete/move/tag/data): vcs.commit(changed_paths, message)
-   State mutations (context/resource/user): write to XDG state file only; no commit
+   State mutations (tag state / user): write to XDG state file only; no commit
 8. Render output (text or JSON to stdout)
 9. Autopush: if `effective_autopush` and command succeeded and is a mutation (`add`/`start`/`stop`/`done`/`cancel`/`edit`/`delete`/`move`/`tag`/`data`/`archive`): run sync (pull + push)
 10. Notify subscribed plugins of recorded task events (after the repo lock is released)
@@ -561,11 +562,11 @@ mechanisms keep this safe:
 3. **State mutation transactions** (`TaskRepository::state_transaction`). All machine-local
    state lives outside the git repository in one `state.toml`, so it has its own lock —
    `.state.toml.lock` next to the state file. This single lock now serialises every
-   machine-local write: the global state (active contexts, excluded contexts, active users,
-   resource availability), the plugin registry, and the sync state. Each writer does a
+   machine-local write: the global state (the tag-state map and the active users), the
+   plugin registry, and the sync state. Each writer does a
    locked read-modify-write of the whole file via `load_machine_state` /
    `update_machine_state` (`storage/machine_state.rs`), so e.g. a `save_state` cannot drop a
-   concurrently-added plugin and vice versa. Each `next context` / `resource` / `user` (and
+   concurrently-added plugin and vice versa. Each `next tag include|exclude|…` / `user` (and
    the matching MCP tool) holds this exclusive lock across its `get_state` → modify →
    `save_state`, closing the same lost-update window. No HEAD reconciliation, since state is
    never committed to git.
@@ -676,9 +677,13 @@ pub struct FilterSet {
    - Exclude tasks whose `start` date is in the future
    - Exclude tasks that are explicitly blocked (open entry in `blocked_by`)
    - Exclude parent tasks that have any open direct child
-   - Exclude tasks with any unavailable `#resource` tag
-   - Apply context filtering (tasks with no `@` tag always pass)
    - Apply user filtering (tasks with no `assignee` always pass)
+
+   The **tag state** is applied outside this gate, so `--all` widens the statuses
+   without lifting an exclusion: `GlobalState::admits` hides any task carrying an
+   excluded tag, and — while anything is included — any task carrying no included tag.
+   `FilterSet::include_override` replaces the included set for one query (`context:@x`,
+   and the MCP `context` parameter) while leaving exclusions in force.
 2. **Explicit filters** (always applied):
    - `required_tags`: task must contain all
    - `excluded_tags`: task must contain none

@@ -31,13 +31,10 @@ A full-screen terminal front-end, `next-tui`, is also available — see [`TUI.md
 | `next tag rename` | Rename a tag (and its descendants) across the repository |
 | `next tag describe` | Set a description for any tag |
 | `next tag clear-description` | Remove a tag description |
-| `next context` | Show active and excluded contexts |
-| `next context set` | Set the global active context filter |
-| `next context clear` | Clear all active contexts |
-| `next context exclude` | Set the excluded context list (always-hidden contexts) |
-| `next context clear-excluded` | Clear all excluded contexts |
-| `next resource` | List resources and their availability |
-| `next resource set` | Toggle a resource available or unavailable |
+| `next tag include` | Work on these tags: only their tasks are listed |
+| `next tag exclude` | Hide tasks carrying these tags |
+| `next tag default` | Pin tags to no state, ignoring a parent tag's state |
+| `next tag clear-state` | Drop the stored state for tags (all of them when none given) |
 | `next forecast` | Show upcoming recurrence dates |
 | `next sync` | Pull from git remote, reconcile cache, auto-archive if due, push |
 | `next maintenance archive` | Move old closed tasks into archive segments now |
@@ -211,7 +208,7 @@ ends with an indication such as `page 2 of 14 · 13402 matching · --page 3 for 
 **Examples**
 
 ```sh
-# Default view (respects active contexts and resources)
+# Default view (respects the tag state)
 next list
 
 # All Python-tagged tasks
@@ -582,9 +579,10 @@ next data get <id> <key>
 
 ### `next tag`
 
-List all tags that appear on any task, together with any tags that have a stored
-description. Tags are grouped into three sections: Contexts (`@`), Resources (`#`), and
-Freeform. Descriptions are shown inline.
+Show the current tag state, then list all tags that appear on any task together with any
+tags that have a stored description. Tags are grouped for readability into Contexts
+(`@`), Resources (`#`) and Freeform — a naming convention, not a difference in
+behaviour. Descriptions are shown inline.
 
 **Usage**
 
@@ -636,9 +634,8 @@ cold task does. The next archive pass prunes it again.
 
 ### `next tag describe`
 
-Set a human-readable description for a tag, context, or resource. The description is
-stored in a per-tag TOML file under `tags/` and is shown in `next tag`,
-`next context`, and `next resource` output.
+Set a human-readable description for any tag. The description is stored in a per-tag TOML
+file under `tags/` and is shown in `next tag` output.
 
 **Usage**
 
@@ -712,116 +709,107 @@ next tag data list <tag>
 
 ---
 
-### `next context`
+### Tag state
 
-Show the currently active context filters and their descriptions (if any).
+Every tag — `@context`, `#resource` or freeform — is in one of three states, and they
+work identically for all three kinds. The sigil says what a tag is *for*; it does not
+change how the tag filters.
 
-**Usage**
+| State | Meaning |
+|-------|---------|
+| **included** | While anything is included, only tasks carrying an included tag are listed. |
+| **excluded** | Tasks carrying it are hidden. Exclusion beats inclusion. |
+| **default** | No state — and pinning it here stops the tag inheriting a parent tag's state. |
 
-```
-next context
-```
+State is inherited down the hierarchy: excluding `#office` also excludes
+`#office/printer`. The most specific entry wins, which is what `default` is for — it lets
+a child opt out of its parent's state. Matching runs downward only: including `@work`
+covers `@work/frontend`, but including `@work/frontend` does not cover plain `@work`.
+
+The current state is shown at the top of `next tag`.
 
 ---
 
-### `next context set`
+### `next tag include`
 
-Replace the global active context set. All subsequent commands filter tasks by these contexts until changed or cleared.
+Work on these tags. While anything is included, only tasks carrying an included tag are
+listed — including a tag also hides tasks that carry no tags at all.
+
+Several included tags are a disjunction: "I am at work, or at home".
 
 **Usage**
 
 ```
-next context set <@tag>...
+next tag include <tag>...
 ```
 
 **Examples**
 
 ```sh
-next context set @home
-next context set @home @errands
+next tag include @home
+next tag include @home @errands
+next tag include '#printer'        # only what needs the printer
 ```
 
 ---
 
-### `next context clear`
+### `next tag exclude`
 
-Clear all active contexts. After this, tasks are shown regardless of their `@` tags.
-
-**Usage**
-
-```
-next context clear
-```
-
----
-
-### `next context exclude`
-
-Set the excluded context list. Tasks whose `@context` tags match any excluded context are
-always hidden, even when they would otherwise pass the active-context filter. Context-neutral
-tasks (no `@` tags) are never excluded. Replaces the entire excluded list.
+Hide tasks carrying these tags. An excluded tag hides a task even when another of its
+tags is included.
 
 **Usage**
 
 ```
-next context exclude <@tag>...
+next tag exclude <tag>...
 ```
 
 **Examples**
 
 ```sh
-next context exclude @work           # always hide @work tasks
-next context exclude @work @errands  # hide multiple contexts
+next tag exclude @work             # not thinking about work today
+next tag exclude '#printer'        # the printer is broken
+next tag exclude errand chore
 ```
 
 ---
 
-### `next context clear-excluded`
+### `next tag default`
 
-Clear all excluded contexts.
+Pin tags to no state. This differs from `clear-state`: an explicitly defaulted tag
+*stops* inheriting from its parent, where a tag with no entry inherits.
 
 **Usage**
 
 ```
-next context clear-excluded
+next tag default <tag>...
+```
+
+**Example**
+
+```sh
+next tag exclude @home             # not doing home tasks…
+next tag default @home/kitchen     # …except in the kitchen
 ```
 
 ---
 
-### `next resource`
+### `next tag clear-state`
 
-List all known resources and their current availability status. Descriptions are shown
-inline when set.
-
-**Usage**
-
-```
-next resource [--json]
-```
-
-**Options**
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--json` | flag | false | Emit resources as a JSON object keyed by resource tag. |
-
----
-
-### `next resource set`
-
-Toggle a resource available or unavailable. Tasks tagged with an unavailable resource are hidden from the default list.
+Drop the stored state for these tags, so they inherit from their parents again. With no
+arguments, clears every tag's state.
 
 **Usage**
 
 ```
-next resource set <#resource> <on|off>
+next tag clear-state [<tag>...]
 ```
 
 **Examples**
 
 ```sh
-next resource set #printer off   # printer is broken — hide printer tasks
-next resource set #printer on    # printer repaired
+next tag clear-state @home
+next tag clear-state              # back to showing everything
 ```
 
 ---
@@ -1073,7 +1061,7 @@ All list commands (`list`, `next`, `forecast`) accept filter tokens that can be 
 | `+<tag>` | `+python`, `+@home`, `+#printer` | Task must have this tag. |
 | `-<tag>` | `-@work`, `-reading` | Task must not have this tag. |
 | `parent:<slug>` | `parent:work`, `parent:launch-blog` | Task is a descendant (direct or transitive child) of the task with this slug. |
-| `context:<@tag>` | `context:@home` | Override the global active context for this query only. |
+| `context:<@tag>` | `context:@home` | Include exactly this tag for this query only, ignoring whatever the stored state includes. Exclusions still apply. |
 | `user:<name>` | `user:alice` | Override the global user filter for this query only. |
 | `--future` | | Include tasks with a future `start` date. |
 | `--all` | | Disable all implicit filtering. |
@@ -1086,9 +1074,12 @@ Unless `--all` is passed, the following tasks are always excluded:
 - Tasks with `status` other than `open` or `started`
 - Tasks whose `start` date is in the future
 - Tasks that are blocked (any open `blocked_by` entry, or the parent of any open subtask)
-- Tasks carrying a `#resource` tag where that resource is currently unavailable
-- Tasks whose `@context` tags do not match the active context set (tasks with no `@` tags are always shown)
 - Tasks whose `assignee` does not match the active user set (tasks with no `assignee` are always shown)
+
+The **tag state** is applied separately and is *not* disabled by `--all`, which widens
+the statuses shown rather than the tags: a tag excluded on purpose stays excluded until
+it is un-excluded. Tasks carrying an excluded tag are hidden, and while any tag is
+included, tasks that carry no included tag are hidden too.
 
 ---
 

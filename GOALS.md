@@ -42,19 +42,18 @@ sets scores or data fields externally.
 ### Unified tag system
 All labels on a task are tags. Prefix conventions give some tags special meaning:
 
-| Prefix | Kind | Example | Implicit filtering behaviour |
-|--------|------|---------|------------------------------|
-| `@` | Context | `@home`, `@work` | Only tasks matching an active context (or with no `@` tag) are shown |
-| `#` | Resource | `#printer`, `#vacation` | Tasks requiring an unavailable resource are hidden |
-| *(none)* | Freeform | `python`, `project` | No implicit effect; used for manual queries |
+| Prefix | Kind | Example | What it names |
+|--------|------|---------|---------------|
+| `@` | Context | `@home`, `@work` | A working environment |
+| `#` | Resource | `#printer`, `#vacation` | Something that must be available |
+| *(none)* | Freeform | `python`, `project` | Anything else |
 
-**Active contexts** are set globally (e.g. `next context set @home`). When one or more
-contexts are active, tasks with no `@` tag are always shown; tasks with at least one `@`
-tag are shown only if they share a tag with the active set.
-
-**Resource availability** is set globally (e.g. `next resource set #printer off`). Tasks
-carrying a `#resource` tag whose resource is marked unavailable are hidden from the
-default list and excluded from scoring.
+The prefix is a naming convention only. **Every tag filters the same way**, through one
+machine-local state: a tag is `included`, `excluded`, or neither (e.g.
+`next tag include @home`, `next tag exclude '#printer'`). While anything is included,
+only tasks carrying an included tag are shown; a task carrying an excluded tag is hidden
+whatever else it carries. State is inherited by nested tags, and an explicit `default`
+lets a child opt out of its parent's state.
 
 ### Nested tasks (subtasks)
 Any task can have subtasks to any depth via `parent_id` — there is no special project
@@ -97,7 +96,7 @@ All list commands accept filters that can be combined freely:
 | `+tag` | `+@home`, `+python` | Task must have this tag |
 | `-tag` | `-@work` | Task must not have this tag |
 | `parent:<slug>` | `parent:work-infra` | Task is in this project or any descendant |
-| `context:<name>` | `context:@home` | Override active context for this query |
+| `context:<name>` | `context:@home` | Include exactly this tag for this query, ignoring the stored inclusions |
 | `user:<name>` | `user:alice` | Override user filter for this query |
 | `--future` | | Include tasks with a future `start` date |
 | `--all` | | Disable all implicit filtering |
