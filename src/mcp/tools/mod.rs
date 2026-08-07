@@ -21,11 +21,11 @@ pub fn all_tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "list_tasks",
-            description: "List tasks scored by urgency. Supports filter tokens (+tag, -tag, parent:slug, context:@name, user:name). Returns { items, page, page_size, total }; total > items.len() means the result is truncated — fetch the next page.",
+            description: "List tasks scored by urgency. filter_tokens are joined with spaces and parsed as one filter expression. Returns { items, page, page_size, total }; total > items.len() means the result is truncated — fetch the next page.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "filter_tokens": { "type": "array", "items": { "type": "string" }, "description": "Filter tokens e.g. [\"+@work\", \"-done\", \"parent:infra\"]" },
+                    "filter_tokens": { "type": "array", "items": { "type": "string" }, "description": "Filter expression, joined with spaces. A BARE WORD SEARCHES the title, description, notes and url — a tag needs its sigil: +tag requires it, -tag excludes it (hierarchical: +@work matches @work/backend). Also: field predicates (status:open, priority:high, due<+7d, due:2026-08-01..eom, assignee:alice, slug:x, data.key:v), has:field / no:field, is:overdue|blocked|project|recurring|closed|assigned, quoted phrases (\"cold tier\") and prefixes (arch*), and the booleans and/or/not with parentheses (adjacency means and). parent:slug, context:@name and user:name scope the whole query and may not appear inside or/not. Example: [\"+@work\", \"due<+7d\", \"not\", \"is:blocked\"]" },
                     "context": { "type": "array", "items": { "type": "string" }, "description": "Override the included tags for this call (e.g. [\"@work\"]). Pass [] to include nothing, which shows every tag that is not excluded. Exclusions still come from the stored state." },
                     "limit": { "type": "integer", "description": "Legacy alias for page_size" },
                     "page_size": { "type": "integer", "description": "Tasks per page (default 50)" },
@@ -217,7 +217,7 @@ pub fn all_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "horizon_days": { "type": "integer", "description": "Days to look ahead (default: 90)" },
-                    "filter_tokens": { "type": "array", "items": { "type": "string" } },
+                    "filter_tokens": { "type": "array", "items": { "type": "string" }, "description": "Filter expression, same grammar as list_tasks: a bare word searches, +tag requires, -tag excludes." },
                     "context": { "type": "array", "items": { "type": "string" }, "description": "Override active context for this call. Overrides state." }
                 }
             }),

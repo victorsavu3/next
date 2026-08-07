@@ -74,7 +74,7 @@ next/                             # crate root (also git repo)
       sync.rs                     # sync(): pull -> cache-reconcile -> auto-archive -> push; pull_if_stale()
       sync_state.rs               # machine-local [sync] state: last_pull, last_archive, per-plugin last_sync
       value.rs                    # parse_value(): task data value parsing
-      filter_args.rs              # FilterArgs -> FilterSet (filter-token parsing)
+      filter_args.rs              # FilterArgs -> FilterSet (joins argv, parses the query, lifts view terms)
       scoring.rs                  # ScoredTask, ScoringConfig, TaskDates, score_and_sort()
       service.rs                  # create_task/complete_task/apply_edits; begin/end_mutation
       recurrence.rs               # next_occurrence(), apply_snap(), spawn_next(), parse_snap()
@@ -85,7 +85,8 @@ next/                             # crate root (also git repo)
       test_git.rs                 # init_test_repo() helper for unit tests
       domain/                     # pure domain types (no I/O)
         mod.rs  task.rs  state.rs  tag.rs  filter.rs  date_parse.rs
-        filter_expr.rs            # filter expression grammar → Expr AST (parser only; not yet wired in)
+        filter_expr.rs            # filter expression grammar → Expr AST; lift_overrides(), as_tag_filters()
+        filter_eval.rs            # eval(&Expr, &Task, &EvalCtx) — the reference semantics for S2/S3
       storage/                    # local TOML + SQLite + git backend + archive tiers
         mod.rs                    # open(), task_path(), state_path_for_repo(), load_scoring()
         machine_state.rs          # MachineState (combined state.toml) + load_/update_machine_state
@@ -657,20 +658,52 @@ Requirements are in REQUIREMENTS.md §2.3; the machinery lives in
 
 ## 7. Filtering pipeline
 
-`domain::filter::FilterSet` holds the parsed filter state:
+A query runs through four stages, in one direction:
+
+```
+argv / TUI filter bar / MCP filter_tokens
+  → joined into one string
+  → filter_expr::parse       →  Expr AST
+  → filter_expr::lift_overrides  →  Expr + Overrides (parent:/context:/user:)
+  → FilterArgs::to_filter_set    →  FilterSet
+  → domain::filter::apply        →  implicit gate, tag state, filter_eval::eval
+```
+
+Every surface parses the *same string* with the *same parser* and evaluates the
+*same tree*, which is what stops the three of them drifting into dialects.
+
+### The expression
+
+`filter_expr::parse` produces an `Expr` (`And` / `Or` / `Not` / `Atom`); see §11
+for the grammar's own notes. `And(vec![])` is the identity — an empty query
+parses to it and matches everything, so there is no separate "no filter" case.
+Parser recursion is bounded at 32 levels, so no surface needs its own guard.
+
+`lift_overrides` then splits out the terms that describe the *view* rather than
+a task — `parent:`, `context:`, `user:` — because they apply to the query as a
+whole (`parent:` even decides which candidates get loaded). They are accepted in
+the top-level conjunction and rejected inside `or` / `not`. The same pass
+refuses fields that parse but cannot yet be answered (`score:`, which is
+computed after filtering).
+
+### `FilterSet`
 
 ```rust
 pub struct FilterSet {
-    pub required_tags: Vec<String>,        // +tag
-    pub excluded_tags: Vec<String>,        // -tag
-    pub context_override: Option<Vec<String>>,
-    pub user_override: Option<Vec<String>>,
+    pub expr: Expr,                          // the user's query
+    pub include_override: Option<Vec<String>>, // context: / MCP `context`
+    pub user_override: Option<Vec<String>>,    // user: / --all-users
     pub include_future: bool,
-    pub disable_implicit: bool,            // --all
+    pub disable_implicit: bool,              // --all
+    pub closed_only: bool,                   // --closed
+    pub include_blocked_parents: bool,       // TUI: keep projects visible
+    pub parent_slug: Option<String>,         // parent: project scope
 }
 ```
 
-`fn apply(tasks: Vec<Task>, filter: &FilterSet, state: &GlobalState, today: NaiveDate) -> Vec<Task>`:
+### `apply`
+
+`fn apply(tasks, filter, state, today, task_dates) -> Vec<Task>`:
 
 1. **Implicit gate** (skipped when `disable_implicit`):
    - Exclude tasks where `!is_active()` — i.e. `done` and `cancelled` are hidden; `open` and `started` pass
@@ -684,22 +717,37 @@ pub struct FilterSet {
    excluded tag, and — while anything is included — any task carrying no included tag.
    `FilterSet::include_override` replaces the included set for one query (`context:@x`,
    and the MCP `context` parameter) while leaving exclusions in force.
-2. **Explicit filters** (always applied):
-   - `required_tags`: task must contain all
-   - `excluded_tags`: task must contain none
-3. `include_future`: also include tasks with `start` date in the future
+2. **The explicit query** (always applied): one `filter_eval::eval` call per task.
+   The relational indexes it needs (open task IDs for `is:blocked`, parent IDs for
+   `is:project`, the id → (parent, slug) lineage for `parent:`) are built **once per
+   query** by `EvalIndexes::build`, not per task.
+
+`task_dates` carries the git-derived timestamps behind `created:` and `updated:`.
+Callers that have them (the scored listings) compute them *before* filtering, over
+the same parent-extended pool scoring uses; callers that have none pass an empty
+map, and those two fields then read as unset.
+
+### `filter_eval` is the reference semantics
+
+S2 compiles the pushable half of an expression into SQL and S3 replaces the text
+scan with an FTS5 index. Both are optimisations that must agree with `eval`, and
+their differential tests use it as the oracle. Two consequences for the scan:
+
+- Search is **word-oriented**, not substring: `arch` matches the word "arch" but
+  not "archive"; `arch*` matches by prefix; a quoted phrase matches consecutive
+  words in order. An index cannot match mid-word, so neither does the scan.
+- It reads `title`, `description`, `notes` and `url` — **not** `slug`, which is an
+  identifier (`slug:x` is exact match).
 
 ### User filter semantics
 
-Context filtering and user filtering have different visibility rules for untagged tasks:
+Unassigned tasks are always visible: `active_users = ["alice"]` hides tasks
+assigned to `bob` but never hides tasks with no `assignee`. `user:bob` as a query
+term keeps that meaning.
 
-| Filter | Untagged task behaviour |
-|--------|------------------------|
-| Context | Always visible (tasks with no `@` tag are context-neutral) |
-| User | Always visible (unassigned tasks belong to the shared backlog) |
-
-This means `active_users = ["alice"]` hides tasks assigned to `bob` but never hides
-tasks with no `assignee`.
+Tags have no such exemption — since tag-state unification, including a tag also
+hides untagged tasks, and `+@work` means "carries `@work` or a descendant of it"
+for every kind of tag alike.
 
 ---
 
@@ -888,6 +936,7 @@ non-zero exit code.
 | `domain::filter` | `src/core/domain/filter.rs` | Unit tests: build `FilterSet` + `Vec<Task>`, assert filtered output |
 | `domain::date_parse` | `src/core/domain/date_parse.rs` | Unit tests: fixed "today", assert parsed date for common expressions |
 | `domain::filter_expr` | `src/core/domain/filter_expr.rs` | Unit tests: one per atom form and operator spelling, precedence and grouping, error messages for malformed input, and `parse(print(e)) == e` round-trips |
+| `domain::filter_eval` | `src/core/domain/filter_eval.rs` | Unit tests: each atom against a hand-built task, both operator spellings, precedence, and the bare-token/`+tag` split pinned in both directions |
 | `TomlStore` | `src/core/storage/toml_store.rs` | Round-trip tests: write task to `tempdir`, read back, assert equal fields; migration unit tests: write legacy `state.toml`, call `TomlStore::open()`, assert per-tag files created and `state.toml` cleaned |
 | `GitBackend` | `src/core/storage/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
 | `CachedStore` | `src/core/storage/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |

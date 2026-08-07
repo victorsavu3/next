@@ -1052,14 +1052,29 @@ next config set list_limit none
 
 ## Filter Syntax
 
-All list commands (`list`, `next`, `forecast`) accept filter tokens that can be combined freely in any order.
+All list commands (`list`, `next`, `forecast`) accept a filter expression. The
+trailing arguments are joined with a space and parsed as one query, so
+`next list +@work -bug` and `next list '+@work -bug'` mean the same thing —
+only phrases, parentheses and `#resource` tags need shell quoting.
+
+> **A bare word searches; it is not a tag.** `next list bug` looks for "bug" in
+> the title, description, notes and url. To select tasks *tagged* `bug`, write
+> `next list +bug`. Every sigil form is unchanged.
 
 ### Token reference
 
 | Token | Example | Meaning |
 |-------|---------|---------|
-| `+<tag>` | `+python`, `+@home`, `+#printer` | Task must have this tag. |
+| `<word>` | `bug`, `"cold tier"`, `arch*` | Full-text search over title, description, notes and url. A quoted phrase matches consecutive words in order; a trailing `*` matches by prefix. Matching is by whole word, so `arch` does not match "archive". |
+| `<field>:<word>` | `title:rebuild`, `notes:sqlite` | The same search, restricted to one text field. |
+| `+<tag>` | `+python`, `+@home`, `+#printer` | Task must have this tag (or one nested under it: `+@work` matches `@work/backend`). |
 | `-<tag>` | `-@work`, `-reading` | Task must not have this tag. |
+| `<field>:<value>` | `status:open`, `priority:high`, `assignee:alice`, `slug:water-plants`, `data.estimate:3` | Field equality. A comma-separated list is a set: `status:open,started`. `slug:` is exact — it does not match by prefix. |
+| `<field><op><value>` | `due<+7d`, `priority>=medium`, `created>2026-08-01` | Ordered comparison (`<`, `<=`, `>`, `>=`) over `priority`, the dates, and numeric `data.*`. |
+| `<field>:<low>..<high>` | `due:2026-08-01..eom` | Inclusive range. |
+| `has:<field>` / `no:<field>` | `has:due`, `no:assignee`, `has:context` | Whether the field is set. `has:context` asks whether the task carries any `@` tag. |
+| `is:<name>` | `is:overdue`, `is:blocked`, `is:project`, `is:recurring`, `is:closed`, `is:assigned` | Named predicates. |
+| `and` `or` `not` `( )` | `+@work and (due<+7d or is:overdue)` | Booleans, also spelled `&`, `|`, `!`. Adjacency means `and`, and precedence runs `not` > `and` > `or`. Quote an operator word (`"or"`) to search for it literally. |
 | `parent:<slug>` | `parent:work`, `parent:launch-blog` | Task is a descendant (direct or transitive child) of the task with this slug. |
 | `context:<@tag>` | `context:@home` | Include exactly this tag for this query only, ignoring whatever the stored state includes. Exclusions still apply. |
 | `user:<name>` | `user:alice` | Override the global user filter for this query only. |
@@ -1080,6 +1095,22 @@ The **tag state** is applied separately and is *not* disabled by `--all`, which 
 the statuses shown rather than the tags: a tag excluded on purpose stays excluded until
 it is un-excluded. Tasks carrying an excluded tag are hidden, and while any tag is
 included, tasks that carry no included tag are hidden too.
+
+### Dates in a filter
+
+An unquoted date value takes the compact forms: ISO (`2026-08-10`), a signed
+offset (`+7d`, `-2w`, `+3m`, `-1y`), a named day (`today`, `tomorrow`,
+`yesterday`) or an end-of-period (`eow`, `eom`, `eoy`). Quote the value to use
+natural language: `due:"next monday"`.
+
+A field that is unset never compares true — a task with no deadline is not
+matched by `due<+7d` *or* by `due>+7d`.
+
+### Not yet supported
+
+- `score` cannot be filtered on: a task's score is computed after filtering.
+- `next list --archived` accepts only `+tag` and `-tag`; a richer query is
+  refused rather than silently ignored.
 
 ---
 
