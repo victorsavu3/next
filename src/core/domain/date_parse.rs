@@ -1,4 +1,4 @@
-use chrono::{Local, NaiveDate, NaiveTime, TimeZone};
+use chrono::{Datelike, Days, Local, Months, NaiveDate, NaiveTime, TimeZone};
 use interim::{parse_date_string, Dialect};
 
 use crate::core::error::{Result, TaskError};
@@ -26,6 +26,84 @@ pub fn parse_date(expr: &str, today: NaiveDate) -> Result<NaiveDate> {
         .map_err(|e| TaskError::Other(format!("cannot parse date {expr:?}: {e}")))
 }
 
+/// Parses the compact date forms a filter expression writes unquoted.
+///
+/// These are the forms that survive a shell without quoting, which is why the
+/// filter grammar reaches for them before it reaches for [`parse_date`]:
+///
+/// - ISO 8601 — `2026-08-10`
+/// - a signed offset — `+7d`, `-2w`, `+3m`, `-1y` (days, weeks, months, years)
+/// - a named day — `today`, `tomorrow`, `yesterday`
+/// - an end-of-period — `eow` (the coming Sunday), `eom`, `eoy`
+///
+/// Returns `None` when `expr` is none of them, leaving the caller to decide
+/// whether to fall back to natural language or to report the value as bad.
+/// Names are matched case-insensitively.
+pub fn parse_compact(expr: &str, today: NaiveDate) -> Option<NaiveDate> {
+    if let Ok(date) = NaiveDate::parse_from_str(expr, "%Y-%m-%d") {
+        return Some(date);
+    }
+    match expr.to_ascii_lowercase().as_str() {
+        "today" => return Some(today),
+        "tomorrow" => return today.checked_add_days(Days::new(1)),
+        "yesterday" => return today.checked_sub_days(Days::new(1)),
+        // The UK dialect used for natural language puts Sunday at the end of
+        // the week, so `eow` follows suit rather than inventing a second
+        // convention for the same tool.
+        "eow" => {
+            let to_sunday = 6 - today.weekday().num_days_from_monday() as u64;
+            return today.checked_add_days(Days::new(to_sunday));
+        }
+        "eom" => return end_of_month(today),
+        "eoy" => return NaiveDate::from_ymd_opt(today.year(), 12, 31),
+        _ => {}
+    }
+    parse_offset(expr, today)
+}
+
+/// `+7d` / `-2w` / `+3m` / `-1y`, relative to `today`.
+fn parse_offset(expr: &str, today: NaiveDate) -> Option<NaiveDate> {
+    let (forward, rest) = match expr.as_bytes().first()? {
+        b'+' => (true, &expr[1..]),
+        b'-' => (false, &expr[1..]),
+        _ => return None,
+    };
+    let (digits, unit) = rest.split_at(rest.len().checked_sub(1)?);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let magnitude: u64 = digits.parse().ok()?;
+    let (days, months) = match unit.to_ascii_lowercase().as_str() {
+        "d" => (magnitude, 0),
+        "w" => (magnitude.checked_mul(7)?, 0),
+        "m" => (0, u32::try_from(magnitude).ok()?),
+        "y" => (0, u32::try_from(magnitude).ok()?.checked_mul(12)?),
+        _ => return None,
+    };
+    if months > 0 {
+        let months = Months::new(months);
+        return if forward {
+            today.checked_add_months(months)
+        } else {
+            today.checked_sub_months(months)
+        };
+    }
+    let days = Days::new(days);
+    if forward {
+        today.checked_add_days(days)
+    } else {
+        today.checked_sub_days(days)
+    }
+}
+
+/// The last day of `date`'s month.
+fn end_of_month(date: NaiveDate) -> Option<NaiveDate> {
+    let first = NaiveDate::from_ymd_opt(date.year(), date.month(), 1)?;
+    first
+        .checked_add_months(Months::new(1))?
+        .checked_sub_days(Days::new(1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,5 +127,72 @@ mod tests {
     #[test]
     fn invalid_expression_errors() {
         assert!(parse_date("not a date at all xyz", base()).is_err());
+    }
+
+    // ── Compact forms ────────────────────────────────────────────────────────
+
+    fn compact(expr: &str) -> NaiveDate {
+        parse_compact(expr, base()).unwrap_or_else(|| panic!("{expr} did not parse"))
+    }
+
+    fn date(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn compact_iso_and_named_days() {
+        assert_eq!(compact("2026-12-31"), date(2026, 12, 31));
+        assert_eq!(compact("today"), base());
+        assert_eq!(compact("TODAY"), base());
+        assert_eq!(compact("tomorrow"), date(2026, 5, 18));
+        assert_eq!(compact("yesterday"), date(2026, 5, 16));
+    }
+
+    #[test]
+    fn compact_offsets() {
+        assert_eq!(compact("+7d"), date(2026, 5, 24));
+        assert_eq!(compact("-2w"), date(2026, 5, 3));
+        assert_eq!(compact("+3m"), date(2026, 8, 17));
+        assert_eq!(compact("-1y"), date(2025, 5, 17));
+        assert_eq!(compact("+0d"), base());
+    }
+
+    #[test]
+    fn compact_end_of_period() {
+        // 2026-05-17 is a Sunday, so it is already the end of its week.
+        assert_eq!(base().weekday(), chrono::Weekday::Sun);
+        assert_eq!(compact("eow"), base());
+        assert_eq!(
+            parse_compact("eow", date(2026, 5, 11)).unwrap(),
+            date(2026, 5, 17),
+            "a Monday runs to the coming Sunday"
+        );
+        assert_eq!(compact("eom"), date(2026, 5, 31));
+        assert_eq!(compact("eoy"), date(2026, 12, 31));
+        assert_eq!(
+            parse_compact("eom", date(2028, 2, 3)).unwrap(),
+            date(2028, 2, 29),
+            "a leap February ends on the 29th"
+        );
+    }
+
+    #[test]
+    fn compact_rejects_what_it_does_not_own() {
+        // Natural language is `parse_date`'s job; the compact parser says so by
+        // returning None rather than guessing.
+        for expr in [
+            "next monday",
+            "",
+            "+d",
+            "7d",
+            "+7",
+            "+7x",
+            "+-7d",
+            "++7d",
+            "-",
+            "+9999999999999999999999d",
+        ] {
+            assert!(parse_compact(expr, base()).is_none(), "{expr:?}");
+        }
     }
 }
