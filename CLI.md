@@ -31,9 +31,9 @@ A full-screen terminal front-end, `next-tui`, is also available — see [`TUI.md
 | `next tag rename` | Rename a tag (and its descendants) across the repository |
 | `next tag describe` | Set a description for any tag |
 | `next tag clear-description` | Remove a tag description |
-| `next tag include` | Work on these tags: only their tasks are listed |
+| `next tag require` | Work on these tags: only their tasks are listed |
 | `next tag exclude` | Hide tasks carrying these tags |
-| `next tag default` | Pin tags to no state, ignoring a parent tag's state |
+| `next tag accept` | Pin tags to neither required nor excluded, ignoring a parent tag's state |
 | `next tag clear-state` | Drop the stored state for tags (all of them when none given) |
 | `next forecast` | Show upcoming recurrence dates |
 | `next sync` | Pull from git remote, reconcile cache, auto-archive if due, push |
@@ -717,38 +717,39 @@ change how the tag filters.
 
 | State | Meaning |
 |-------|---------|
-| **included** | While anything is included, only tasks carrying an included tag are listed. |
-| **excluded** | Tasks carrying it are hidden. Exclusion beats inclusion. |
-| **default** | No state — and pinning it here stops the tag inheriting a parent tag's state. |
+| **required** | While anything is required, only tasks carrying a required tag are listed. |
+| **excluded** | Tasks carrying it are hidden. Exclusion beats requirement. |
+| **accepted** | Neither required nor hidden — and pinning it here stops the tag inheriting a parent tag's state. |
 
 State is inherited down the hierarchy: excluding `#office` also excludes
-`#office/printer`. The most specific entry wins, which is what `default` is for — it lets
-a child opt out of its parent's state. Matching runs downward only: including `@work`
-covers `@work/frontend`, but including `@work/frontend` does not cover plain `@work`.
+`#office/printer`. The most specific entry wins, which is what `accepted` is for — it
+lets a child opt out of its parent's state. Matching runs downward only: requiring
+`@work` covers `@work/frontend`, but requiring `@work/frontend` does not cover plain
+`@work`.
 
 The current state is shown at the top of `next tag`.
 
 ---
 
-### `next tag include`
+### `next tag require`
 
-Work on these tags. While anything is included, only tasks carrying an included tag are
-listed — including a tag also hides tasks that carry no tags at all.
+Work on these tags. While anything is required, only tasks carrying a required tag are
+listed — requiring a tag also hides tasks that carry no tags at all.
 
-Several included tags are a disjunction: "I am at work, or at home".
+Several required tags are a disjunction: "I am at work, or at home".
 
 **Usage**
 
 ```
-next tag include <tag>...
+next tag require <tag>...
 ```
 
 **Examples**
 
 ```sh
-next tag include @home
-next tag include @home @errands
-next tag include '#printer'        # only what needs the printer
+next tag require @home
+next tag require @home @errands
+next tag require '#printer'        # only what needs the printer
 ```
 
 ---
@@ -756,7 +757,7 @@ next tag include '#printer'        # only what needs the printer
 ### `next tag exclude`
 
 Hide tasks carrying these tags. An excluded tag hides a task even when another of its
-tags is included.
+tags is required.
 
 **Usage**
 
@@ -774,22 +775,23 @@ next tag exclude errand chore
 
 ---
 
-### `next tag default`
+### `next tag accept`
 
-Pin tags to no state. This differs from `clear-state`: an explicitly defaulted tag
-*stops* inheriting from its parent, where a tag with no entry inherits.
+Pin tags to neither required nor excluded. This differs from `clear-state`: an
+explicitly accepted tag *stops* inheriting from its parent, where a tag with no entry
+inherits.
 
 **Usage**
 
 ```
-next tag default <tag>...
+next tag accept <tag>...
 ```
 
 **Example**
 
 ```sh
 next tag exclude @home             # not doing home tasks…
-next tag default @home/kitchen     # …except in the kitchen
+next tag accept @home/kitchen      # …except in the kitchen
 ```
 
 ---
@@ -1094,7 +1096,7 @@ Unless `--all` is passed, the following tasks are always excluded:
 The **tag state** is applied separately and is *not* disabled by `--all`, which widens
 the statuses shown rather than the tags: a tag excluded on purpose stays excluded until
 it is un-excluded. Tasks carrying an excluded tag are hidden, and while any tag is
-included, tasks that carry no included tag are hidden too.
+required, tasks that carry no required tag are hidden too.
 
 ### Dates in a filter
 

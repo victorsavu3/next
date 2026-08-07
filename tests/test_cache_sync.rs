@@ -238,7 +238,7 @@ fn save_state_syncs_to_both_stores() {
         active_users: vec!["alice".into()],
         ..Default::default()
     };
-    state.set_state("@work", Some(TagState::Included));
+    state.set_state("@work", Some(TagState::Required));
     state.set_state("#printer", Some(TagState::Excluded));
     store.save_state(&state).unwrap();
 
@@ -634,7 +634,7 @@ fn pull_updates_state() {
 
     // Set initial state.
     let mut initial_state = GlobalState::default();
-    initial_state.set_state("@home", Some(TagState::Included));
+    initial_state.set_state("@home", Some(TagState::Required));
     store.save_state(&initial_state).unwrap();
 
     // Commit a task to have a real HEAD.
@@ -648,8 +648,8 @@ fn pull_updates_state() {
         active_users: vec!["alice".into()],
         ..Default::default()
     };
-    new_state.set_state("@work", Some(TagState::Included));
-    new_state.set_state("@office", Some(TagState::Included));
+    new_state.set_state("@work", Some(TagState::Required));
+    new_state.set_state("@office", Some(TagState::Required));
     let state_content = toml::to_string_pretty(&new_state).unwrap();
     let state_path = dir.path().join("state.toml");
     fs::write(&state_path, state_content).unwrap();

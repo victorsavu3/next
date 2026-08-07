@@ -49,10 +49,10 @@ All labels on a task are tags. Prefix conventions give some tags special meaning
 | *(none)* | Freeform | `python`, `project` | Anything else |
 
 The prefix is a naming convention only. **Every tag filters the same way**, through one
-machine-local state: a tag is `included`, `excluded`, or neither (e.g.
-`next tag include @home`, `next tag exclude '#printer'`). While anything is included,
-only tasks carrying an included tag are shown; a task carrying an excluded tag is hidden
-whatever else it carries. State is inherited by nested tags, and an explicit `default`
+machine-local state: a tag is `required`, `excluded`, or `accepted` (e.g.
+`next tag require @home`, `next tag exclude '#printer'`). While anything is required,
+only tasks carrying a required tag are shown; a task carrying an excluded tag is hidden
+whatever else it carries. State is inherited by nested tags, and an explicit `accepted`
 lets a child opt out of its parent's state.
 
 ### Nested tasks (subtasks)

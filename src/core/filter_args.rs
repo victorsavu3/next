@@ -79,7 +79,7 @@ impl FilterArgs {
         };
         Ok(FilterSet {
             expr: self.expr.clone(),
-            include_override: self.overrides.included_tags.clone(),
+            required_override: self.overrides.required_override.clone(),
             user_override,
             include_future: self.future,
             disable_implicit: self.all,
@@ -122,7 +122,7 @@ mod tests {
         let parsed = args(&["parent:infra", "context:@work", "user:alice", "+bug"]);
         assert_eq!(parsed.overrides.parent_slug.as_deref(), Some("infra"));
         assert_eq!(
-            parsed.overrides.included_tags.as_deref(),
+            parsed.overrides.required_override.as_deref(),
             Some(["@work".to_owned()].as_slice())
         );
         assert_eq!(

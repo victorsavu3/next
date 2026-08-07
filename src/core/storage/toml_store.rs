@@ -657,7 +657,7 @@ mod tests {
         assert!(default.tags.is_empty());
 
         let mut state = GlobalState::default();
-        state.set_state("@work", Some(TagState::Included));
+        state.set_state("@work", Some(TagState::Required));
         state.set_state("#printer", Some(TagState::Excluded));
         store.save_state(&state).unwrap();
 
@@ -806,7 +806,7 @@ mod tests {
         assert_eq!(state.active_users, vec!["alice"]);
         assert_eq!(
             state.state_of("@work"),
-            Some(crate::core::domain::state::TagState::Included)
+            Some(crate::core::domain::state::TagState::Required)
         );
     }
 

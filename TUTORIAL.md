@@ -89,14 +89,14 @@ next tag                            # list all tags
 
 ## Tag state
 
-Every tag — `@context`, `#resource` or plain — is included, excluded, or neither. The
+Every tag — `@context`, `#resource` or plain — is required, excluded, or accepted. The
 sigil says what a tag is for; it does not change how it filters.
 
-Focus on one environment by **including** it. Only tasks carrying an included tag are
+Focus on one environment by **requiring** it. Only tasks carrying a required tag are
 then listed:
 
 ```sh
-next tag include @work      # only @work tasks
+next tag require @work      # only @work tasks
 next tag clear-state        # show everything again
 next tag                    # show the current state, then the tag list
 ```
@@ -109,11 +109,11 @@ next list                   # #laptop tasks hidden
 next tag clear-state '#laptop'
 ```
 
-State is inherited by nested tags, and `default` lets a child opt out of its parent's:
+State is inherited by nested tags, and `accept` lets a child opt out of its parent's:
 
 ```sh
 next tag exclude @home            # not doing home tasks…
-next tag default @home/kitchen    # …except in the kitchen
+next tag accept @home/kitchen     # …except in the kitchen
 ```
 
 ---

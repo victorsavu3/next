@@ -230,12 +230,12 @@ pub fn create_task(
 
     // Auto-apply the included context tags when the task has none of its own,
     // so a task captured while working in a context lands in it. Only `@` tags:
-    // inheriting an included `#resource` or a freeform label would attach
+    // inheriting a required `#resource` or a freeform label would attach
     // something the user never asked for, and unlike a context that is not
     // recoverable from where they were.
     if !task.tags.iter().any(|t| tag::is_context(t)) {
         let state = store.get_state()?;
-        for ctx_tag in state.tags_with(crate::core::domain::state::TagState::Included) {
+        for ctx_tag in state.tags_with(crate::core::domain::state::TagState::Required) {
             if tag::is_context(ctx_tag) {
                 task.tags.push(ctx_tag.to_owned());
             }
@@ -524,9 +524,9 @@ mod tests {
         // Include a context tag, plus tags of the other two kinds that must
         // NOT be inherited: only a context says "where I am working".
         let mut state = ctx.store.get_state().unwrap();
-        state.set_state("@work", Some(TagState::Included));
-        state.set_state("#printer", Some(TagState::Included));
-        state.set_state("urgent", Some(TagState::Included));
+        state.set_state("@work", Some(TagState::Required));
+        state.set_state("#printer", Some(TagState::Required));
+        state.set_state("urgent", Some(TagState::Required));
         ctx.store.save_state(&state).unwrap();
 
         let task = create_task(
@@ -555,7 +555,7 @@ mod tests {
 
         let (_dir, mut ctx) = make_ctx();
         let mut state = ctx.store.get_state().unwrap();
-        state.set_state("@work", Some(TagState::Included));
+        state.set_state("@work", Some(TagState::Required));
         ctx.store.save_state(&state).unwrap();
 
         let params = CreateTaskParams {

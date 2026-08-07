@@ -2118,9 +2118,9 @@ fn open_url(url: &str) -> anyhow::Result<()> {
 fn describe_tag_state(tag: &str, state: Option<crate::core::domain::state::TagState>) -> String {
     use crate::core::domain::state::TagState;
     match state {
-        Some(TagState::Included) => format!("{tag} included"),
+        Some(TagState::Required) => format!("{tag} required"),
         Some(TagState::Excluded) => format!("{tag} excluded"),
-        Some(TagState::Default) => format!("{tag} pinned to no state"),
+        Some(TagState::Accepted) => format!("{tag} pinned to accepted"),
         None => format!("{tag} state cleared"),
     }
 }
@@ -2326,7 +2326,7 @@ mod tests {
         let mut state = app.repo.store().get_state().unwrap();
         state.set_state(
             "@work",
-            Some(crate::core::domain::state::TagState::Included),
+            Some(crate::core::domain::state::TagState::Required),
         );
         app.repo.store_mut().save_state(&state).unwrap();
         app.update(Action::ToggleClosed);
@@ -3216,7 +3216,7 @@ mod tests {
         // First press includes it: only @work tasks remain.
         app.update(Action::StateToggle);
         let state = app.repo.store().get_state().unwrap();
-        assert_eq!(state.state_of("@work"), Some(TagState::Included));
+        assert_eq!(state.state_of("@work"), Some(TagState::Required));
         let titles = visible_titles(&app);
         assert!(titles.contains(&"work task".to_owned()));
         assert!(!titles.contains(&"home task".to_owned()));
@@ -3228,7 +3228,7 @@ mod tests {
                 .find(|r| r.tag == "@work")
                 .unwrap()
                 .own,
-            Some(TagState::Included),
+            Some(TagState::Required),
             "the panel was rebuilt from the new state"
         );
 
@@ -3254,7 +3254,7 @@ mod tests {
         app.update(Action::OpenStatePanel);
         app.update(Action::StateToggleExcluded);
         let state = app.repo.store().get_state().unwrap();
-        assert_eq!(state.tags.get("@work"), Some(&TagState::Default));
+        assert_eq!(state.tags.get("@work"), Some(&TagState::Accepted));
 
         // …and again on excluded, which hides the task.
         app.update(Action::StateToggleExcluded);

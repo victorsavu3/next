@@ -1,10 +1,14 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::core::domain::tag;
 
 /// What the machine-local state says about tasks carrying a tag.
+///
+/// Each name states its own rule, because the rules are not symmetric and a
+/// vaguer word (the old `Included` / `Default`) left the reader guessing which
+/// one applied.
 ///
 /// There is one model for every kind of tag. `@` and `#` are naming
 /// conventions — they say what a tag is *for*, and the tag catalog groups by
@@ -13,14 +17,21 @@ use crate::core::domain::tag;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TagState {
-    /// Tasks carrying this tag are the ones being worked on.
-    Included,
-    /// Tasks carrying this tag are hidden.
+    /// While *anything* is required, a task must carry one of the required tags
+    /// to be listed. Requiring `@work` therefore hides everything else,
+    /// including untagged tasks — which is what makes it a filter rather than
+    /// the additive whitelist the old name `Included` suggested.
+    #[serde(alias = "included")]
+    Required,
+    /// Tasks carrying this tag are hidden. Exclusion beats requirement.
     Excluded,
-    /// No state — and, unlike simply leaving the tag out, this *stops*
-    /// inheritance from an ancestor. `@work` excluded plus `@work/urgent`
-    /// defaulted hides the former and shows the latter.
-    Default,
+    /// Neither required nor hidden — and, unlike simply leaving the tag out,
+    /// this *stops* inheritance from an ancestor. `@work` excluded plus
+    /// `@work/urgent` accepted hides the former and shows the latter. That is
+    /// the whole reason it is a value rather than an absent key, and why the
+    /// old name `Default` was actively misleading: absence is not what it means.
+    #[serde(alias = "default")]
+    Accepted,
 }
 
 /// Global runtime state persisted in the machine-local `state.toml`.
@@ -30,7 +41,11 @@ pub struct GlobalState {
     /// that has one; a tag with no such ancestor has no state at all.
     ///
     /// Ordered so the file has a stable diff and listings need no re-sort.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "tolerant_tag_states"
+    )]
     pub tags: BTreeMap<String, TagState>,
 
     /// Active user filter. When non-empty, the task list is limited to tasks
@@ -42,11 +57,44 @@ pub struct GlobalState {
     pub active_users: Vec<String>,
 }
 
+/// Reads the tag-state map, dropping entries whose value this build does not
+/// recognise instead of failing the whole file.
+///
+/// `state.toml` is machine-local and rewritten on every state change, so one
+/// unreadable entry is worth losing. Failing the parse is not: the file is read
+/// on *every* command, so a value written by a newer build — or left by a
+/// rename that did not keep an alias — would make the tool unusable rather than
+/// merely forgetful.
+fn tolerant_tag_states<'de, D>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<String, TagState>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw: BTreeMap<String, toml::Value> = BTreeMap::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(
+            |(tag_name, value)| match TagState::deserialize(value.clone()) {
+                Ok(state) => Some((tag_name, state)),
+                Err(_) => {
+                    tracing::warn!(
+                        tag = %tag_name,
+                        value = %value,
+                        "dropping unrecognised tag state from state.toml"
+                    );
+                    None
+                }
+            },
+        )
+        .collect())
+}
+
 impl GlobalState {
     /// The state that applies to `tag_name`, following the hierarchy.
     ///
     /// The most specific explicit entry wins, so `#office` excluded makes
-    /// `#office/printer` excluded too, and an explicit [`TagState::Default`] on
+    /// `#office/printer` excluded too, and an explicit [`TagState::Accepted`] on
     /// the child overrides the inherited exclusion. Returns `None` when neither
     /// the tag nor any ancestor has an entry.
     pub fn state_of(&self, tag_name: &str) -> Option<TagState> {
@@ -56,34 +104,34 @@ impl GlobalState {
             .into_iter()
             .rev()
             .find_map(|t| self.tags.get(t).copied())
-            .filter(|s| *s != TagState::Default)
+            .filter(|s| *s != TagState::Accepted)
     }
 
     /// Whether a task carrying `task_tags` passes the tag state.
     ///
     /// Two rules, applied to every tag kind alike:
     /// 1. any tag resolving to [`TagState::Excluded`] hides the task;
-    /// 2. when anything at all is included, a task must carry at least one tag
-    ///    resolving to [`TagState::Included`].
+    /// 2. when anything at all is required, a task must carry at least one tag
+    ///    resolving to [`TagState::Required`].
     ///
-    /// Rule 2 is a disjunction because included tags are a set of toggles —
+    /// Rule 2 is a disjunction because required tags are a set of toggles —
     /// "I am at work, or at home" — not a conjunction of requirements. A query
     /// needing conjunction spells it out with `+a +b`.
     pub fn admits(&self, task_tags: &[String]) -> bool {
-        let mut included = false;
+        let mut satisfied = false;
         for t in task_tags {
             match self.state_of(t) {
                 Some(TagState::Excluded) => return false,
-                Some(TagState::Included) => included = true,
+                Some(TagState::Required) => satisfied = true,
                 _ => {}
             }
         }
-        included || !self.any_included()
+        satisfied || !self.any_required()
     }
 
-    /// Whether any tag is currently included.
-    pub fn any_included(&self) -> bool {
-        self.tags.values().any(|s| *s == TagState::Included)
+    /// Whether any tag is currently required.
+    pub fn any_required(&self) -> bool {
+        self.tags.values().any(|s| *s == TagState::Required)
     }
 
     /// Sets the state of `tag_name`, or removes the entry entirely when
@@ -129,7 +177,7 @@ mod tests {
         let s = GlobalState::default();
         assert!(s.admits(&tags(&["@work"])));
         assert!(s.admits(&[]));
-        assert!(!s.any_included());
+        assert!(!s.any_required());
     }
 
     #[test]
@@ -142,35 +190,38 @@ mod tests {
     }
 
     #[test]
-    fn inclusion_works_for_every_kind_too() {
+    fn requirement_works_for_every_kind_too() {
         // The point of unification: a resource is not exclude-only, and a
-        // freeform tag is not inclusion-only.
+        // freeform tag cannot only be required.
         for tag_name in ["@work", "#laptop", "urgent"] {
-            let s = state(&[(tag_name, TagState::Included)]);
+            let s = state(&[(tag_name, TagState::Required)]);
             assert!(s.admits(&tags(&[tag_name])), "{tag_name}");
             assert!(!s.admits(&tags(&["other"])), "{tag_name}");
-            assert!(!s.admits(&[]), "{tag_name}: untagged task is not included");
+            assert!(
+                !s.admits(&[]),
+                "{tag_name}: untagged task carries nothing required"
+            );
         }
     }
 
     #[test]
-    fn included_tags_are_a_disjunction() {
-        let s = state(&[("@work", TagState::Included), ("@home", TagState::Included)]);
+    fn required_tags_are_a_disjunction() {
+        let s = state(&[("@work", TagState::Required), ("@home", TagState::Required)]);
         assert!(s.admits(&tags(&["@work"])));
         assert!(s.admits(&tags(&["@home"])));
         assert!(!s.admits(&tags(&["@errands"])));
     }
 
     #[test]
-    fn exclusion_beats_inclusion() {
+    fn exclusion_beats_requirement() {
         let s = state(&[
-            ("@work", TagState::Included),
+            ("@work", TagState::Required),
             ("#printer", TagState::Excluded),
         ]);
         assert!(s.admits(&tags(&["@work"])));
         assert!(
             !s.admits(&tags(&["@work", "#printer"])),
-            "an excluded tag hides the task even when another tag is included"
+            "an excluded tag hides the task even when another tag is required"
         );
     }
 
@@ -190,21 +241,21 @@ mod tests {
     fn the_most_specific_entry_wins() {
         let s = state(&[
             ("@work", TagState::Excluded),
-            ("@work/urgent", TagState::Included),
+            ("@work/urgent", TagState::Required),
         ]);
         assert_eq!(s.state_of("@work"), Some(TagState::Excluded));
-        assert_eq!(s.state_of("@work/urgent"), Some(TagState::Included));
+        assert_eq!(s.state_of("@work/urgent"), Some(TagState::Required));
         assert!(s.admits(&tags(&["@work/urgent"])));
         assert!(!s.admits(&tags(&["@work/admin"])));
     }
 
     #[test]
-    fn explicit_default_stops_inheritance() {
-        // This is why Default exists as a value rather than as an absent key:
-        // absence inherits, an explicit default does not.
+    fn explicit_acceptance_stops_inheritance() {
+        // This is why Accepted exists as a value rather than as an absent key:
+        // absence inherits, an explicit acceptance does not.
         let s = state(&[
             ("@work", TagState::Excluded),
-            ("@work/urgent", TagState::Default),
+            ("@work/urgent", TagState::Accepted),
         ]);
         assert_eq!(s.state_of("@work/urgent"), None);
         assert!(s.admits(&tags(&["@work/urgent"])));
@@ -213,7 +264,7 @@ mod tests {
 
     #[test]
     fn set_state_clears_with_none() {
-        let mut s = state(&[("@work", TagState::Included)]);
+        let mut s = state(&[("@work", TagState::Required)]);
         s.set_state("@work", None);
         assert!(s.tags.is_empty());
         assert!(s.admits(&tags(&["@anything"])));
@@ -222,11 +273,49 @@ mod tests {
     #[test]
     fn tags_with_lists_in_order() {
         let s = state(&[
-            ("@work", TagState::Included),
+            ("@work", TagState::Required),
             ("#printer", TagState::Excluded),
-            ("@home", TagState::Included),
+            ("@home", TagState::Required),
         ]);
-        assert_eq!(s.tags_with(TagState::Included), vec!["@home", "@work"]);
+        assert_eq!(s.tags_with(TagState::Required), vec!["@home", "@work"]);
         assert_eq!(s.tags_with(TagState::Excluded), vec!["#printer"]);
+    }
+
+    // ── Serialisation ────────────────────────────────────────────────────────
+
+    #[test]
+    fn states_serialise_under_their_new_names() {
+        let s = state(&[
+            ("@work", TagState::Required),
+            ("#printer", TagState::Excluded),
+            ("@home", TagState::Accepted),
+        ]);
+        let out = toml::to_string(&s).unwrap();
+        assert!(out.contains(r#""@work" = "required""#), "{out}");
+        assert!(out.contains(r##""#printer" = "excluded""##), "{out}");
+        assert!(out.contains(r#""@home" = "accepted""#), "{out}");
+    }
+
+    #[test]
+    fn the_old_spellings_still_load() {
+        // A pure rename should not silently drop the state someone had set, so
+        // the previous names stay readable. Nothing writes them any more, so a
+        // file self-heals on the next state change.
+        let toml = "[tags]\n\"@work\" = \"included\"\n\"@home\" = \"default\"\n\"#printer\" = \"excluded\"\n";
+        let s: GlobalState = toml::from_str(toml).unwrap();
+        assert_eq!(s.tags.get("@work"), Some(&TagState::Required));
+        assert_eq!(s.tags.get("@home"), Some(&TagState::Accepted));
+        assert_eq!(s.tags.get("#printer"), Some(&TagState::Excluded));
+    }
+
+    #[test]
+    fn an_unreadable_state_is_dropped_not_fatal() {
+        // state.toml is read on every command, so one bad entry must not brick
+        // the tool. The rest of the file has to survive.
+        let toml = "[tags]\n\"@work\" = \"required\"\n\"@mystery\" = \"sideways\"\n\"@odd\" = 7\n";
+        let s: GlobalState = toml::from_str(toml).unwrap();
+        assert_eq!(s.tags.get("@work"), Some(&TagState::Required));
+        assert!(!s.tags.contains_key("@mystery"));
+        assert!(!s.tags.contains_key("@odd"));
     }
 }

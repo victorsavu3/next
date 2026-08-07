@@ -612,7 +612,7 @@ mod tests {
         home_task.tags = vec!["@home".to_owned()];
 
         let mut state = GlobalState::default();
-        state.set_state("@work", Some(TagState::Included));
+        state.set_state("@work", Some(TagState::Required));
 
         let build = build_items(
             &[work_task.clone(), home_task.clone()],
@@ -663,7 +663,7 @@ mod tests {
         done_home.mark_done(today());
 
         let mut state = GlobalState::default();
-        state.set_state("@work", Some(TagState::Included));
+        state.set_state("@work", Some(TagState::Required));
 
         let build = build_items(
             &[done_work.clone(), done_home.clone()],

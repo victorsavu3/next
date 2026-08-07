@@ -1164,13 +1164,13 @@ mod state_popup {
                 // Inherited state is dimmed: it is real, but it belongs to a
                 // parent tag, and the row cycles its own entry, not that one.
                 let style = match (r.effective, r.is_inherited()) {
-                    (Some(TagState::Included), false) => Style::default()
+                    (Some(TagState::Required), false) => Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
                     (Some(TagState::Excluded), false) => {
                         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
                     }
-                    (Some(TagState::Included), true) => Style::default().fg(Color::Green),
+                    (Some(TagState::Required), true) => Style::default().fg(Color::Green),
                     (Some(TagState::Excluded), true) => Style::default().fg(Color::Red),
                     _ => Style::default().fg(Color::DarkGray),
                 };

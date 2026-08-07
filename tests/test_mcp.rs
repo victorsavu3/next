@@ -390,7 +390,7 @@ async fn tag_state_roundtrip() {
         addr,
         "tok",
         "set_tag_state",
-        json!({ "tags": ["@work"], "state": "included", "autosync": false }),
+        json!({ "tags": ["@work"], "state": "required", "autosync": false }),
     )
     .await;
     tool_call(
@@ -402,7 +402,7 @@ async fn tag_state_roundtrip() {
     )
     .await;
     let state = result_value(&tool_call(&c, addr, "tok", "get_state", json!({})).await);
-    assert_eq!(state["tags"]["@work"], "included");
+    assert_eq!(state["tags"]["@work"], "required");
     assert_eq!(state["tags"]["#printer"], "excluded");
 
     tool_call(

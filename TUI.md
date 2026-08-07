@@ -196,7 +196,7 @@ plus a "top-level / no parent" option.
 ### State panel (`S`)
 
 Two sections — Tags and Users — applied through the same `state_transaction` lock the
-CLI's `next tag include|exclude|…` and `next user` commands use. The list reloads after
+CLI's `next tag require|exclude|…` and `next user` commands use. The list reloads after
 each toggle.
 
 Tags are one list regardless of sigil, since every kind takes the same states. A row
@@ -209,7 +209,7 @@ dimmed, because the row's key cycles its *own* entry, not the parent's.
 | `Tab` / `Shift-Tab` (`BackTab`) | Focus the next / previous section |
 | `j` / `Down` | Highlight the next row in the section |
 | `k` / `Up` | Highlight the previous row in the section |
-| `Space` / `Enter` / `a` | Cycle the highlighted tag: none → included → excluded → default → none (Tags section); toggle membership (Users section) |
+| `Space` / `Enter` / `a` | Cycle the highlighted tag: none → required → excluded → accepted → none (Tags section); toggle membership (Users section) |
 | `x` | Run the tag cycle backwards, so a mis-press is one key away from undone (Tags section only) |
 | `C` (shift) | Clear the focused section (every tag state / all users) |
 

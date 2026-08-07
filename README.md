@@ -115,25 +115,28 @@ parent applies to every descendant.
 
 ### Tag state
 
-Each tag is **included**, **excluded**, or **default**, and the same three states apply
+Each tag is **required**, **excluded**, or **accepted**, and the same three states apply
 to every kind:
 
 ```sh
-next tag include @home           # only @home tasks (and nothing untagged)
-next tag include @home @errands  # either one — inclusion is a disjunction
+next tag require @home           # only @home tasks (and nothing untagged)
+next tag require @home @errands  # either one — requiring several is a disjunction
 next tag exclude '#printer'      # the printer is broken; hide its tasks
 next tag clear-state             # back to showing everything
 ```
 
-While anything is included, only tasks carrying an included tag are listed. An excluded
-tag hides a task even if another of its tags is included. State is inherited by
-descendants, and `next tag default <tag>` pins a tag to no state so it can opt out of
+While anything is required, only tasks carrying a required tag are listed. An excluded
+tag hides a task even if another of its tags is required. State is inherited by
+descendants, and `next tag accept <tag>` pins a tag to neither, so it can opt out of
 its parent's:
 
 ```sh
 next tag exclude @home           # not doing home tasks…
-next tag default @home/kitchen   # …except in the kitchen
+next tag accept @home/kitchen    # …except in the kitchen
 ```
+
+`accept` is not the same as `clear-state`: accepting *pins* the tag, which is what stops
+it inheriting from its parent, while clearing removes the entry so inheritance resumes.
 
 `next tag` shows the current state at the top of its listing.
 
@@ -249,7 +252,7 @@ All list commands accept filter tokens in any order:
 | `next open <id>` | Open the task's URL in the browser |
 | `next data set/unset/get` | Manage arbitrary key-value data on a task |
 | `next tag [rename/describe/set-priority/set-no-time-urgency/…]` | List tags; rename a tag; manage tag metadata |
-| `next tag [include/exclude/default/clear-state]` | Set which tags are included, excluded, or pinned to no state |
+| `next tag [require/exclude/accept/clear-state]` | Set which tags are required, excluded, or pinned to accepted |
 | `next user [set/clear/list]` | Manage user filter |
 | `next plugin [register/watch/unwatch/unregister/set-sync/set-interval/enable/disable/list]` | Manage export plugins and their periodic syncs (see [Plugins](#plugins)) |
 | `next forecast` | Upcoming due dates grouped by time, including projected schedule-recurrence occurrences over the horizon |
@@ -464,14 +467,14 @@ systemctl --user start next-mcp
 |------|-----|-------------|
 | `list_tasks` | R | List scored tasks; accepts filter tokens + `context` override, `page`/`page_size` pagination, and `archived: true` for the archive |
 | `get_task` | R | Full details of one task + direct children + score breakdown |
-| `add_task` | M | Create a task (inherits the included `@context` tags if the task has none) |
+| `add_task` | M | Create a task (inherits the required `@context` tags if the task has none) |
 | `update_task` | M | Edit fields or transition state (start/stop/done/cancel/move); `done` accepts `completed_at` |
 | `delete_task` | M | Permanently remove a task |
 | `sync` | M | Pull then push (`push_only`/`pull_only` optional); fails fast if sync already in progress |
 | `get_diff` | R | Working-tree diff (git status + diff HEAD) for inspecting conflicts/uncommitted changes |
 | `force_sync` | M | Fetch + hard-reset to FETCH_HEAD, discarding local changes; recovery from stuck conflicts |
 | `get_state` | R | The per-tag state map and the active users |
-| `set_tag_state` | M | Set tags to `included`/`excluded`/`default`, or `clear` their entry |
+| `set_tag_state` | M | Set tags to `required`/`excluded`/`accepted`, or `clear` their entry |
 | `set_user_filter` | M | Replace active user filter |
 | `manage_tag` | R/M | Tag rename plus metadata CRUD (list/show/rename/describe/set_priority/set_no_time_urgency/…) |
 | `manage_task_data` | R/M | Task data key-value pairs (get/list/set/unset) |

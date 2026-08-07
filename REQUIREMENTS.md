@@ -84,9 +84,9 @@ never inside the repository and MUST NOT be committed to git.
 active_users = ["alice"]            # active user filter (empty = no filter)
 
 [tags]                              # one entry per tag with a state; absent = inherit
-"@home"          = "included"
+"@home"          = "required"
 "#printer"       = "excluded"
-"@home/kitchen"  = "default"        # pinned: ignores any state on @home
+"@home/kitchen"  = "accepted"       # pinned: ignores any state on @home
 ```
 
 The tag map MUST be keyed by the full tag including its sigil, so every kind of tag lives
@@ -223,36 +223,42 @@ queried (`has:context`), but MUST NOT be given distinct filtering rules.
 All filtering by tag is governed by the tag state in §3.1.1. When no tag has a state, all
 tasks MUST be shown regardless of their tags.
 
-A query-time `context:@name` filter MUST replace the *included* set for that single
+A query-time `context:@name` filter MUST replace the *required* set for that single
 invocation, leaving exclusions in force.
 
 ### 3.1.1 Tag state
 
-Every tag MUST take the same three states, whatever its sigil: `included`, `excluded`, or
-`default`. `@` and `#` are naming conventions and MUST NOT change how a tag filters — in
+Every tag MUST take the same three states, whatever its sigil: `required`, `excluded`, or
+`accepted`. `@` and `#` are naming conventions and MUST NOT change how a tag filters — in
 particular a `#resource` is not restricted to being excluded, and an `@context` gets no
 special treatment.
 
 Two rules, applied to every tag alike:
 
 1. a task carrying any tag that resolves to `excluded` MUST be hidden;
-2. while any tag is `included`, a task MUST carry at least one tag resolving to
-   `included` to be shown. Included tags are a disjunction.
+2. while any tag is `required`, a task MUST carry at least one tag resolving to
+   `required` to be shown. Required tags are a disjunction.
 
 Rule 1 takes precedence over rule 2. A task carrying no tags at all is therefore hidden
-whenever anything is included.
+whenever anything is required.
 
 **Inheritance.** A tag with no entry inherits the state of its nearest ancestor that has
 one, so excluding `#office` also excludes `#office/printer`. The most specific entry
-wins. An explicit `default` MUST stop that inheritance, which is the only way for a child
-to opt out of its parent's state. Matching is downward only: including `@work` covers
-`@work/frontend`, but including `@work/frontend` does NOT cover `@work`.
+wins. An explicit `accepted` MUST stop that inheritance, which is the only way for a
+child to opt out of its parent's state. Matching is downward only: requiring `@work`
+covers `@work/frontend`, but requiring `@work/frontend` does NOT cover `@work`.
 
 **Independence from `--all`.** The tag state MUST still apply when the implicit gate is
 disabled: `--all` widens the statuses shown, not the tags.
 
-CLI: `next tag include|exclude|default <tag>...` / `next tag clear-state [<tag>...]`
-MCP: `set_tag_state` with `tags` and `state` (`included`/`excluded`/`default`/`clear`).
+**Reading a state this build does not know.** An unrecognised value in the `[tags]` map
+MUST be dropped rather than fail the load. `state.toml` is read on every command, so a
+value written by a newer build must not make the tool unusable. The previous names
+(`included`, `default`) MUST still load as `required` and `accepted`, so a rename does
+not silently discard a user's state; nothing writes them.
+
+CLI: `next tag require|exclude|accept <tag>...` / `next tag clear-state [<tag>...]`
+MCP: `set_tag_state` with `tags` and `state` (`required`/`excluded`/`accepted`/`clear`).
 
 ### 3.3 User filtering
 
@@ -468,10 +474,10 @@ next add <title> [options]
 | `--adjust <float>` | Sets `score_adjustment` |
 | `--assignee <name>` | Sets `assignee` |
 
-When any `@context` tag is included and the new task carries no `@context` tags, those
-included contexts MUST be automatically appended to the task's `tags` array. If the user
-supplies any `@` tag, auto-apply is skipped. Only contexts are inherited this way: an
-included `#resource` or freeform tag MUST NOT be attached to a new task, since unlike a
+When any `@context` tag is required and the new task carries no `@context` tags, those
+required contexts MUST be automatically appended to the task's `tags` array. If the user
+supplies any `@` tag, auto-apply is skipped. Only contexts are inherited this way: a
+required `#resource` or freeform tag MUST NOT be attached to a new task, since unlike a
 working environment it is not implied by where the task was captured.
 
 ### 8.2 `next list` and `next next`
@@ -531,9 +537,9 @@ resource-specific commands.
 
 ```
 next tag                                 # show the current state, then the tag catalogue
-next tag include <tag>...                # only these tags' tasks are listed
+next tag require <tag>...                # only these tags' tasks are listed
 next tag exclude <tag>...                # hide tasks carrying these tags
-next tag default <tag>...                # pin to no state, ignoring a parent tag's state
+next tag accept <tag>...                 # pin to accepted, ignoring a parent tag's state
 next tag clear-state [<tag>...]          # drop entries (all of them when none given)
 ```
 

@@ -13,7 +13,7 @@
 //! This module owns only the *presentation/navigation* model (which section is
 //! focused, which row is highlighted, and the discovered+stored entry lists).
 //! The actual mutations are applied by [`App`](super::app::App) through
-//! `state_transaction`, mirroring `next tag include|exclude|default`; the panel
+//! `state_transaction`, mirroring `next tag require|exclude|accept`; the panel
 //! is rebuilt from the fresh state afterwards.
 
 use std::collections::BTreeSet;
@@ -75,40 +75,40 @@ impl TagRow {
     /// The label shown in the row: the effective state, marked when inherited.
     pub fn state_label(&self) -> String {
         let name = match self.effective {
-            Some(TagState::Included) => "included",
+            Some(TagState::Required) => "required",
             Some(TagState::Excluded) => "excluded",
-            Some(TagState::Default) | None => "-",
+            Some(TagState::Accepted) | None => "-",
         };
         if self.is_inherited() {
             format!("{name} (inherited)")
-        } else if self.own == Some(TagState::Default) {
-            "default (pinned)".to_owned()
+        } else if self.own == Some(TagState::Accepted) {
+            "accepted (pinned)".to_owned()
         } else {
             name.to_owned()
         }
     }
 
-    /// The next state in the cycle none → included → excluded → default → none.
+    /// The next state in the cycle none → required → excluded → accepted → none.
     ///
     /// One key covers every state because every tag has the same states; the
-    /// pinned `default` is in the cycle because it is the only way to opt a
+    /// pinned `accepted` is in the cycle because it is the only way to opt a
     /// child out of a parent's state.
     pub fn cycled(&self) -> Option<TagState> {
         match self.own {
-            None => Some(TagState::Included),
-            Some(TagState::Included) => Some(TagState::Excluded),
-            Some(TagState::Excluded) => Some(TagState::Default),
-            Some(TagState::Default) => None,
+            None => Some(TagState::Required),
+            Some(TagState::Required) => Some(TagState::Excluded),
+            Some(TagState::Excluded) => Some(TagState::Accepted),
+            Some(TagState::Accepted) => None,
         }
     }
 
     /// The cycle run backwards, so a mis-press is one key away from undone.
     pub fn cycled_back(&self) -> Option<TagState> {
         match self.own {
-            None => Some(TagState::Default),
-            Some(TagState::Default) => Some(TagState::Excluded),
-            Some(TagState::Excluded) => Some(TagState::Included),
-            Some(TagState::Included) => None,
+            None => Some(TagState::Accepted),
+            Some(TagState::Accepted) => Some(TagState::Excluded),
+            Some(TagState::Excluded) => Some(TagState::Required),
+            Some(TagState::Required) => None,
         }
     }
 }
@@ -274,7 +274,7 @@ mod tests {
     fn tags_union_tasks_and_state_across_kinds() {
         let tasks = vec![task_with(&["@work", "#printer", "errand"], None)];
         let mut state = GlobalState::default();
-        state.set_state("@home", Some(TagState::Included));
+        state.set_state("@home", Some(TagState::Required));
         state.set_state("@work", Some(TagState::Excluded));
 
         let rows = build_tags(&tasks, &state);
@@ -322,9 +322,9 @@ mod tests {
         assert_eq!(
             seen,
             vec![
-                Some(TagState::Included),
+                Some(TagState::Required),
                 Some(TagState::Excluded),
-                Some(TagState::Default),
+                Some(TagState::Accepted),
                 None,
             ]
         );
@@ -334,14 +334,14 @@ mod tests {
     fn the_reverse_cycle_undoes_the_forward_one() {
         for own in [
             None,
-            Some(TagState::Included),
+            Some(TagState::Required),
             Some(TagState::Excluded),
-            Some(TagState::Default),
+            Some(TagState::Accepted),
         ] {
             let row = TagRow {
                 tag: "@work".to_owned(),
                 own,
-                effective: own.filter(|s| *s != TagState::Default),
+                effective: own.filter(|s| *s != TagState::Accepted),
             };
             let forward = TagRow {
                 own: row.cycled(),

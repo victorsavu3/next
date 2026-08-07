@@ -235,7 +235,7 @@ fn updates_machine_local_state() {
         .repo
         .state_transaction(|store| {
             let mut state = store.get_state()?;
-            state.set_state("@ai/task-manager", Some(TagState::Included));
+            state.set_state("@ai/task-manager", Some(TagState::Required));
             state.set_state("@ai/task-manager/mcp", Some(TagState::Excluded));
             state.set_state("@work", Some(TagState::Excluded));
             store.save_state(&state)?;
@@ -249,7 +249,7 @@ fn updates_machine_local_state() {
     let state = env.ctx.repo.store().get_state().unwrap();
     assert_eq!(
         state.state_of("@ai/next"),
-        Some(TagState::Included),
+        Some(TagState::Required),
         "the included tag is not orphaned"
     );
     assert_eq!(state.state_of("@ai/next/mcp"), Some(TagState::Excluded));

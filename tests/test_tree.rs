@@ -462,7 +462,7 @@ fn tree_closed_respects_context() {
 
     tag::run(
         tag::Args {
-            subcommand: Some(tag::TagSubcommand::Include(tag::TagStateArgs {
+            subcommand: Some(tag::TagSubcommand::Require(tag::TagStateArgs {
                 tags: vec!["@work".into()],
             })),
         },

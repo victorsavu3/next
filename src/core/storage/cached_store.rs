@@ -1057,11 +1057,11 @@ mod tests {
         assert!(default.tags.is_empty());
 
         let mut state = GlobalState::default();
-        state.set_state("@work", Some(TagState::Included));
+        state.set_state("@work", Some(TagState::Required));
         store.save_state(&state).unwrap();
 
         let loaded = store.get_state().unwrap();
-        assert_eq!(loaded.state_of("@work"), Some(TagState::Included));
+        assert_eq!(loaded.state_of("@work"), Some(TagState::Required));
     }
 
     #[test]

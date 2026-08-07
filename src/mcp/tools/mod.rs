@@ -26,7 +26,7 @@ pub fn all_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "filter_tokens": { "type": "array", "items": { "type": "string" }, "description": "Filter expression, joined with spaces. A BARE WORD SEARCHES the title, description, notes and url — a tag needs its sigil: +tag requires it, -tag excludes it (hierarchical: +@work matches @work/backend). Also: field predicates (status:open, priority:high, due<+7d, due:2026-08-01..eom, assignee:alice, slug:x, data.key:v), has:field / no:field, is:overdue|blocked|project|recurring|closed|assigned, quoted phrases (\"cold tier\") and prefixes (arch*), and the booleans and/or/not with parentheses (adjacency means and). parent:slug, context:@name and user:name scope the whole query and may not appear inside or/not. Example: [\"+@work\", \"due<+7d\", \"not\", \"is:blocked\"]" },
-                    "context": { "type": "array", "items": { "type": "string" }, "description": "Override the included tags for this call (e.g. [\"@work\"]). Pass [] to include nothing, which shows every tag that is not excluded. Exclusions still come from the stored state." },
+                    "context": { "type": "array", "items": { "type": "string" }, "description": "Override the required tags for this call (e.g. [\"@work\"]). Pass [] to require nothing, which shows every tag that is not excluded. Exclusions still come from the stored state." },
                     "limit": { "type": "integer", "description": "Legacy alias for page_size" },
                     "page_size": { "type": "integer", "description": "Tasks per page (default 50)" },
                     "page": { "type": "integer", "description": "1-indexed page of results (default 1)" },
@@ -149,18 +149,18 @@ pub fn all_tools() -> Vec<Tool> {
         },
         Tool {
             name: "get_state",
-            description: "Get the current machine-local state: the per-tag state map (included/excluded/default) and the active users.",
+            description: "Get the current machine-local state: the per-tag state map (required/excluded/accepted) and the active users.",
             input_schema: json!({ "type": "object", "properties": {} }),
         },
         Tool {
             name: "set_tag_state",
-            description: "Set the machine-local state of one or more tags. Every tag kind works the same way: `included` limits the list to tasks carrying it, `excluded` hides them, `default` pins the tag to no state so it ignores a parent tag's state, and `clear` removes the entry so it inherits again. Replaces the old set_context and set_resource tools.",
+            description: "Set the machine-local state of one or more tags. Every tag kind works the same way: `required` means that while anything is required a task must carry one of the required tags to be listed, `excluded` hides tasks carrying the tag, `accepted` pins the tag to neither so it ignores a parent tag's state, and `clear` removes the entry so it inherits again. Replaces the old set_context and set_resource tools.",
             input_schema: json!({
                 "type": "object",
                 "required": ["tags", "state"],
                 "properties": {
                     "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to change, e.g. [\"@work\", \"#printer\", \"errand\"]" },
-                    "state": { "type": "string", "enum": ["included", "excluded", "default", "clear"] },
+                    "state": { "type": "string", "enum": ["required", "excluded", "accepted", "clear"] },
                     "autosync": { "type": "boolean", "default": true }
                 }
             }),
@@ -241,12 +241,13 @@ works:
 
 Every tag, whatever its kind, is in one of three states, set with \
 `set_tag_state`:
-- **included** — while anything is included, only tasks carrying an included \
-tag are listed.
-- **excluded** — tasks carrying it are hidden. Exclusion beats inclusion.
-- **default** — no state. Setting this explicitly also stops the tag \
-inheriting a parent tag's state; `clear` instead removes the entry so it \
-inherits again.
+- **required** — while anything is required, a task must carry one of the \
+required tags to be listed. Requiring several is a disjunction (\"at work OR \
+at home\"), and untagged tasks are hidden too.
+- **excluded** — tasks carrying it are hidden. Exclusion beats requirement.
+- **accepted** — neither required nor hidden. Setting this explicitly also \
+stops the tag inheriting a parent tag's state; `clear` instead removes the \
+entry so it inherits again.
 
 All kinds nest with `/` (e.g. `@work/frontend`, `#office/printer`): a state on \
 a parent applies to every descendant, and a filter on a parent segment matches \
@@ -255,7 +256,7 @@ added to the urgency of tasks bearing it, and `no_time_urgency` to stop age and 
 deadlines from raising that urgency.
 
 When creating tasks, reuse an existing tag from the lists below rather than \
-inventing a near-duplicate, and apply the included context unless the user says \
+inventing a near-duplicate, and apply the required context unless the user says \
 otherwise.";
 
 /// Builds the `instructions` string returned in the MCP `initialize` result.
@@ -270,22 +271,22 @@ pub fn server_instructions(ctx: &TaskRepository) -> String {
     if let Ok(state) = ctx.store.get_state() {
         out.push_str("\n\n## Current state\n");
         use crate::core::domain::state::TagState;
-        let included = state.tags_with(TagState::Included);
-        if included.is_empty() {
-            out.push_str("- Included tags: none (every tag that is not excluded is shown)\n");
+        let required = state.tags_with(TagState::Required);
+        if required.is_empty() {
+            out.push_str("- Required tags: none (every tag that is not excluded is shown)\n");
         } else {
-            let _ = writeln!(out, "- Included tags: {}", included.join(", "));
+            let _ = writeln!(out, "- Required tags: {}", required.join(", "));
         }
         let excluded = state.tags_with(TagState::Excluded);
         if !excluded.is_empty() {
             let _ = writeln!(out, "- Excluded tags: {}", excluded.join(", "));
         }
-        let defaulted = state.tags_with(TagState::Default);
-        if !defaulted.is_empty() {
+        let accepted = state.tags_with(TagState::Accepted);
+        if !accepted.is_empty() {
             let _ = writeln!(
                 out,
-                "- Tags pinned to no state (ignoring their parent): {}",
-                defaulted.join(", ")
+                "- Tags pinned to accepted (ignoring their parent): {}",
+                accepted.join(", ")
             );
         }
         if !state.active_users.is_empty() {
@@ -610,7 +611,7 @@ mod tests {
             "unexpected catalog: {text}"
         );
         assert!(
-            text.contains("Included tags: none"),
+            text.contains("Required tags: none"),
             "missing tag-state line: {text}"
         );
     }
@@ -664,7 +665,7 @@ mod tests {
     #[test]
     fn instructions_reflect_tag_state() {
         let (_dir, mut ctx) = make_ctx();
-        state::set_tag_state(&json!({ "tags": ["@work"], "state": "included" }), &mut ctx).unwrap();
+        state::set_tag_state(&json!({ "tags": ["@work"], "state": "required" }), &mut ctx).unwrap();
         state::set_tag_state(
             &json!({ "tags": ["#printer", "errand"], "state": "excluded" }),
             &mut ctx,
@@ -673,8 +674,8 @@ mod tests {
 
         let text = server_instructions(&ctx);
         assert!(
-            text.contains("Included tags: @work"),
-            "missing included tag: {text}"
+            text.contains("Required tags: @work"),
+            "missing required tag: {text}"
         );
         assert!(
             text.contains("Excluded tags: #printer, errand"),

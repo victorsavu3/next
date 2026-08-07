@@ -1,5 +1,5 @@
-//! Integration tests for the unified tag state (`next tag include|exclude|
-//! default|clear-state`), which replaced `next context` and `next resource`.
+//! Integration tests for the unified tag state (`next tag require|exclude|
+//! accept|clear-state`), which replaced `next context` and `next resource`.
 //!
 //! The theme throughout: a `@context`, a `#resource` and a freeform label are
 //! the same thing to the state model. Where a test could be written for one
@@ -97,11 +97,11 @@ fn include_exclude_and_default_apply_to_every_tag_kind() {
 
     run_state(
         &mut env,
-        tag::TagSubcommand::Include(state_args(&["@work", "#laptop", "urgent"])),
+        tag::TagSubcommand::Require(state_args(&["@work", "#laptop", "urgent"])),
     );
     let state = env.ctx.repo.store.get_state().unwrap();
     for t in ["@work", "#laptop", "urgent"] {
-        assert_eq!(state.state_of(t), Some(TagState::Included), "{t}");
+        assert_eq!(state.state_of(t), Some(TagState::Required), "{t}");
     }
 
     run_state(
@@ -119,7 +119,7 @@ fn clear_state_drops_entries_and_clears_all_with_no_arguments() {
     let mut env = common::setup();
     run_state(
         &mut env,
-        tag::TagSubcommand::Include(state_args(&["@work", "@home"])),
+        tag::TagSubcommand::Require(state_args(&["@work", "@home"])),
     );
 
     run_state(
@@ -130,7 +130,7 @@ fn clear_state_drops_entries_and_clears_all_with_no_arguments() {
     );
     let state = env.ctx.repo.store.get_state().unwrap();
     assert!(!state.tags.contains_key("@work"));
-    assert_eq!(state.state_of("@home"), Some(TagState::Included));
+    assert_eq!(state.state_of("@home"), Some(TagState::Required));
 
     run_state(
         &mut env,
@@ -144,7 +144,7 @@ fn a_malformed_tag_is_rejected() {
     let mut env = common::setup();
     let err = tag::run(
         tag::Args {
-            subcommand: Some(tag::TagSubcommand::Include(state_args(&["1bad"]))),
+            subcommand: Some(tag::TagSubcommand::Require(state_args(&["1bad"]))),
         },
         &mut env.ctx,
     )
@@ -187,7 +187,7 @@ fn including_a_resource_narrows_the_list_to_it() {
 
     run_state(
         &mut env,
-        tag::TagSubcommand::Include(state_args(&["#printer"])),
+        tag::TagSubcommand::Require(state_args(&["#printer"])),
     );
 
     assert_eq!(visible_titles(&mut env), vec!["Printing".to_string()]);
@@ -203,7 +203,7 @@ fn including_hides_untagged_tasks_too() {
 
     run_state(
         &mut env,
-        tag::TagSubcommand::Include(state_args(&["@work"])),
+        tag::TagSubcommand::Require(state_args(&["@work"])),
     );
 
     assert_eq!(visible_titles(&mut env), vec!["Work thing".to_string()]);
@@ -237,7 +237,7 @@ fn a_pinned_default_opts_a_child_out_of_its_parents_state() {
     );
     run_state(
         &mut env,
-        tag::TagSubcommand::Default(state_args(&["@home/kitchen"])),
+        tag::TagSubcommand::Accept(state_args(&["@home/kitchen"])),
     );
 
     assert_eq!(visible_titles(&mut env), vec!["Kitchen".to_string()]);
@@ -252,7 +252,7 @@ fn including_several_tags_is_a_disjunction() {
 
     run_state(
         &mut env,
-        tag::TagSubcommand::Include(state_args(&["@work", "@home"])),
+        tag::TagSubcommand::Require(state_args(&["@work", "@home"])),
     );
 
     let mut titles = visible_titles(&mut env);
@@ -271,7 +271,7 @@ fn exclusion_wins_over_inclusion() {
 
     run_state(
         &mut env,
-        tag::TagSubcommand::Include(state_args(&["@work"])),
+        tag::TagSubcommand::Require(state_args(&["@work"])),
     );
     run_state(
         &mut env,

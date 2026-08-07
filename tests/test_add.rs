@@ -224,7 +224,7 @@ fn add_auto_applies_active_context_when_no_context_tag() {
 
     // Include @work: a task captured here should land in it.
     let mut state = GlobalState::default();
-    state.set_state("@work", Some(TagState::Included));
+    state.set_state("@work", Some(TagState::Required));
     env.ctx.repo.store.save_state(&state).unwrap();
 
     add::run(args("No-context task"), &mut env.ctx).unwrap();
@@ -243,7 +243,7 @@ fn add_does_not_auto_apply_when_context_tag_already_present() {
     let mut env = common::setup();
 
     let mut state = GlobalState::default();
-    state.set_state("@work", Some(TagState::Included));
+    state.set_state("@work", Some(TagState::Required));
     env.ctx.repo.store.save_state(&state).unwrap();
 
     add::run(

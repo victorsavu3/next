@@ -21,12 +21,18 @@ pub struct FilterSet {
     /// query leaves it alone.
     pub expr: Expr,
 
-    /// Override the *included* tags for this query.
-    /// `None` → use whatever the state includes.
-    /// `Some(v)` → include exactly these instead (an empty vec includes
+    /// Override the *required* tags for this query.
+    /// `None` → use whatever the state requires.
+    /// `Some(v)` → require exactly these instead (an empty vec requires
     /// nothing, which is how a caller asks to see every tag's tasks).
     /// Exclusions always come from the state.
-    pub include_override: Option<Vec<String>>,
+    ///
+    /// Not to be confused with [`TaskQuery::required_tags`], which is a
+    /// *conjunction* of tag filters at the storage layer; this is the
+    /// disjunction the tag state applies.
+    ///
+    /// [`TaskQuery::required_tags`]: crate::core::store::TaskQuery::required_tags
+    pub required_override: Option<Vec<String>>,
 
     /// Override active users for this query.
     /// `None` → use `state.active_users`.
@@ -190,17 +196,17 @@ pub fn apply(
 /// relies on the same rule to keep its filtering while bypassing the status
 /// checks.
 ///
-/// `include_override` replaces the *included* set for one query without
+/// `required_override` replaces the *required* set for one query without
 /// touching the stored state — how `context:@x` and the MCP context parameter
 /// pin a view. Exclusions always come from the state.
 fn effective_tag_state(filter: &FilterSet, state: &GlobalState) -> GlobalState {
-    let Some(included) = filter.include_override.as_ref() else {
+    let Some(required) = filter.required_override.as_ref() else {
         return state.clone();
     };
     let mut effective = state.clone();
-    effective.tags.retain(|_, v| *v != TagState::Included);
-    for tag_name in included {
-        effective.set_state(tag_name, Some(TagState::Included));
+    effective.tags.retain(|_, v| *v != TagState::Required);
+    for tag_name in required {
+        effective.set_state(tag_name, Some(TagState::Required));
     }
     effective
 }
@@ -441,7 +447,7 @@ mod tests {
         // A resource can be included, not just excluded — the old model had no
         // way to say "only the things I need the printer for".
         for tag_name in ["@work", "#printer", "errand"] {
-            let state = state_with(&[(tag_name, TagState::Included)]);
+            let state = state_with(&[(tag_name, TagState::Required)]);
             let result = apply(
                 vec![
                     tagged("Kept", &[tag_name]),
@@ -460,7 +466,7 @@ mod tests {
     fn an_included_tag_hides_untagged_tasks() {
         // The context-neutral exemption is gone: including a tag means the
         // list is that tag's tasks, and a task carrying nothing is not one.
-        let state = state_with(&[("@work", TagState::Included)]);
+        let state = state_with(&[("@work", TagState::Required)]);
         let result = apply(
             vec![tagged("Work", &["@work"]), Task::new("Untagged")],
             &FilterSet::default(),
@@ -475,7 +481,7 @@ mod tests {
     fn state_matches_descendants_but_not_ancestors() {
         // Downward only, uniformly. The old bidirectional context match — where
         // an active `@work/frontend` also showed plain `@work` tasks — is gone.
-        let state = state_with(&[("@work", TagState::Included)]);
+        let state = state_with(&[("@work", TagState::Required)]);
         let result = apply(
             vec![tagged("Frontend", &["@work/frontend"])],
             &FilterSet::default(),
@@ -484,7 +490,7 @@ mod tests {
         );
         assert_eq!(result.len(), 1, "a parent include covers its descendants");
 
-        let state = state_with(&[("@work/frontend", TagState::Included)]);
+        let state = state_with(&[("@work/frontend", TagState::Required)]);
         let result = apply(
             vec![tagged("General work", &["@work"])],
             &FilterSet::default(),
@@ -501,7 +507,7 @@ mod tests {
     fn a_pinned_default_opts_a_child_out_of_its_parents_exclusion() {
         let state = state_with(&[
             ("@home", TagState::Excluded),
-            ("@home/kitchen", TagState::Default),
+            ("@home/kitchen", TagState::Accepted),
         ]);
         let result = apply(
             vec![
@@ -519,7 +525,7 @@ mod tests {
     #[test]
     fn exclusion_wins_over_inclusion_on_the_same_task() {
         let state = state_with(&[
-            ("@work", TagState::Included),
+            ("@work", TagState::Required),
             ("#printer", TagState::Excluded),
         ]);
         let result = apply(
@@ -536,10 +542,10 @@ mod tests {
     }
 
     #[test]
-    fn include_override_replaces_the_stored_inclusions() {
-        let state = state_with(&[("@work", TagState::Included)]);
+    fn required_override_replaces_the_stored_requirements() {
+        let state = state_with(&[("@work", TagState::Required)]);
         let filter = FilterSet {
-            include_override: Some(vec!["@home".into()]),
+            required_override: Some(vec!["@home".into()]),
             ..Default::default()
         };
         let result = apply(
@@ -553,15 +559,15 @@ mod tests {
     }
 
     #[test]
-    fn include_override_keeps_the_stored_exclusions() {
+    fn required_override_keeps_the_stored_exclusions() {
         // Overriding what you are working on should not resurrect what you
         // deliberately hid.
         let state = state_with(&[
-            ("@work", TagState::Included),
+            ("@work", TagState::Required),
             ("#printer", TagState::Excluded),
         ]);
         let filter = FilterSet {
-            include_override: Some(vec![]),
+            required_override: Some(vec![]),
             ..Default::default()
         };
         let result = apply(
@@ -745,7 +751,7 @@ mod tests {
     fn disable_implicit_still_honours_inclusions() {
         // Changed with tag-state unification: `--all` widens the statuses, not
         // the tags. To see other tags too, override the inclusions.
-        let state = state_with(&[("@work", TagState::Included)]);
+        let state = state_with(&[("@work", TagState::Required)]);
         let task = Task::new("No tags");
         let filter = FilterSet {
             disable_implicit: true,
@@ -755,7 +761,7 @@ mod tests {
 
         let filter = FilterSet {
             disable_implicit: true,
-            include_override: Some(vec![]),
+            required_override: Some(vec![]),
             ..Default::default()
         };
         assert_eq!(apply(vec![task], &filter, &state, today()).len(), 1);
@@ -897,7 +903,7 @@ mod tests {
 
     #[test]
     fn closed_only_respects_tag_state() {
-        let state = state_with(&[("@work", TagState::Included)]);
+        let state = state_with(&[("@work", TagState::Required)]);
 
         let mut done_work = Task::new("Done work task");
         done_work.mark_done(today());

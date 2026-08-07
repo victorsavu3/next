@@ -180,7 +180,7 @@ enabled.
 | Module | Contents |
 |--------|----------|
 | `task` | `Task`, `Status` (`Open`/`Started`/`Done`/`Cancelled`), `Priority`, `Recurrence`, `Snap` |
-| `state` | `GlobalState` (per-tag `TagState` map — `Included`/`Excluded`/`Default` — plus active users); `state_of` resolves inheritance, `admits` applies the two filtering rules |
+| `state` | `GlobalState` (per-tag `TagState` map — `Required`/`Excluded`/`Accepted` — plus active users); `state_of` resolves inheritance, `admits` applies the two filtering rules; unreadable entries are dropped on load, and the pre-rename spellings still deserialise |
 | `tag` | `TagKind` (Context / Resource / Freeform); `validate_tag` (allowlist: segments start with letter, contain `a-zA-Z0-9-_`, `/` separator allowed, `..` explicitly rejected); `validate_context_tag` (enforces `@` prefix); `validate_resource_tag` (enforces `#` prefix) |
 | `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
 | `date_parse` | `fn parse_date(expr, today) -> Result<NaiveDate>` |
@@ -387,7 +387,7 @@ by their prefix (`@` or `#`) but share the same `tags/` storage as freeform tags
 since tag-state unification — the same filtering rules. The prefix is a naming
 convention: it groups tags for display and can be queried, but it does not change
 behaviour. `next tag describe`, `set-url`, `set-priority` etc. manage committed metadata
-for all kinds; `next tag include|exclude|default|clear-state` manage the machine-local
+for all kinds; `next tag require|exclude|accept|clear-state` manage the machine-local
 state in `state.toml` and do not touch metadata.
 
 All machine-local state lives in a single `state.toml` at
@@ -567,7 +567,7 @@ mechanisms keep this safe:
    plugin registry, and the sync state. Each writer does a
    locked read-modify-write of the whole file via `load_machine_state` /
    `update_machine_state` (`storage/machine_state.rs`), so e.g. a `save_state` cannot drop a
-   concurrently-added plugin and vice versa. Each `next tag include|exclude|…` / `user` (and
+   concurrently-added plugin and vice versa. Each `next tag require|exclude|…` / `user` (and
    the matching MCP tool) holds this exclusive lock across its `get_state` → modify →
    `save_state`, closing the same lost-update window. No HEAD reconciliation, since state is
    never committed to git.
@@ -691,7 +691,7 @@ computed after filtering).
 ```rust
 pub struct FilterSet {
     pub expr: Expr,                          // the user's query
-    pub include_override: Option<Vec<String>>, // context: / MCP `context`
+    pub required_override: Option<Vec<String>>, // context: / MCP `context`
     pub user_override: Option<Vec<String>>,    // user: / --all-users
     pub include_future: bool,
     pub disable_implicit: bool,              // --all
@@ -714,9 +714,10 @@ pub struct FilterSet {
 
    The **tag state** is applied outside this gate, so `--all` widens the statuses
    without lifting an exclusion: `GlobalState::admits` hides any task carrying an
-   excluded tag, and — while anything is included — any task carrying no included tag.
-   `FilterSet::include_override` replaces the included set for one query (`context:@x`,
-   and the MCP `context` parameter) while leaving exclusions in force.
+   excluded tag, and — while anything is required — any task carrying no required tag.
+   `FilterSet::required_override` replaces the required set for one query (`context:@x`,
+   and the MCP `context` parameter) while leaving exclusions in force. It is *not*
+   `TaskQuery::required_tags`, which is the storage layer's conjunction of tag filters.
 2. **The explicit query** (always applied): one `filter_eval::eval` call per task.
    The relational indexes it needs (open task IDs for `is:blocked`, parent IDs for
    `is:project`, the id → (parent, slug) lineage for `parent:`) are built **once per

@@ -313,7 +313,7 @@ pub fn parse(input: &str) -> Result<Expr> {
 ///
 /// `parent:`, `context:` and `user:` do not describe a task — they describe
 /// the *view*: which slice of the tree to load, which tags to treat as
-/// included, whose tasks to show. They therefore have to be lifted out of the
+/// required, whose tasks to show. They therefore have to be lifted out of the
 /// expression and applied to the query as a whole, which is exactly what makes
 /// them the odd ones out. Both `context:` and `user:` are on their way out (the
 /// tag state model replaces the first, the query string the second), so this
@@ -323,8 +323,8 @@ pub fn parse(input: &str) -> Result<Expr> {
 pub struct Overrides {
     /// `parent:<slug>` — restrict to that task and its descendants.
     pub parent_slug: Option<String>,
-    /// `context:<tag>` — treat these tags as the included set for this query.
-    pub included_tags: Option<Vec<String>>,
+    /// `context:<tag>` — treat these tags as the required set for this query.
+    pub required_override: Option<Vec<String>>,
     /// `user:<name>` — restrict to these users (plus unassigned tasks).
     pub users: Option<Vec<String>>,
 }
@@ -380,7 +380,7 @@ fn lift_one(part: &Expr, overrides: &mut Overrides) -> Result<bool> {
             overrides.parent_slug = Some(values[0].raw.clone());
         }
         Field::Context => overrides
-            .included_tags
+            .required_override
             .get_or_insert_with(Vec::new)
             .extend(raw()),
         Field::User => overrides.users.get_or_insert_with(Vec::new).extend(raw()),

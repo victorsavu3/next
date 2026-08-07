@@ -66,14 +66,16 @@ pub fn set_tag_state(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing required parameter: state"))?;
     let wanted = match state_name {
-        "included" => Some(TagState::Included),
+        "required" => Some(TagState::Required),
         "excluded" => Some(TagState::Excluded),
-        "default" => Some(TagState::Default),
-        // Distinct from "default": this removes the entry, so the tag inherits
+        "accepted" => Some(TagState::Accepted),
+        // Distinct from "accepted": this removes the entry, so the tag inherits
         // from its parent again instead of being pinned to no state.
         "clear" => None,
         other => {
-            anyhow::bail!("unknown state {other:?} — expected included, excluded, default or clear")
+            anyhow::bail!(
+                "unknown state {other:?} — expected required, excluded, accepted or clear"
+            )
         }
     };
 
@@ -148,9 +150,29 @@ mod tests {
     #[test]
     fn set_and_get_tag_state() {
         let (_dir, mut ctx) = make_ctx();
-        set_tag_state(&json!({ "tags": ["@work"], "state": "included" }), &mut ctx).unwrap();
+        set_tag_state(&json!({ "tags": ["@work"], "state": "required" }), &mut ctx).unwrap();
         let state = get_state(&json!({}), &mut ctx).unwrap();
-        assert_eq!(state["tags"]["@work"], "included");
+        assert_eq!(state["tags"]["@work"], "required");
+    }
+
+    #[test]
+    fn the_old_state_names_are_gone_from_the_tool() {
+        // The stored file still *reads* the old spellings, so nobody loses the
+        // state they had set — but the tool input does not accept them. An
+        // agent holding the old schema should be told the vocabulary changed
+        // rather than have "included" quietly accepted and then read back as
+        // something it did not send.
+        let (_dir, mut ctx) = make_ctx();
+        for stale in ["included", "default"] {
+            let err = set_tag_state(&json!({ "tags": ["@work"], "state": stale }), &mut ctx)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("unknown state"), "{stale}: {err}");
+            assert!(
+                err.contains("required, excluded, accepted"),
+                "the error must name the replacements — {stale}: {err}"
+            );
+        }
     }
 
     #[test]
@@ -159,9 +181,9 @@ mod tests {
         // freeform tag is not a second-class citizen.
         let (_dir, mut ctx) = make_ctx();
         for (tag, want) in [
-            ("#printer", "included"),
+            ("#printer", "required"),
             ("errand", "excluded"),
-            ("@home/kitchen", "default"),
+            ("@home/kitchen", "accepted"),
         ] {
             set_tag_state(&json!({ "tags": [tag], "state": want }), &mut ctx).unwrap();
             let state = get_state(&json!({}), &mut ctx).unwrap();
@@ -205,11 +227,11 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("unknown state"), "{err}");
 
-        let err = set_tag_state(&json!({ "state": "included" }), &mut ctx).unwrap_err();
+        let err = set_tag_state(&json!({ "state": "required" }), &mut ctx).unwrap_err();
         assert!(err.to_string().contains("tags"), "{err}");
 
         let err =
-            set_tag_state(&json!({ "tags": ["1bad"], "state": "included" }), &mut ctx).unwrap_err();
+            set_tag_state(&json!({ "tags": ["1bad"], "state": "required" }), &mut ctx).unwrap_err();
         assert!(
             err.to_string().contains("must start with a letter"),
             "{err}"

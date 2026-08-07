@@ -1,4 +1,4 @@
-//! `next tag include|exclude|default|clear-state` — the machine-local tag
+//! `next tag require|exclude|accept|clear-state` — the machine-local tag
 //! state, which replaced the old `next context` and `next resource` commands.
 //!
 //! Every tag takes the same three states, so there is one set of commands
@@ -38,13 +38,13 @@ pub fn set(ctx: &mut AppContext, args: TagStateArgs, state: TagState) -> anyhow:
     })?;
 
     let verb = match state {
-        TagState::Included => "Included",
+        TagState::Required => "Required",
         TagState::Excluded => "Excluded",
-        TagState::Default => "Defaulted",
+        TagState::Accepted => "Accepted",
     };
     println!("{verb}: {}", args.tags.join(" "));
-    if state == TagState::Default {
-        println!("  (these tags now ignore any state inherited from a parent tag)");
+    if state == TagState::Accepted {
+        println!("  (these tags are neither required nor hidden, and now ignore any state inherited from a parent tag)");
     }
     tracing::info!(cmd = "tag", "{verb} {}", args.tags.join(" "));
     Ok(())
@@ -88,17 +88,17 @@ pub fn show(ctx: &AppContext) -> anyhow::Result<()> {
 
     println!("Tag state:");
     for (label, kind) in [
-        ("included", TagState::Included),
+        ("required", TagState::Required),
         ("excluded", TagState::Excluded),
-        ("default", TagState::Default),
+        ("accepted", TagState::Accepted),
     ] {
         let tags = state.tags_with(kind);
         if !tags.is_empty() {
             println!("  {label:<9} {}", tags.join(" "));
         }
     }
-    if !state.any_included() {
-        println!("  (nothing is included, so every tag that is not excluded is shown)");
+    if !state.any_required() {
+        println!("  (nothing is required, so every tag that is not excluded is shown)");
     }
     Ok(())
 }

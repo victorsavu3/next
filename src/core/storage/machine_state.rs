@@ -144,9 +144,9 @@ mod tests {
     fn round_trip_all_three_sections() {
         let now = Utc::now();
         let mut m = MachineState::default();
-        m.global.set_state("@work", Some(TagState::Included));
+        m.global.set_state("@work", Some(TagState::Required));
         m.global.set_state("#printer", Some(TagState::Excluded));
-        m.global.set_state("@work/admin", Some(TagState::Default));
+        m.global.set_state("@work/admin", Some(TagState::Accepted));
         m.global.active_users = vec!["alice".into()];
         m.plugins.push(Plugin {
             name: "forgejo".into(),
@@ -177,7 +177,7 @@ mod tests {
     fn global_only_file_loads_with_empty_other_sections() {
         let toml = "[tags]\n\"@work\" = \"included\"\n\"#printer\" = \"excluded\"\n";
         let m: MachineState = toml::from_str(toml).unwrap();
-        assert_eq!(m.global.state_of("@work"), Some(TagState::Included));
+        assert_eq!(m.global.state_of("@work"), Some(TagState::Required));
         assert_eq!(m.global.state_of("#printer"), Some(TagState::Excluded));
         assert!(m.plugins.is_empty());
         assert_eq!(m.sync, SyncState::default());

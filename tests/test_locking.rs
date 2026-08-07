@@ -188,7 +188,7 @@ fn concurrent_state_saves_no_corruption() {
             std::thread::spawn(move || {
                 let mut store = fresh_store(&root);
                 let mut state = GlobalState::default();
-                state.set_state(&format!("@context{i}"), Some(TagState::Included));
+                state.set_state(&format!("@context{i}"), Some(TagState::Required));
                 store.save_state(&state).unwrap();
             })
         })
@@ -233,7 +233,7 @@ fn concurrent_task_and_state_saves_no_corruption() {
         handles.push(std::thread::spawn(move || {
             let mut store = fresh_store(&root);
             let mut state = GlobalState::default();
-            state.set_state(&format!("@ctx{i}"), Some(TagState::Included));
+            state.set_state(&format!("@ctx{i}"), Some(TagState::Required));
             store.save_state(&state).unwrap();
         }));
     }
