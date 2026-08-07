@@ -52,7 +52,7 @@ pub fn build_entries(
     horizon: u32,
     task_dates: &HashMap<uuid::Uuid, TaskDates>,
 ) -> Vec<ForecastEntry> {
-    let filtered = filter::apply(all_tasks.to_vec(), filter_set, state, today);
+    let filtered = filter::apply(all_tasks.to_vec(), filter_set, state, today, task_dates);
     let scored =
         scoring::score_and_sort(filtered, all_tasks, today, scoring, tag_metas, task_dates);
 
@@ -106,6 +106,7 @@ mod tests {
     /// An empty filter set (no implicit filtering disabled, no tokens).
     fn empty_filter() -> FilterSet {
         crate::core::FilterArgs::parse(Vec::new())
+            .unwrap()
             .to_filter_set()
             .unwrap()
     }
@@ -269,6 +270,7 @@ mod tests {
 
         let all = vec![tagged, plain];
         let filter_set = crate::core::FilterArgs::parse(vec!["+#rust".to_owned()])
+            .unwrap()
             .to_filter_set()
             .unwrap();
         let entries = build_entries(

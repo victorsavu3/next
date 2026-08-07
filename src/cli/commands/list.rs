@@ -4,6 +4,24 @@ use chrono::Local;
 use crate::AppContext;
 use crate::{cli::render, core::FilterArgs};
 
+/// The tag filters the archived tier can serve, or an error naming what it
+/// cannot.
+///
+/// Archived rows are filtered by the storage layer's tag columns rather than by
+/// the evaluator, so only `+tag` / `-tag` survive the trip. Refusing the rest
+/// out loud beats returning a list that quietly ignored half the query; stage
+/// S2 pushes the whole grammar down and this restriction goes away.
+pub(crate) fn archived_tag_filters(
+    filter_set: &filter::FilterSet,
+) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+    crate::core::domain::filter_expr::as_tag_filters(&filter_set.expr).ok_or_else(|| {
+        anyhow::anyhow!(
+            "the archived list accepts only +tag and -tag filters for now, not {:?}",
+            filter_set.expr.to_string()
+        )
+    })
+}
+
 #[derive(clap::Args, Debug)]
 pub struct Args {
     /// Include tasks scheduled in the future.
@@ -44,7 +62,7 @@ pub struct Args {
     #[arg(long, default_value_t = 1)]
     pub page: u32,
 
-    /// Filter tokens: +tag, -tag, parent:slug (project scope), context:@name, user:name.
+    /// Filter expression, e.g. `+@work -bug due<+7d` or a bare word to search.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub tokens: Vec<String>,
 }
@@ -53,7 +71,7 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
 
     crate::core::reject_flag_like_tokens(&args.tokens, "next list --help")?;
-    let mut filter_args = FilterArgs::parse(args.tokens);
+    let mut filter_args = FilterArgs::parse(args.tokens)?;
     filter_args.future = args.future;
     filter_args.all = args.all;
     filter_args.closed = args.closed;
@@ -63,10 +81,11 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let filter_set = filter_args.to_filter_set()?;
 
     if args.archived {
+        let (required_tags, excluded_tags) = archived_tag_filters(&filter_set)?;
         let page = ctx.repo.store().query_tasks(&crate::core::TaskQuery {
             archived: true,
-            required_tags: filter_set.required_tags.clone(),
-            excluded_tags: filter_set.excluded_tags.clone(),
+            required_tags,
+            excluded_tags,
             page: args.page,
             page_size: args
                 .page_size
@@ -97,9 +116,12 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let candidates = listing::load_candidates(ctx.repo.store(), &filter_set)?;
     let tag_metas = ctx.repo.store().list_tag_metas()?;
 
-    let filtered = filter::apply(candidates.clone(), &filter_set, &state, today);
-    let pool = listing::extend_with_parents(ctx.repo.store(), candidates)?;
+    // Dates before filtering, not after: `created:` and `updated:` are query
+    // terms now, and the pool they are read from is the same one scoring uses.
+    let pool = listing::extend_with_parents(ctx.repo.store(), candidates.clone())?;
     let task_dates = ctx.repo.task_git_dates_for(&pool);
+
+    let filtered = filter::apply(candidates, &filter_set, &state, today, &task_dates);
     let scored = scoring::score_and_sort(
         filtered,
         &pool,

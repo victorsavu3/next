@@ -1,22 +1,25 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::NaiveDate;
 use uuid::Uuid;
 
 use crate::core::domain::{
+    filter_eval::{eval, EvalCtx, EvalIndexes},
+    filter_expr::Expr,
     state::{GlobalState, TagState},
-    tag,
     task::{Status, Task},
 };
+use crate::core::scoring::TaskDates;
 
 /// Controls which tasks are returned by `apply`.
 #[derive(Debug, Clone, Default)]
 pub struct FilterSet {
-    /// Tags that must ALL appear on a task (hierarchical: `#lang` matches `#lang/rust`).
-    pub required_tags: Vec<String>,
-
-    /// Tags that must NOT appear on a task.
-    pub excluded_tags: Vec<String>,
+    /// The user's explicit query, evaluated per task by
+    /// [`filter_eval::eval`](crate::core::domain::filter_eval::eval).
+    ///
+    /// The default — `And(vec![])` — matches everything, so a caller with no
+    /// query leaves it alone.
+    pub expr: Expr,
 
     /// Override the *included* tags for this query.
     /// `None` → use whatever the state includes.
@@ -73,14 +76,19 @@ pub struct FilterSet {
 /// which tags are included and excluded. One rule covers every tag kind — a
 /// context, a resource and a freeform label are filtered identically.
 ///
-/// **Explicit filters** (always applied):
-/// - `required_tags`: task must contain ALL (hierarchical match).
-/// - `excluded_tags`: task must contain NONE.
+/// **Explicit filter**: `expr`, the user's query, evaluated per task. It is
+/// the whole of the explicit half — every `+tag`, field predicate and search
+/// term goes through one [`eval`] call.
+///
+/// `task_dates` supplies the git-derived timestamps behind `created:` and
+/// `updated:`; pass an empty map when the caller has none, and those fields
+/// read as unset.
 pub fn apply(
     tasks: Vec<Task>,
     filter: &FilterSet,
     state: &GlobalState,
     today: NaiveDate,
+    task_dates: &HashMap<Uuid, TaskDates>,
 ) -> Vec<Task> {
     let (open_ids, parents_with_open_children) = if filter.disable_implicit {
         (HashSet::new(), HashSet::new())
@@ -96,6 +104,16 @@ pub fn apply(
             .map(|root| descendants_of(root.id, &tasks))
             .unwrap_or_default()
     });
+
+    // Built once for the whole query, not per task: every index the evaluator
+    // consults is a fact about the candidate set, not about one task.
+    let indexes = EvalIndexes::build(&tasks);
+    let eval_ctx = EvalCtx {
+        today,
+        indexes: &indexes,
+        task_dates,
+        archived: false,
+    };
 
     // Tag state is independent of the implicit gate; see `effective_tag_state`.
     let effective_state = effective_tag_state(filter, state);
@@ -158,18 +176,8 @@ pub fn apply(
                     return false;
                 }
             }
-            for req in &filter.required_tags {
-                if !task.tags.iter().any(|t| tag::tag_matches(req, t)) {
-                    return false;
-                }
-            }
-            for exc in &filter.excluded_tags {
-                if task.tags.iter().any(|t| tag::tag_matches(exc, t)) {
-                    return false;
-                }
-            }
 
-            true
+            eval(&filter.expr, task, &eval_ctx)
         })
         .collect()
 }
@@ -236,6 +244,7 @@ fn descendants_of(root_id: Uuid, tasks: &[Task]) -> HashSet<Uuid> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::domain::filter_expr::parse;
     use crate::core::domain::task::Task;
     use chrono::NaiveDate;
 
@@ -247,8 +256,26 @@ mod tests {
         GlobalState::default()
     }
 
+    /// `apply` with no git dates — every test here filters on stored fields.
+    fn apply(
+        tasks: Vec<Task>,
+        filter: &FilterSet,
+        state: &GlobalState,
+        today: NaiveDate,
+    ) -> Vec<Task> {
+        super::apply(tasks, filter, state, today, &HashMap::new())
+    }
+
     fn run(tasks: Vec<Task>, filter: FilterSet) -> Vec<Task> {
         apply(tasks, &filter, &empty_state(), today())
+    }
+
+    /// A `FilterSet` carrying nothing but the query `q`.
+    fn query(q: &str) -> FilterSet {
+        FilterSet {
+            expr: parse(q).unwrap_or_else(|e| panic!("{q}: {e}")),
+            ..Default::default()
+        }
     }
 
     // ── Implicit gate ────────────────────────────────────────────────────────
@@ -569,7 +596,7 @@ mod tests {
         assert_eq!(result[0].title, "Other");
     }
 
-    // ── Explicit filters ─────────────────────────────────────────────────────
+    // ── The explicit query ───────────────────────────────────────────────────
 
     #[test]
     fn required_tag_exact_match() {
@@ -577,11 +604,7 @@ mod tests {
         tagged.tags = vec!["#rust".into()];
         let untagged = Task::new("Untagged");
 
-        let filter = FilterSet {
-            required_tags: vec!["#rust".into()],
-            ..Default::default()
-        };
-        let result = run(vec![tagged, untagged], filter);
+        let result = run(vec![tagged, untagged], query("+#rust"));
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].title, "Tagged");
     }
@@ -591,11 +614,7 @@ mod tests {
         let mut task = Task::new("Rust task");
         task.tags = vec!["#lang/rust".into()];
 
-        let filter = FilterSet {
-            required_tags: vec!["#lang".into()],
-            ..Default::default()
-        };
-        let result = run(vec![task], filter);
+        let result = run(vec![task], query("+#lang"));
         assert_eq!(result.len(), 1);
     }
 
@@ -606,11 +625,7 @@ mod tests {
         let mut one = Task::new("One tag");
         one.tags = vec!["#a".into()];
 
-        let filter = FilterSet {
-            required_tags: vec!["#a".into(), "#b".into()],
-            ..Default::default()
-        };
-        let result = run(vec![both, one], filter);
+        let result = run(vec![both, one], query("+#a +#b"));
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].title, "Both tags");
     }
@@ -621,11 +636,7 @@ mod tests {
         tagged.tags = vec!["#work".into()];
         let clean = Task::new("Clean");
 
-        let filter = FilterSet {
-            excluded_tags: vec!["#work".into()],
-            ..Default::default()
-        };
-        let result = run(vec![tagged, clean], filter);
+        let result = run(vec![tagged, clean], query("-#work"));
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].title, "Clean");
     }
@@ -635,12 +646,71 @@ mod tests {
         let mut task = Task::new("Rust task");
         task.tags = vec!["#lang/rust".into()];
 
-        let filter = FilterSet {
-            excluded_tags: vec!["#lang".into()],
-            ..Default::default()
-        };
-        let result = run(vec![task], filter);
+        let result = run(vec![task], query("-#lang"));
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn the_empty_query_gates_but_does_not_filter() {
+        // The identity expression must leave the implicit gate as the only
+        // thing deciding, which is what makes `next list` work with no query.
+        let mut done = Task::new("Done");
+        done.mark_done(today());
+        let open = Task::new("Open");
+
+        let result = run(vec![done, open], query(""));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Open");
+    }
+
+    #[test]
+    fn a_bare_token_searches_text_instead_of_tags() {
+        // The break: `next list bug` used to mean "tagged bug".
+        let mut tagged = Task::new("Something else");
+        tagged.tags = vec!["bug".into()];
+        let mentioned = Task::new("A bug in the parser");
+
+        let result = run(vec![tagged, mentioned], query("bug"));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "A bug in the parser");
+
+        // And the sigil form still means the tag, not the prose.
+        let mut tagged = Task::new("Something else");
+        tagged.tags = vec!["bug".into()];
+        let mentioned = Task::new("A bug in the parser");
+        let result = run(vec![tagged, mentioned], query("+bug"));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Something else");
+    }
+
+    #[test]
+    fn a_query_can_use_or_and_grouping() {
+        let mut a = Task::new("A");
+        a.tags = vec!["#a".into()];
+        let mut b = Task::new("B");
+        b.tags = vec!["#b".into()];
+        let c = Task::new("C");
+
+        let result = run(vec![a, b, c], query("+#a or +#b"));
+        let titles: Vec<&str> = result.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, vec!["A", "B"]);
+    }
+
+    #[test]
+    fn a_query_sees_the_relational_indexes() {
+        // `is:blocked` needs the whole candidate set, so it only works because
+        // the indexes are built from the tasks being filtered.
+        let blocker = Task::new("Blocker");
+        let mut blocked = Task::new("Blocked");
+        blocked.blocked_by = vec![blocker.id];
+
+        let filter = FilterSet {
+            disable_implicit: true, // the gate would hide a blocked task
+            ..query("is:blocked")
+        };
+        let result = run(vec![blocker, blocked], filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Blocked");
     }
 
     // ── disable_implicit ─────────────────────────────────────────────────────
@@ -900,8 +970,7 @@ mod tests {
 
         let filter = FilterSet {
             disable_implicit: true,
-            required_tags: vec!["#keep".into()],
-            ..Default::default()
+            ..query("+#keep")
         };
         let result = run(vec![done, done_no_tag], filter);
         assert_eq!(result.len(), 1);

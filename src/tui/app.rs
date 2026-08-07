@@ -457,7 +457,7 @@ impl App {
     /// alongside their open subtasks — unlike the scored CLI list, which hides
     /// a parent while any child is open. (Forgejo issue #17.)
     fn current_filter_set(&self) -> anyhow::Result<filter::FilterSet> {
-        let mut fa = FilterArgs::parse(self.filter_tokens.clone());
+        let mut fa = FilterArgs::parse(self.filter_tokens.clone())?;
         fa.future = self.filter_future;
         fa.all = self.filter_all;
         fa.closed = self.filter_closed;
@@ -486,6 +486,7 @@ impl App {
             &state,
             self.today,
             self.tree_view.include_all(),
+            &self.task_dates,
         );
         self.tree_view.sync_sections(&build.section_ids);
         self.tree_task_section = build.task_section;
@@ -704,7 +705,13 @@ impl App {
         let tag_metas = store.list_tag_metas()?;
         let task_dates = self.repo.task_git_dates_for(&all_tasks);
 
-        let filtered = filter::apply(all_tasks.clone(), &filter_set, &state, self.today);
+        let filtered = filter::apply(
+            all_tasks.clone(),
+            &filter_set,
+            &state,
+            self.today,
+            &task_dates,
+        );
         let scored = scoring::score_and_sort(
             filtered,
             &all_tasks,

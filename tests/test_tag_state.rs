@@ -55,9 +55,10 @@ fn visible_titles(env: &mut common::TestEnv) -> Vec<String> {
     let all = env.ctx.repo.store.list_tasks().unwrap();
     let filtered = filter::apply(
         all.clone(),
-        &FilterArgs::parse(vec![]).to_filter_set().unwrap(),
+        &FilterArgs::parse(vec![]).unwrap().to_filter_set().unwrap(),
         &state,
         today,
+        &std::collections::HashMap::new(),
     );
     let scored = scoring::score_and_sort(
         filtered,

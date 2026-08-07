@@ -22,7 +22,7 @@ pub struct Args {
     #[arg(long)]
     pub json: bool,
 
-    /// Filter tokens: +tag, -tag, parent:slug, context:@name, user:name.
+    /// Filter expression, e.g. `+@work -bug due<+7d` or a bare word to search.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub tokens: Vec<String>,
 }
@@ -35,7 +35,7 @@ pub fn build_entries(args: &Args, ctx: &AppContext) -> anyhow::Result<(Vec<Forec
     let horizon = args.days.unwrap_or(ctx.config.forecast_horizon_days);
 
     crate::core::reject_flag_like_tokens(&args.tokens, "next forecast --help")?;
-    let mut filter_args = FilterArgs::parse(args.tokens.clone());
+    let mut filter_args = FilterArgs::parse(args.tokens.clone())?;
     filter_args.future = true; // forecast always shows future-start tasks
     filter_args.all = args.all;
     filter_args.all_users = args.all_users;

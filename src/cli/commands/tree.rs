@@ -41,7 +41,15 @@ pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> any
             include_blocked_parents: true,
             ..Default::default()
         };
-        Some(filter::apply(all_tasks.clone(), &filter_set, &state, today))
+        // No query here — `--closed` is a status gate, so the evaluator is
+        // never asked about a field the git dates would answer.
+        Some(filter::apply(
+            all_tasks.clone(),
+            &filter_set,
+            &state,
+            today,
+            &std::collections::HashMap::new(),
+        ))
     } else {
         None
     };

@@ -39,7 +39,13 @@ fn score_all(env: &mut common::TestEnv) -> Vec<ScoredTask> {
     let filter_set = FilterArgs::default().to_filter_set().unwrap();
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
-    let filtered = filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = filter::apply(
+        all.clone(),
+        &filter_set,
+        &state,
+        today,
+        &std::collections::HashMap::new(),
+    );
     let tag_metas = env.ctx.repo.store.list_tag_metas().unwrap();
     scoring::score_and_sort(
         filtered,
@@ -578,7 +584,13 @@ fn closed_listing(env: &mut common::TestEnv) -> (Vec<String>, Vec<ScoredTask>) {
     let candidates = listing::load_candidates(env.ctx.repo.store(), &filter_set).unwrap();
     let store_order: Vec<String> = candidates.iter().map(|t| t.title.clone()).collect();
     let tag_metas = env.ctx.repo.store.list_tag_metas().unwrap();
-    let filtered = filter::apply(candidates.clone(), &filter_set, &state, today);
+    let filtered = filter::apply(
+        candidates.clone(),
+        &filter_set,
+        &state,
+        today,
+        &std::collections::HashMap::new(),
+    );
     let scored = scoring::score_and_sort(
         filtered,
         &candidates,

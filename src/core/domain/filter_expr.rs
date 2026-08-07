@@ -35,7 +35,8 @@ use crate::core::error::{Result, TaskError};
 /// A parsed filter expression.
 ///
 /// `And(vec![])` is the identity: it matches every task. An empty query string
-/// parses to it, so callers never need a separate "no filter" representation.
+/// parses to it, so callers never need a separate "no filter" representation —
+/// and it is what [`Default`] yields.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Expr {
@@ -43,6 +44,12 @@ pub enum Expr {
     Or(Vec<Expr>),
     Not(Box<Expr>),
     Atom(Atom),
+}
+
+impl Default for Expr {
+    fn default() -> Self {
+        Expr::And(Vec::new())
+    }
 }
 
 /// A single indivisible predicate.
@@ -298,6 +305,170 @@ pub fn parse(input: &str) -> Result<Expr> {
             "cannot parse filter expression {input:?}: unexpected end of expression"
         ))),
     }
+}
+
+// ─── Analysis ───────────────────────────────────────────────────────────────
+
+/// Query terms that are not per-task predicates.
+///
+/// `parent:`, `context:` and `user:` do not describe a task — they describe
+/// the *view*: which slice of the tree to load, which tags to treat as
+/// included, whose tasks to show. They therefore have to be lifted out of the
+/// expression and applied to the query as a whole, which is exactly what makes
+/// them the odd ones out. Both `context:` and `user:` are on their way out (the
+/// tag state model replaces the first, the query string the second), so this
+/// stays a small, clearly-marked detour rather than spreading through the
+/// evaluator.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Overrides {
+    /// `parent:<slug>` — restrict to that task and its descendants.
+    pub parent_slug: Option<String>,
+    /// `context:<tag>` — treat these tags as the included set for this query.
+    pub included_tags: Option<Vec<String>>,
+    /// `user:<name>` — restrict to these users (plus unassigned tasks).
+    pub users: Option<Vec<String>>,
+}
+
+/// Splits `expr` into the per-task predicate and the view [`Overrides`].
+///
+/// A view term is only meaningful when it applies to the whole query, so it is
+/// accepted in the top-level conjunction and rejected anywhere else: `a or
+/// parent:x` would have to load one slice of the tree for one branch, which is
+/// not a thing a query can do. Saying so is better than quietly picking one
+/// reading.
+///
+/// This is also where fields that parse but cannot yet be evaluated are
+/// refused, so an unsupported query fails at the front door instead of
+/// silently matching nothing.
+pub fn lift_overrides(expr: Expr) -> Result<(Expr, Overrides)> {
+    let mut overrides = Overrides::default();
+    let parts = match expr {
+        Expr::And(parts) => parts,
+        other => vec![other],
+    };
+
+    let mut kept = Vec::with_capacity(parts.len());
+    for part in parts {
+        match lift_one(&part, &mut overrides)? {
+            true => {}
+            false => {
+                reject_nested_overrides(&part)?;
+                kept.push(part);
+            }
+        }
+    }
+    for part in &kept {
+        reject_unsupported(part)?;
+    }
+    Ok((combine_list_or_identity(kept), overrides))
+}
+
+/// Lifts `part` into `overrides` when it is a view term, reporting whether it
+/// was consumed.
+fn lift_one(part: &Expr, overrides: &mut Overrides) -> Result<bool> {
+    let Expr::Atom(Atom::Equals { field, values }) = part else {
+        return Ok(false);
+    };
+    let raw = || values.iter().map(|v| v.raw.clone()).collect::<Vec<_>>();
+    match field {
+        Field::Parent => {
+            if values.len() != 1 || overrides.parent_slug.is_some() {
+                return Err(TaskError::Other(
+                    "parent: selects one project scope, so it may only be given once".to_owned(),
+                ));
+            }
+            overrides.parent_slug = Some(values[0].raw.clone());
+        }
+        Field::Context => overrides
+            .included_tags
+            .get_or_insert_with(Vec::new)
+            .extend(raw()),
+        Field::User => overrides.users.get_or_insert_with(Vec::new).extend(raw()),
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// Refuses a view term that appears anywhere other than the top-level
+/// conjunction.
+fn reject_nested_overrides(expr: &Expr) -> Result<()> {
+    walk(expr, &mut |atom| match atom {
+        Atom::Equals { field, .. } | Atom::Compare { field, .. } | Atom::Range { field, .. }
+            if matches!(field, Field::Parent | Field::Context | Field::User) =>
+        {
+            Err(TaskError::Other(format!(
+                "{}: filters the whole query, so it cannot appear inside 'or' or 'not'",
+                field.name()
+            )))
+        }
+        _ => Ok(()),
+    })
+}
+
+/// Refuses fields that parse but that the evaluator cannot answer.
+fn reject_unsupported(expr: &Expr) -> Result<()> {
+    walk(expr, &mut |atom| {
+        let field = match atom {
+            Atom::Equals { field, .. }
+            | Atom::Compare { field, .. }
+            | Atom::Range { field, .. } => Some(field),
+            Atom::Has(field) => Some(field),
+            _ => None,
+        };
+        if field == Some(&Field::Score) {
+            // Scoring runs after filtering, over a pool extended with parents
+            // the filter already dropped, so there is no score to compare
+            // against while this predicate would need one.
+            return Err(TaskError::Other(
+                "score: cannot be filtered on — a task's score is computed after filtering"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    })
+}
+
+/// Visits every atom in the tree, stopping at the first error.
+fn walk(expr: &Expr, visit: &mut impl FnMut(&Atom) -> Result<()>) -> Result<()> {
+    match expr {
+        Expr::And(parts) | Expr::Or(parts) => parts.iter().try_for_each(|p| walk(p, visit)),
+        Expr::Not(inner) => walk(inner, visit),
+        Expr::Atom(atom) => visit(atom),
+    }
+}
+
+fn combine_list_or_identity(mut parts: Vec<Expr>) -> Expr {
+    if parts.len() == 1 {
+        parts.pop().expect("length checked")
+    } else {
+        Expr::And(parts)
+    }
+}
+
+/// The `+tag` / `-tag` conjunction this expression is, when it is only that.
+///
+/// The archived tier still filters through the storage layer's tag columns
+/// rather than through the evaluator, so it can serve exactly this shape and
+/// nothing more. Returning `None` lets the caller say so instead of quietly
+/// ignoring the rest of the query. Stage 2 removes the restriction.
+pub fn as_tag_filters(expr: &Expr) -> Option<(Vec<String>, Vec<String>)> {
+    let parts: Vec<&Expr> = match expr {
+        Expr::And(parts) => parts.iter().collect(),
+        other => vec![other],
+    };
+    let mut required = Vec::new();
+    let mut excluded = Vec::new();
+    for part in parts {
+        match part {
+            Expr::Atom(Atom::Tag(name)) => required.push(name.clone()),
+            Expr::Not(inner) => match &**inner {
+                Expr::Atom(Atom::Tag(name)) => excluded.push(name.clone()),
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+    Some((required, excluded))
 }
 
 // ─── Errors ─────────────────────────────────────────────────────────────────

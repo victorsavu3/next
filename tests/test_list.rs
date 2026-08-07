@@ -33,11 +33,17 @@ fn add_args(title: &str) -> add::Args {
 
 fn apply_filter(env: &mut common::TestEnv, tokens: Vec<String>) -> Vec<ScoredTask> {
     let today = Local::now().date_naive();
-    let filter_args = FilterArgs::parse(tokens);
+    let filter_args = FilterArgs::parse(tokens).unwrap();
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
-    let filtered = filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = filter::apply(
+        all.clone(),
+        &filter_set,
+        &state,
+        today,
+        &std::collections::HashMap::new(),
+    );
     scoring::score_and_sort(
         filtered,
         &all,
@@ -73,20 +79,70 @@ fn list_filters_by_required_tag() {
     assert_eq!(tasks[0].task.title, "Work task");
 }
 
+/// A bare token searches the text; the tag it used to mean is now `+tag`.
+///
+/// The two tasks here are deliberately crossed — one carries the tag without
+/// the word, the other has the word without the tag — because a task with both
+/// would pass either reading and prove nothing.
 #[test]
-fn list_bare_token_acts_as_required_tag() {
+fn list_bare_token_searches_text_while_the_sigil_selects_the_tag() {
     let mut env = common::setup();
-    let with_tag = add::Args {
+    let tagged = add::Args {
         tags: vec!["urgent".to_string()],
-        ..add_args("Urgent task")
+        ..add_args("Renew the passport")
     };
-    add::run(with_tag, &mut env.ctx).unwrap();
-    add::run(add_args("Normal task"), &mut env.ctx).unwrap();
+    add::run(tagged, &mut env.ctx).unwrap();
+    add::run(add_args("An urgent-sounding title"), &mut env.ctx).unwrap();
 
-    // Bare "urgent" should behave like "+urgent".
     let tasks = apply_filter(&mut env, vec!["urgent".to_string()]);
     assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].task.title, "Urgent task");
+    assert_eq!(tasks[0].task.title, "An urgent-sounding title");
+
+    let tasks = apply_filter(&mut env, vec!["+urgent".to_string()]);
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task.title, "Renew the passport");
+}
+
+/// The grammar reaches the CLI whole, not just its tag half.
+#[test]
+fn list_accepts_a_full_expression() {
+    let mut env = common::setup();
+    let tagged = add::Args {
+        tags: vec!["@work".to_string()],
+        ..add_args("Write the design doc")
+    };
+    add::run(tagged, &mut env.ctx).unwrap();
+    add::run(add_args("Water the plants"), &mut env.ctx).unwrap();
+
+    // Booleans and grouping.
+    let tasks = apply_filter(&mut env, vec!["+@work or plants".to_string()]);
+    assert_eq!(tasks.len(), 2);
+
+    // Field predicates and negation.
+    let tasks = apply_filter(&mut env, vec!["not +@work".to_string()]);
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task.title, "Water the plants");
+
+    let tasks = apply_filter(&mut env, vec!["status:open".to_string()]);
+    assert_eq!(tasks.len(), 2);
+
+    // A phrase is ordered and consecutive.
+    let tasks = apply_filter(&mut env, vec!["\"design doc\"".to_string()]);
+    assert_eq!(tasks.len(), 1);
+    assert!(apply_filter(&mut env, vec!["\"doc design\"".to_string()]).is_empty());
+}
+
+/// A malformed query is refused, not silently read as something else.
+#[test]
+fn list_rejects_a_malformed_expression() {
+    let mut env = common::setup();
+    add::run(add_args("Anything"), &mut env.ctx).unwrap();
+
+    let err = FilterArgs::parse(vec!["due<".to_string()]).expect_err("should not parse");
+    assert!(
+        err.to_string().contains("cannot parse filter expression"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -169,12 +225,18 @@ fn list_excludes_done_tasks_by_default() {
 
 fn apply_filter_with_future(env: &mut common::TestEnv, include_future: bool) -> Vec<ScoredTask> {
     let today = Local::now().date_naive();
-    let mut filter_args = FilterArgs::parse(vec![]);
+    let mut filter_args = FilterArgs::parse(vec![]).unwrap();
     filter_args.future = include_future;
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
-    let filtered = filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = filter::apply(
+        all.clone(),
+        &filter_set,
+        &state,
+        today,
+        &std::collections::HashMap::new(),
+    );
     scoring::score_and_sort(
         filtered,
         &all,
@@ -283,12 +345,18 @@ fn all_flag_also_shows_future_start_tasks() {
 
     // --all disables all implicit filtering including start-date gate.
     let today = Local::now().date_naive();
-    let mut filter_args = FilterArgs::parse(vec![]);
+    let mut filter_args = FilterArgs::parse(vec![]).unwrap();
     filter_args.all = true;
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
-    let filtered = filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = filter::apply(
+        all.clone(),
+        &filter_set,
+        &state,
+        today,
+        &std::collections::HashMap::new(),
+    );
     let tasks = scoring::score_and_sort(
         filtered,
         &all,
@@ -401,12 +469,18 @@ fn project_filter_returns_descendants() {
 
     // parent:launch with all=true so the parent itself passes the implicit gate
     let today = chrono::Local::now().date_naive();
-    let mut filter_args = FilterArgs::parse(vec!["parent:launch".into()]);
+    let mut filter_args = FilterArgs::parse(vec!["parent:launch".into()]).unwrap();
     filter_args.all = true;
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
-    let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = next::core::domain::filter::apply(
+        all.clone(),
+        &filter_set,
+        &state,
+        today,
+        &std::collections::HashMap::new(),
+    );
     let titles: Vec<&str> = filtered.iter().map(|t| t.title.as_str()).collect();
     assert!(titles.contains(&"Launch blog"), "root should be included");
     assert!(titles.contains(&"Write copy"));
@@ -461,12 +535,18 @@ fn project_filter_includes_grandchildren() {
     .unwrap();
 
     let today = chrono::Local::now().date_naive();
-    let mut filter_args = FilterArgs::parse(vec!["parent:project".into()]);
+    let mut filter_args = FilterArgs::parse(vec!["parent:project".into()]).unwrap();
     filter_args.all = true;
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
-    let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = next::core::domain::filter::apply(
+        all.clone(),
+        &filter_set,
+        &state,
+        today,
+        &std::collections::HashMap::new(),
+    );
     let titles: Vec<&str> = filtered.iter().map(|t| t.title.as_str()).collect();
     assert!(titles.contains(&"Root"));
     assert!(titles.contains(&"Child"));
@@ -479,12 +559,18 @@ fn project_filter_unknown_slug_returns_empty() {
     add::run(add_args("Some task"), &mut env.ctx).unwrap();
 
     let today = chrono::Local::now().date_naive();
-    let mut filter_args = FilterArgs::parse(vec!["parent:nonexistent".into()]);
+    let mut filter_args = FilterArgs::parse(vec!["parent:nonexistent".into()]).unwrap();
     filter_args.all = true;
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
-    let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = next::core::domain::filter::apply(
+        all.clone(),
+        &filter_set,
+        &state,
+        today,
+        &std::collections::HashMap::new(),
+    );
     assert!(filtered.is_empty());
 }
 
@@ -494,12 +580,18 @@ fn project_filter_unknown_slug_returns_empty() {
 
 fn apply_filter_all(env: &mut common::TestEnv, tokens: Vec<String>) -> Vec<ScoredTask> {
     let today = chrono::Local::now().date_naive();
-    let mut filter_args = FilterArgs::parse(tokens);
+    let mut filter_args = FilterArgs::parse(tokens).unwrap();
     filter_args.all = true;
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
-    let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = next::core::domain::filter::apply(
+        all.clone(),
+        &filter_set,
+        &state,
+        today,
+        &std::collections::HashMap::new(),
+    );
     scoring::score_and_sort(
         filtered,
         &all,
@@ -706,11 +798,17 @@ fn parent_filter_only_returns_active_descendants_by_default() {
 
     // Without --all, done children are excluded even within the parent: scope.
     let today = chrono::Local::now().date_naive();
-    let filter_args = FilterArgs::parse(vec!["parent:proj".into()]);
+    let filter_args = FilterArgs::parse(vec!["parent:proj".into()]).unwrap();
     let filter_set = filter_args.to_filter_set().unwrap();
     let state = env.ctx.repo.store.get_state().unwrap();
     let all = env.ctx.repo.store.list_tasks().unwrap();
-    let filtered = next::core::domain::filter::apply(all.clone(), &filter_set, &state, today);
+    let filtered = next::core::domain::filter::apply(
+        all.clone(),
+        &filter_set,
+        &state,
+        today,
+        &std::collections::HashMap::new(),
+    );
     let titles: Vec<&str> = filtered.iter().map(|t| t.title.as_str()).collect();
     assert!(titles.contains(&"Open child"));
     assert!(

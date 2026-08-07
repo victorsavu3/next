@@ -23,6 +23,7 @@ use crate::core::domain::filter::{self, FilterSet};
 use crate::core::domain::state::GlobalState;
 use crate::core::domain::tag;
 use crate::core::domain::task::{Status, Task};
+use crate::core::scoring::TaskDates;
 
 /// Namespace UUID for deriving deterministic section-header identifiers.
 /// Any fixed, well-known UUID works; we use the OID namespace from RFC 4122.
@@ -154,6 +155,7 @@ pub fn build_items(
     state: &GlobalState,
     today: NaiveDate,
     include_all: bool,
+    task_dates: &HashMap<Uuid, TaskDates>,
 ) -> TreeBuild {
     // Stage 1: apply the user's FilterSet.
     //
@@ -170,7 +172,13 @@ pub fn build_items(
     } else {
         filter_set.clone()
     };
-    let filtered = filter::apply(all_tasks.to_vec(), &effective_filter, state, today);
+    let filtered = filter::apply(
+        all_tasks.to_vec(),
+        &effective_filter,
+        state,
+        today,
+        task_dates,
+    );
 
     // Stage 2: if the tree-local include_all toggle is off, additionally
     // exclude done/cancelled tasks that survived the filter.
@@ -412,6 +420,32 @@ mod tests {
         GlobalState::default()
     }
 
+    /// `build_items` without git dates — no test here filters on `created:`.
+    fn build_items(
+        all_tasks: &[Task],
+        filter_set: &FilterSet,
+        state: &GlobalState,
+        today: NaiveDate,
+        include_all: bool,
+    ) -> TreeBuild {
+        super::build_items(
+            all_tasks,
+            filter_set,
+            state,
+            today,
+            include_all,
+            &HashMap::new(),
+        )
+    }
+
+    /// A `FilterSet` carrying nothing but the query `q`.
+    fn query(q: &str) -> FilterSet {
+        FilterSet {
+            expr: crate::core::domain::filter_expr::parse(q).unwrap(),
+            ..FilterSet::default()
+        }
+    }
+
     fn child_of(title: &str, parent: Uuid) -> Task {
         let mut t = Task::new(title.to_owned());
         t.parent_id = Some(parent);
@@ -524,9 +558,8 @@ mod tests {
         let untagged = Task::new("untagged task".to_owned());
 
         let filter_set = FilterSet {
-            required_tags: vec!["#work".to_owned()],
             disable_implicit: true,
-            ..FilterSet::default()
+            ..query("+#work")
         };
 
         let build = build_items(
@@ -553,9 +586,8 @@ mod tests {
         done_not_matching.mark_done(today());
 
         let filter_set = FilterSet {
-            required_tags: vec!["#work".to_owned()],
             disable_implicit: true,
-            ..FilterSet::default()
+            ..query("+#work")
         };
 
         let build = build_items(

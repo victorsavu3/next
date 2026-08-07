@@ -42,7 +42,7 @@ pub fn get_forecast(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<
         })
         .unwrap_or_default();
 
-    let filter_args = FilterArgs::parse(tokens);
+    let filter_args = FilterArgs::parse(tokens)?;
     let mut filter_set = filter_args.to_filter_set()?;
 
     // `context` param overrides the active context from state for this call.
@@ -63,9 +63,11 @@ pub fn get_forecast(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<
     let candidates = crate::core::listing::load_candidates(&*ctx.store, &filter_set)?;
     let tag_metas = ctx.store.list_tag_metas()?;
 
-    let filtered = filter::apply(candidates.clone(), &filter_set, &state, today);
-    let pool = crate::core::listing::extend_with_parents(&*ctx.store, candidates)?;
+    // Dates before filtering: `created:` and `updated:` are query terms.
+    let pool = crate::core::listing::extend_with_parents(&*ctx.store, candidates.clone())?;
     let task_dates = ctx.task_git_dates_for(&pool);
+
+    let filtered = filter::apply(candidates, &filter_set, &state, today, &task_dates);
     let scored = scoring::score_and_sort(
         filtered,
         &pool,

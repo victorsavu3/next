@@ -26,7 +26,7 @@ pub struct Args {
     #[arg(long)]
     pub json: bool,
 
-    /// Filter tokens: +tag, -tag, parent:slug, context:@name, user:name.
+    /// Filter expression, e.g. `+@work -bug due<+7d` or a bare word to search.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub tokens: Vec<String>,
 }
@@ -36,7 +36,7 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let count = args.count.unwrap_or(ctx.config.next_count);
 
     crate::core::reject_flag_like_tokens(&args.tokens, "next next --help")?;
-    let mut filter_args = FilterArgs::parse(args.tokens);
+    let mut filter_args = FilterArgs::parse(args.tokens)?;
     filter_args.future = args.future;
     filter_args.all = args.all;
     filter_args.all_users = args.all_users;
@@ -47,9 +47,11 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let candidates = listing::load_candidates(ctx.repo.store(), &filter_set)?;
     let tag_metas = ctx.repo.store().list_tag_metas()?;
 
-    let filtered = filter::apply(candidates.clone(), &filter_set, &state, today);
-    let pool = listing::extend_with_parents(ctx.repo.store(), candidates)?;
+    // Dates before filtering: `created:` and `updated:` are query terms.
+    let pool = listing::extend_with_parents(ctx.repo.store(), candidates.clone())?;
     let task_dates = ctx.repo.task_git_dates_for(&pool);
+
+    let filtered = filter::apply(candidates, &filter_set, &state, today, &task_dates);
     let mut scored = scoring::score_and_sort(
         filtered,
         &pool,

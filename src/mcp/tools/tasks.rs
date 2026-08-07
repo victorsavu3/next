@@ -92,17 +92,26 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
         .or(limit)
         .unwrap_or(crate::core::store::DEFAULT_PAGE_SIZE);
 
-    let mut filter_args = crate::core::FilterArgs::parse(tokens);
+    let mut filter_args = crate::core::FilterArgs::parse(tokens)?;
     filter_args.all = include_all;
     let mut filter_set = filter_args.to_filter_set()?;
 
     // Archived view: tag filters and pagination, no scoring/implicit gate;
     // most recently completed first.
     if bool_param(params, "archived") {
+        let (required_tags, excluded_tags) = crate::core::domain::filter_expr::as_tag_filters(
+            &filter_set.expr,
+        )
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "the archived list accepts only +tag and -tag filters for now, not {:?}",
+                filter_set.expr.to_string()
+            )
+        })?;
         let result = ctx.store.query_tasks(&crate::core::TaskQuery {
             archived: true,
-            required_tags: filter_set.required_tags.clone(),
-            excluded_tags: filter_set.excluded_tags.clone(),
+            required_tags,
+            excluded_tags,
             page,
             page_size,
             ..Default::default()
@@ -119,9 +128,11 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
     let candidates = crate::core::listing::load_candidates(&*ctx.store, &filter_set)?;
     let tag_metas = ctx.store.list_tag_metas()?;
 
-    let filtered = filter::apply(candidates.clone(), &filter_set, &state, today);
-    let pool = crate::core::listing::extend_with_parents(&*ctx.store, candidates)?;
+    // Dates before filtering: `created:` and `updated:` are query terms.
+    let pool = crate::core::listing::extend_with_parents(&*ctx.store, candidates.clone())?;
     let task_dates = ctx.task_git_dates_for(&pool);
+
+    let filtered = filter::apply(candidates, &filter_set, &state, today, &task_dates);
     let scored = scoring::score_and_sort(
         filtered,
         &pool,
