@@ -31,7 +31,7 @@ pub fn all_tools() -> Vec<Tool> {
                     "page_size": { "type": "integer", "description": "Tasks per page (default 50)" },
                     "page": { "type": "integer", "description": "1-indexed page of results (default 1)" },
                     "include_all": { "type": "boolean", "description": "Disable implicit filters (blocked, future start, done/cancelled)" },
-                    "archived": { "type": "boolean", "description": "List archived tasks instead (most recently completed first; tag filters and pagination apply, scoring does not)" }
+                    "archived": { "type": "boolean", "description": "List archived tasks instead (most recently completed first; the same filter grammar and pagination apply, scoring does not). Not available here: is:blocked, is:project, parent:, created:, updated:, context:, user: — an archive listing has no view of other tasks or of git history, and says so rather than ignoring them." }
                 }
             }),
         },

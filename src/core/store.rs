@@ -2,8 +2,12 @@ use std::{collections::HashMap, path::PathBuf};
 
 use uuid::Uuid;
 
+use chrono::NaiveDate;
+
 use crate::core::{
     domain::{
+        filter_eval,
+        filter_expr::Expr,
         state::GlobalState,
         tag::TagMeta,
         task::{Status, Task},
@@ -32,10 +36,33 @@ pub struct TaskQuery {
     pub required_tags: Vec<String>,
     /// Task must carry none of the listed tags (same descendant semantics).
     pub excluded_tags: Vec<String>,
+    /// A full filter expression, evaluated on top of the gates above.
+    ///
+    /// `None` = no expression. This is how the archived tier accepts the same
+    /// grammar as the active one.
+    pub filter: Option<QueryFilter>,
     /// 1-indexed page to return; values below 1 are treated as 1.
     pub page: u32,
     /// Items per page; 0 falls back to [`DEFAULT_PAGE_SIZE`].
     pub page_size: u32,
+}
+
+/// A filter expression plus the reference date its relative values resolve
+/// against.
+///
+/// The two travel together because an expression alone is not a question:
+/// `due<+7d` means nothing without a `today`, and letting the two paths pick
+/// their own would be a way for them to disagree.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryFilter {
+    pub expr: Expr,
+    pub today: NaiveDate,
+}
+
+impl QueryFilter {
+    pub fn new(expr: Expr, today: NaiveDate) -> Self {
+        Self { expr, today }
+    }
 }
 
 impl Default for TaskQuery {
@@ -46,6 +73,7 @@ impl Default for TaskQuery {
             parent_id: None,
             required_tags: Vec::new(),
             excluded_tags: Vec::new(),
+            filter: None,
             page: 1,
             page_size: DEFAULT_PAGE_SIZE,
         }
@@ -62,7 +90,11 @@ impl TaskQuery {
         }
     }
 
-    /// Whether `task` (assumed active-tier) passes this query's filter gates.
+    /// Whether `task` (assumed active-tier) passes this query's *column*
+    /// gates — status, parent, tags — but not its [`filter`](Self::filter)
+    /// expression, which needs a context and is applied by
+    /// [`Self::expression_matches`].
+    ///
     /// The reference semantics that SQL-backed implementations must match.
     pub fn matches(&self, task: &Task) -> bool {
         if self.archived {
@@ -94,6 +126,29 @@ impl TaskQuery {
             return false;
         }
         true
+    }
+
+    /// Whether `task` satisfies this query's filter expression (trivially true
+    /// when there is none).
+    ///
+    /// The context carries no relational indexes and no git dates, which is
+    /// safe because [`validate_for_store`] refuses the atoms that would read
+    /// them: a storage query sees one page of one tier, so it cannot answer a
+    /// question about *other* tasks.
+    ///
+    /// [`validate_for_store`]: crate::core::domain::filter_expr::validate_for_store
+    pub fn expression_matches(&self, task: &Task) -> bool {
+        let Some(filter) = &self.filter else {
+            return true;
+        };
+        let indexes = filter_eval::EvalIndexes::default();
+        let ctx = filter_eval::EvalCtx {
+            today: filter.today,
+            indexes: &indexes,
+            task_dates: &HashMap::new(),
+            archived: self.archived,
+        };
+        filter_eval::eval(&filter.expr, task, &ctx)
     }
 }
 
@@ -369,7 +424,7 @@ pub trait Store: Send + Sync {
         let mut items: Vec<Task> = self
             .list_tasks()?
             .into_iter()
-            .filter(|t| q.matches(t))
+            .filter(|t| q.matches(t) && q.expression_matches(t))
             .collect();
         sort_for_query(&mut items);
         Ok(paginate(items, q.page, q.page_size))

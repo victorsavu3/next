@@ -85,12 +85,13 @@ next/                             # crate root (also git repo)
       test_git.rs                 # init_test_repo() helper for unit tests
       domain/                     # pure domain types (no I/O)
         mod.rs  task.rs  state.rs  tag.rs  filter.rs  date_parse.rs
-        filter_expr.rs            # filter expression grammar → Expr AST; lift_overrides(), as_tag_filters()
-        filter_eval.rs            # eval(&Expr, &Task, &EvalCtx) — the reference semantics for S2/S3
+        filter_expr.rs            # filter expression grammar → Expr AST; lift_overrides(), validate_for_store()
+        filter_eval.rs            # eval(&Expr, &Task, &EvalCtx) — the reference semantics for the pushdown
       storage/                    # local TOML + SQLite + git backend + archive tiers
         mod.rs                    # open(), task_path(), state_path_for_repo(), load_scoring()
         machine_state.rs          # MachineState (combined state.toml) + load_/update_machine_state
         archive.rs                # segments, ArchiveConfig, pruned.jsonl manifest (see §6.5)
+        sql_filter.rs             # Expr → SQLite WHERE (superset never subset; exact flag)
         filenames.rs  lock.rs (FileLock)  toml_store.rs  cached_store.rs  git_backend.rs
       plugin/                     # export hook + periodic sync (machine-local registry)
         mod.rs  registry.rs  notify.rs  run.rs (run_due_syncs, resolve_sync_interval)
@@ -728,6 +729,35 @@ Callers that have them (the scored listings) compute them *before* filtering, ov
 the same parent-extended pool scoring uses; callers that have none pass an empty
 map, and those two fields then read as unset.
 
+### Pushdown (`storage/sql_filter.rs`)
+
+`TaskQuery::filter` carries an expression plus the `today` its relative values
+resolve against, and `CachedStore::query_tasks` compiles the part of it that the
+cache's columns can answer into the same `WHERE` it already builds.
+
+The compiler has one rule: **superset, never subset**. A translation that is too
+narrow silently drops rows and nothing fails; one that is too wide costs a few
+extra rows the in-memory pass discards. So it is two functions — `exact`, which
+translates only what it can translate precisely and returns `None` otherwise,
+and `superset`, which always succeeds by falling back to `TRUE`. `NOT` is why
+the distinction exists: negating a superset yields a *subset*, so `Not` is only
+pushed when its operand compiled exactly.
+
+`SqlFilter::exact` tells the caller which mode it got. Exact → SQL paginates and
+`COUNT(*)` is the answer. Inexact → fetch every candidate, re-check each with
+`eval`, then paginate in memory; paginating first would give short pages and a
+total that counted candidates rather than matches.
+
+Pushed: tags (via `task_tags`), status, priority (through a `CASE` rank — `'high'`
+sorts before `'low'` as text), slug, assignee, `user:` (keeping its unassigned
+branch), `due`/`start`/`completed`, `has:`/`no:` on those, and
+`is:closed|archived|assigned|overdue`. Residual: search (until S3), `data.*`,
+`is:recurring`, and anything inside the JSON blob.
+
+Every value is a bound parameter. The only literal the compiler writes into the
+SQL is the priority rank, because a bound parameter arrives as TEXT and SQLite
+orders every integer before every string.
+
 ### `filter_eval` is the reference semantics
 
 S2 compiles the pushable half of an expression into SQL and S3 replaces the text
@@ -938,6 +968,8 @@ non-zero exit code.
 | `domain::date_parse` | `src/core/domain/date_parse.rs` | Unit tests: fixed "today", assert parsed date for common expressions |
 | `domain::filter_expr` | `src/core/domain/filter_expr.rs` | Unit tests: one per atom form and operator spelling, precedence and grouping, error messages for malformed input, and `parse(print(e)) == e` round-trips |
 | `domain::filter_eval` | `src/core/domain/filter_eval.rs` | Unit tests: each atom against a hand-built task, both operator spellings, precedence, and the bare-token/`+tag` split pinned in both directions |
+| `storage::sql_filter` | `src/core/storage/sql_filter.rs` | Unit tests per atom form, plus the superset rule under `or`/`not` and a check that values are bound, never interpolated |
+| Filter pushdown | `tests/test_filter_pushdown.rs` | Differential: ~50 expressions run down both the SQL and in-memory paths over a corpus spanning active, warm-archive and pruned-cold rows, plus a rebuilt cache; pagination under a residual filter; injection attempts |
 | `TomlStore` | `src/core/storage/toml_store.rs` | Round-trip tests: write task to `tempdir`, read back, assert equal fields; migration unit tests: write legacy `state.toml`, call `TomlStore::open()`, assert per-tag files created and `state.toml` cleaned |
 | `GitBackend` | `src/core/storage/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
 | `CachedStore` | `src/core/storage/cached_store.rs` | Unit tests: save/retrieve/delete/rebuild within a `tempdir` git repo |

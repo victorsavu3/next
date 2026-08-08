@@ -1108,11 +1108,24 @@ natural language: `due:"next monday"`.
 A field that is unset never compares true — a task with no deadline is not
 matched by `due<+7d` *or* by `due>+7d`.
 
+### Filtering the archive
+
+`next list --archived` takes the same grammar as the active list, over rows the
+cache holds for every archived task — including segments that have been pruned
+out of the checkout entirely, which `grep` cannot reach.
+
+Five terms are refused there rather than silently ignored, because an archive
+listing has neither a view of other tasks nor git history to consult:
+
+| Term | Why |
+|------|-----|
+| `is:blocked`, `is:project`, `parent:` | They are questions about *other* tasks. |
+| `created:`, `updated:` | They come from git history, which this listing does not load. |
+| `context:`, `user:` | They scope the whole view, which this listing does not apply. |
+
 ### Not yet supported
 
 - `score` cannot be filtered on: a task's score is computed after filtering.
-- `next list --archived` accepts only `+tag` and `-tag`; a richer query is
-  refused rather than silently ignored.
 
 ---
 

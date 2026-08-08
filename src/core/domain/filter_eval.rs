@@ -395,7 +395,10 @@ fn date_of(field: &Field, task: &Task, ctx: &EvalCtx) -> Option<NaiveDate> {
 /// value takes the compact forms (`2026-08-10`, `+7d`, `eow`), a quoted one is
 /// handed to `interim` for natural language (`"next monday"`). Resolution
 /// happens here rather than at parse time because it needs the query's `today`.
-fn resolve_date(value: &Value, today: NaiveDate) -> Option<NaiveDate> {
+///
+/// Public because the SQL compiler must resolve a value to the *same* date
+/// this evaluator would; two resolvers would be two dialects.
+pub fn resolve_date(value: &Value, today: NaiveDate) -> Option<NaiveDate> {
     if let Some(date) = date_parse::parse_compact(&value.raw, today) {
         return Some(date);
     }

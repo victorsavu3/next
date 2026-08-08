@@ -496,8 +496,15 @@ or `list_limit` in config) sets the window size — default 50 — and `--page` 
 the 1-indexed page. Text output MUST indicate when the result is a window on a larger
 set; `--json` returns `{ items, page, page_size, total }`. Additional list modes:
 `--closed` shows only done/cancelled active-tier tasks, and `--archived` lists archived
-tasks (most recently completed first; tag filters and pagination apply, scoring and the
-implicit gate do not). `--archived` conflicts with `--all`, `--closed`, and `--future`.
+tasks (most recently completed first; scoring and the implicit gate do not apply).
+`--archived` conflicts with `--all`, `--closed`, and `--future`.
+
+The archived tier MUST accept the same filter grammar as the active tier, over both
+warm segments and pruned cold ones. The terms it cannot answer — `is:blocked`,
+`is:project` and `parent:` (questions about other tasks), `created:` and `updated:`
+(git history), `context:` and `user:` (whole-view scoping) — MUST be refused with an
+error naming the reason, never silently ignored: a query that quietly drops half its
+meaning returns a plausible wrong answer.
 
 ### 8.3 Task actions
 

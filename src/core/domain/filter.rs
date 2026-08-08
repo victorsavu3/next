@@ -64,6 +64,32 @@ pub struct FilterSet {
     pub parent_slug: Option<String>,
 }
 
+impl FilterSet {
+    /// Refuses the view terms a storage-level query cannot apply.
+    ///
+    /// `parent:`, `context:` and `user:` are lifted out of the expression into
+    /// the fields above, so by the time
+    /// [`validate_for_store`](crate::core::domain::filter_expr::validate_for_store)
+    /// sees the expression they are gone from it. A tier query applies none of
+    /// them — it evaluates the expression and nothing else — so without this
+    /// check `list --archived parent:x` would quietly list the whole archive
+    /// instead of that project's slice of it.
+    pub fn reject_view_terms_for_store(&self) -> crate::core::Result<()> {
+        let unsupported = if self.parent_slug.is_some() {
+            "parent:"
+        } else if self.required_override.is_some() {
+            "context:"
+        } else if self.user_override.is_some() {
+            "user:"
+        } else {
+            return Ok(());
+        };
+        Err(crate::core::TaskError::Other(format!(
+            "{unsupported} scopes the whole view, which this listing does not apply"
+        )))
+    }
+}
+
 /// Applies `filter` to `tasks` and returns those that pass.
 ///
 /// `today` is used for start-date and age checks. `state` supplies the tag

@@ -4,22 +4,24 @@ use chrono::Local;
 use crate::AppContext;
 use crate::{cli::render, core::FilterArgs};
 
-/// The tag filters the archived tier can serve, or an error naming what it
-/// cannot.
+/// The archived tier's filter, or an error naming the part it cannot answer.
 ///
-/// Archived rows are filtered by the storage layer's tag columns rather than by
-/// the evaluator, so only `+tag` / `-tag` survive the trip. Refusing the rest
-/// out loud beats returning a list that quietly ignored half the query; stage
-/// S2 pushes the whole grammar down and this restriction goes away.
-pub(crate) fn archived_tag_filters(
+/// Archived rows carry full task data in the cache, so the whole grammar works
+/// here — except the handful of atoms that need a view of *other* tasks or of
+/// git history, which a tier query does not have.
+pub(crate) fn archived_filter(
     filter_set: &filter::FilterSet,
-) -> anyhow::Result<(Vec<String>, Vec<String>)> {
-    crate::core::domain::filter_expr::as_tag_filters(&filter_set.expr).ok_or_else(|| {
-        anyhow::anyhow!(
-            "the archived list accepts only +tag and -tag filters for now, not {:?}",
-            filter_set.expr.to_string()
-        )
-    })
+    today: chrono::NaiveDate,
+) -> anyhow::Result<crate::core::store::QueryFilter> {
+    crate::core::domain::filter_expr::validate_for_store(&filter_set.expr)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    filter_set
+        .reject_view_terms_for_store()
+        .map_err(|e| anyhow::anyhow!(e))?;
+    Ok(crate::core::store::QueryFilter::new(
+        filter_set.expr.clone(),
+        today,
+    ))
 }
 
 #[derive(clap::Args, Debug)]
@@ -81,11 +83,9 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let filter_set = filter_args.to_filter_set()?;
 
     if args.archived {
-        let (required_tags, excluded_tags) = archived_tag_filters(&filter_set)?;
         let page = ctx.repo.store().query_tasks(&crate::core::TaskQuery {
             archived: true,
-            required_tags,
-            excluded_tags,
+            filter: Some(archived_filter(&filter_set, today)?),
             page: args.page,
             page_size: args
                 .page_size

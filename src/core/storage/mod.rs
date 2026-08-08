@@ -4,6 +4,7 @@ pub mod filenames;
 pub mod git_backend;
 pub mod lock;
 pub mod machine_state;
+pub(crate) mod sql_filter;
 pub mod toml_store;
 
 pub use cached_store::CachedStore;

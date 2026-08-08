@@ -10,6 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension as _};
 use uuid::Uuid;
 
 use super::git_backend::FileChange;
+use super::sql_filter;
 use super::TomlStore;
 
 /// TOML-backed store with an SQLite read cache.
@@ -546,7 +547,43 @@ impl Store for CachedStore {
             args.push(tag.clone());
         }
 
+        // Compile the filter expression into the same WHERE. What cannot be
+        // expressed widens to TRUE, and `exact` records whether what came back
+        // is the answer or merely a superset of it.
+        let compiled = q
+            .filter
+            .as_ref()
+            .map(|f| sql_filter::compile(&f.expr, f.today));
+        let exact = compiled.as_ref().is_none_or(|c| c.exact);
+        if let Some(c) = &compiled {
+            where_sql.push_str(&format!(" AND {}", c.sql));
+            args.extend(c.params.iter().cloned());
+        }
+
         self.with_conn(|conn| {
+            // When the SQL is only a superset, the row count is not the answer
+            // and neither is any window into it: the rows still have to be
+            // re-checked in memory, so fetch them all, filter, then paginate.
+            if !exact {
+                let mut stmt = conn
+                    .prepare(&format!(
+                        "SELECT data FROM tasks WHERE {where_sql} \
+                         ORDER BY (completed_at IS NOT NULL), completed_at DESC, id"
+                    ))
+                    .map_err(|e| TaskError::Other(format!("sqlite prepare query: {e}")))?;
+                let candidates = collect_task_rows(
+                    stmt.query_map(rusqlite::params_from_iter(args.iter()), |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .map_err(|e| TaskError::Other(format!("sqlite query tasks: {e}")))?,
+                )?;
+                let matched: Vec<Task> = candidates
+                    .into_iter()
+                    .filter(|t| q.expression_matches(t))
+                    .collect();
+                return Ok(crate::core::store::paginate(matched, page, page_size));
+            }
+
             let total = conn
                 .query_row(
                     &format!("SELECT COUNT(*) FROM tasks WHERE {where_sql}"),

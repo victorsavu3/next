@@ -96,22 +96,17 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
     filter_args.all = include_all;
     let mut filter_set = filter_args.to_filter_set()?;
 
-    // Archived view: tag filters and pagination, no scoring/implicit gate;
-    // most recently completed first.
+    // Archived view: the same grammar as the active tier, plus pagination; no
+    // scoring and no implicit gate, most recently completed first.
     if bool_param(params, "archived") {
-        let (required_tags, excluded_tags) = crate::core::domain::filter_expr::as_tag_filters(
-            &filter_set.expr,
-        )
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "the archived list accepts only +tag and -tag filters for now, not {:?}",
-                filter_set.expr.to_string()
-            )
-        })?;
+        crate::core::domain::filter_expr::validate_for_store(&filter_set.expr)?;
+        filter_set.reject_view_terms_for_store()?;
         let result = ctx.store.query_tasks(&crate::core::TaskQuery {
             archived: true,
-            required_tags,
-            excluded_tags,
+            filter: Some(crate::core::store::QueryFilter::new(
+                filter_set.expr.clone(),
+                today,
+            )),
             page,
             page_size,
             ..Default::default()

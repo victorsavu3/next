@@ -445,6 +445,58 @@ fn combine_list_or_identity(mut parts: Vec<Expr>) -> Expr {
     }
 }
 
+/// Refuses the atoms a storage-level query cannot answer.
+///
+/// A tier query sees one page of one tier. It has no view of *other* tasks, so
+/// `is:blocked` (is my blocker still open?), `is:project` (does anything call
+/// me parent?) and `parent:` (am I under that root?) have no answer there —
+/// and it carries no git history, so `created:` and `updated:` have none
+/// either. The listing pipeline answers all five, because it holds the whole
+/// candidate set; the archived tier does not.
+///
+/// Refusing is the point. Evaluating them against an empty index would return
+/// a confident `false` for every task, which reads as "no matches" rather than
+/// as "cannot answer".
+pub fn validate_for_store(expr: &Expr) -> Result<()> {
+    walk(expr, &mut |atom| {
+        let unsupported = match atom {
+            Atom::Is(Named::Blocked) => Some(("is:blocked", "it depends on other tasks")),
+            Atom::Is(Named::Project) => Some(("is:project", "it depends on other tasks")),
+            Atom::Equals {
+                field: Field::Parent,
+                ..
+            } => Some(("parent:", "it depends on other tasks")),
+            Atom::Equals {
+                field: field @ (Field::Created | Field::Updated),
+                ..
+            }
+            | Atom::Compare {
+                field: field @ (Field::Created | Field::Updated),
+                ..
+            }
+            | Atom::Range {
+                field: field @ (Field::Created | Field::Updated),
+                ..
+            }
+            | Atom::Has(field @ (Field::Created | Field::Updated)) => Some((
+                if *field == Field::Created {
+                    "created:"
+                } else {
+                    "updated:"
+                },
+                "it comes from git history, which this listing does not load",
+            )),
+            _ => None,
+        };
+        match unsupported {
+            Some((name, why)) => Err(TaskError::Other(format!(
+                "{name} cannot be used here because {why}"
+            ))),
+            None => Ok(()),
+        }
+    })
+}
+
 /// The `+tag` / `-tag` conjunction this expression is, when it is only that.
 ///
 /// The archived tier still filters through the storage layer's tag columns
