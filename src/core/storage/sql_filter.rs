@@ -28,6 +28,7 @@
 use chrono::NaiveDate;
 
 use crate::core::domain::filter_expr::{Atom, CompareOp, Expr, Field, Named, Value};
+use crate::core::domain::task::Priority;
 
 /// A compiled `WHERE` fragment and the parameters it binds, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,7 +86,7 @@ fn superset(expr: &Expr, today: NaiveDate) -> SqlFilter {
         // The asymmetric case: NOT of a superset is a SUBSET, which would drop
         // rows. Only an exactly-translated operand may be negated.
         Expr::Not(inner) => match exact(inner, today) {
-            Some(f) => SqlFilter::new(format!("(NOT {})", f.sql), f.params, true),
+            Some(f) => SqlFilter::new(negate(&f.sql), f.params, true),
             None => SqlFilter::everything(),
         },
         Expr::Atom(atom) => atom_sql(atom, today).unwrap_or_else(SqlFilter::everything),
@@ -100,7 +101,7 @@ fn exact(expr: &Expr, today: NaiveDate) -> Option<SqlFilter> {
         Expr::Or(parts) => join_exact(parts, " OR ", "0", today),
         Expr::Not(inner) => {
             let f = exact(inner, today)?;
-            Some(SqlFilter::new(format!("(NOT {})", f.sql), f.params, true))
+            Some(SqlFilter::new(negate(&f.sql), f.params, true))
         }
         Expr::Atom(atom) => atom_sql(atom, today).filter(|f| f.exact),
     }
@@ -128,6 +129,20 @@ fn join_exact(parts: &[Expr], sep: &str, empty: &str, today: NaiveDate) -> Optio
     Some(combine(compiled, sep))
 }
 
+/// Negates a fragment, treating SQL's `NULL` as false first.
+///
+/// This is where SQL's three-valued logic and the evaluator's two-valued logic
+/// meet. A comparison against an unset column yields `NULL`, and `NOT NULL` is
+/// `NULL` — not true — so the row is dropped. The evaluator instead reads an
+/// unset field as "the predicate is false", and negating that gives *true*.
+///
+/// So `not slug:alpha` must return the tasks with no slug at all, and plain
+/// `NOT (slug IN (?))` returned none of them. `COALESCE(…, 0)` collapses the
+/// unknown to false before the negation, which is exactly the evaluator's rule.
+fn negate(sql: &str) -> String {
+    format!("(NOT COALESCE({sql}, 0))")
+}
+
 fn combine(mut compiled: Vec<SqlFilter>, sep: &str) -> SqlFilter {
     // A lone operand needs no grouping; every caller either wraps its own
     // result or is itself inside a group.
@@ -153,13 +168,26 @@ fn combine(mut compiled: Vec<SqlFilter>, sep: &str) -> SqlFilter {
 /// Whether a task carries the tag or a descendant of it — the same rule
 /// `tag::tag_matches` applies, expressed against `task_tags`.
 ///
-/// `LIKE ? || '/%'` is safe for the descendant half because tag names are
-/// validated to letters, digits, `-`, `_` and `/`, so a tag can never contain
-/// a `%` or `_` wildcard that would widen the match. (`_` is a LIKE wildcard,
-/// but it only ever widens by one character within an already-anchored prefix,
-/// and the in-memory pass rechecks anyway when the query is inexact.)
+/// The descendant half is a `substr` comparison rather than `LIKE ? || '/%'`,
+/// and both differences matter because this atom is marked *exact*, so nothing
+/// re-checks it in memory:
+///
+/// - SQLite's `LIKE` folds ASCII case by default, so `+@WORK` would have
+///   matched a task tagged `@work/x` that `tag_matches` rejects — extra rows,
+///   silently.
+/// - `_` is a `LIKE` wildcard *and* a legal tag character, so `+a_b` would
+///   have matched `axb/c`.
+///
+/// `=` on TEXT uses BINARY collation and has no wildcards, so the comparison
+/// means exactly what the evaluator means. Binds its value three times.
 const TAG_MATCH: &str = "EXISTS (SELECT 1 FROM task_tags tt \
-     WHERE tt.task_id = tasks.id AND (tt.tag = ? OR tt.tag LIKE ? || '/%'))";
+     WHERE tt.task_id = tasks.id \
+     AND (tt.tag = ? OR substr(tt.tag, 1, length(?) + 1) = ? || '/'))";
+
+/// The parameters [`TAG_MATCH`] binds, in order.
+fn tag_params(name: &str) -> Vec<String> {
+    vec![name.to_owned(), name.to_owned(), name.to_owned()]
+}
 
 /// Priority is stored as a word, so ordering needs an explicit rank — `'high'`
 /// sorts before `'low'` lexicographically, which is the opposite of its urgency.
@@ -168,11 +196,7 @@ const PRIORITY_RANK: &str =
 
 fn atom_sql(atom: &Atom, today: NaiveDate) -> Option<SqlFilter> {
     match atom {
-        Atom::Tag(name) => Some(SqlFilter::new(
-            TAG_MATCH,
-            vec![name.clone(), name.clone()],
-            true,
-        )),
+        Atom::Tag(name) => Some(SqlFilter::new(TAG_MATCH, tag_params(name), true)),
         Atom::Equals { field, values } => equals_sql(field, values, today),
         Atom::Compare { field, op, value } => compare_sql(field, *op, value, today),
         Atom::Range { field, low, high } => {
@@ -193,9 +217,18 @@ fn equals_sql(field: &Field, values: &[Value], today: NaiveDate) -> Option<SqlFi
     if matches!(field, Field::Tag | Field::Context) {
         let parts: Vec<SqlFilter> = values
             .iter()
-            .map(|v| SqlFilter::new(TAG_MATCH, vec![v.raw.clone(), v.raw.clone()], true))
+            .map(|v| SqlFilter::new(TAG_MATCH, tag_params(&v.raw), true))
             .collect();
         return Some(combine(parts, " OR "));
+    }
+
+    // Enum-valued columns store one canonical spelling, but the evaluator
+    // parses the value case-insensitively and accepts aliases (`med`,
+    // `canceled`). Binding the raw text into a case-sensitive `IN` therefore
+    // DROPPED rows the evaluator matches — and since this atom is exact,
+    // nothing re-checked them. Normalise through the same parser instead.
+    if let Some(canonical) = canonical_enum(field, values) {
+        return Some(canonical);
     }
 
     if let Some(column) = date_column(field) {
@@ -227,6 +260,36 @@ fn equals_sql(field: &Field, values: &[Value], today: NaiveDate) -> Option<SqlFi
         params,
         true,
     ))
+}
+
+/// `status:` / `priority:` translated through the evaluator's own parser, so
+/// the SQL binds the spelling the column actually stores.
+///
+/// A value that does not parse matches nothing — the same answer the evaluator
+/// gives — so it compiles to `0` rather than to a string that happens to match
+/// no row, keeping the two paths identical for garbage input too.
+fn canonical_enum(field: &Field, values: &[Value]) -> Option<SqlFilter> {
+    let column = match field {
+        Field::Status => "status",
+        Field::Priority => "priority",
+        _ => return None,
+    };
+    let parts: Vec<SqlFilter> = values
+        .iter()
+        .map(|v| {
+            let canonical = match field {
+                Field::Status => {
+                    crate::core::domain::filter_eval::status_from(&v.raw).map(|s| s.to_string())
+                }
+                _ => v.raw.parse::<Priority>().ok().map(|p| p.to_string()),
+            };
+            match canonical {
+                Some(word) => SqlFilter::new(format!("{column} = ?"), vec![word], true),
+                None => SqlFilter::nothing(),
+            }
+        })
+        .collect();
+    Some(combine(parts, " OR "))
 }
 
 fn compare_sql(field: &Field, op: CompareOp, value: &Value, today: NaiveDate) -> Option<SqlFilter> {
@@ -421,9 +484,15 @@ mod tests {
         // that matched the search but not the tag.
         let f = sql("+@work or sometext");
         assert!(!f.exact);
-        assert_eq!(
-            f.sql, "(EXISTS (SELECT 1 FROM task_tags tt WHERE tt.task_id = tasks.id AND (tt.tag = ? OR tt.tag LIKE ? || '/%')) OR 1)",
-            "the OR must still admit everything the search could match"
+        assert!(
+            f.sql.starts_with("(EXISTS (SELECT 1 FROM task_tags"),
+            "{}",
+            f.sql
+        );
+        assert!(
+            f.sql.ends_with(" OR 1)"),
+            "the OR must still admit everything the search could match — {}",
+            f.sql
         );
     }
 
@@ -507,9 +576,44 @@ mod tests {
     #[test]
     fn an_unknown_enum_value_matches_nothing() {
         assert_eq!(sql("priority>sideways").sql, "0");
-        // Equality goes through `IN`, where an unknown value simply matches no
-        // row without needing a special case.
-        assert_eq!(sql("status:sideways").params, vec!["sideways".to_owned()]);
+        assert_eq!(sql("status:sideways").sql, "0");
+        assert!(sql("status:sideways").params.is_empty());
+    }
+
+    #[test]
+    fn enum_values_are_normalised_to_the_stored_spelling() {
+        // The evaluator parses these case-insensitively and accepts aliases.
+        // Binding the raw text into a case-sensitive comparison DROPPED every
+        // matching row, and the atom is exact so nothing re-checked it.
+        for (query, want) in [
+            ("status:open", "open"),
+            ("status:OPEN", "open"),
+            ("status:Done", "done"),
+            ("status:canceled", "cancelled"),
+            ("priority:high", "high"),
+            ("priority:HIGH", "high"),
+            ("priority:med", "medium"),
+        ] {
+            let f = sql(query);
+            assert_eq!(f.params, vec![want.to_owned()], "{query}");
+            assert!(f.exact, "{query}");
+        }
+    }
+
+    #[test]
+    fn the_tag_prefix_test_is_case_sensitive_and_wildcard_free() {
+        // `LIKE` folds ASCII case and treats `_` as a wildcard, and `_` is a
+        // legal tag character — so the old translation matched tags that
+        // `tag_matches` rejects, while claiming to be exact.
+        let f = sql("+@work");
+        assert!(!f.sql.contains("LIKE"), "{}", f.sql);
+        assert!(
+            f.sql.contains("substr(tt.tag, 1, length(?) + 1)"),
+            "{}",
+            f.sql
+        );
+        assert_eq!(f.params.len(), 3, "the value is bound once per placeholder");
+        assert_eq!(f.sql.matches('?').count(), f.params.len());
     }
 
     #[test]
@@ -536,7 +640,7 @@ mod tests {
     #[test]
     fn a_tag_value_is_bound_too() {
         let f = sql("+@work");
-        assert_eq!(f.params, vec!["@work".to_owned(), "@work".to_owned()]);
+        assert_eq!(f.params, vec!["@work".to_owned(); 3]);
         assert!(!f.sql.contains("@work"), "{}", f.sql);
     }
 
@@ -548,6 +652,7 @@ mod tests {
         assert_eq!(
             f.params,
             vec![
+                "@work".to_owned(),
                 "@work".to_owned(),
                 "@work".to_owned(),
                 "x".to_owned(),

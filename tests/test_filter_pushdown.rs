@@ -54,8 +54,23 @@ const EXPRESSIONS: &[&str] = &[
     "+@work/backend",
     "-@work",
     "tag:@work,@home",
+    // `LIKE` folds ASCII case and treats `_` as a wildcard — and `_` is a
+    // legal tag character — so the old descendant test matched tags the
+    // evaluator rejects while claiming to be exact.
+    "+@WORK",
+    "+@Work/Backend",
+    "+a_b",
+    "+@work/back",
     "status:done",
     "status:done,cancelled",
+    // The evaluator parses enum values case-insensitively and accepts aliases;
+    // the column stores one canonical spelling. Binding the raw text into a
+    // case-sensitive comparison dropped every match, and the atom is exact so
+    // nothing re-checked it. These four are the regression guard.
+    "status:DONE",
+    "status:canceled",
+    "priority:HIGH",
+    "priority:med",
     "priority:high",
     "priority>=medium",
     "priority<high",
@@ -97,7 +112,14 @@ const EXPRESSIONS: &[&str] = &[
     "+@work and not alpha",
     // Boolean shapes over pushable atoms only, so the whole thing is pushed
     // including the negations.
+    // Negation over a NULLABLE column: SQL's `NOT NULL` is NULL, not true, so
+    // a plain `NOT (col = ?)` dropped every task where the column is unset —
+    // which the evaluator matches. These are the guard for that.
     "not +@work",
+    "not slug:alpha",
+    "not assignee:alice",
+    "not due:2026-08-01",
+    "not due<2026-08-01",
     "not (status:done or priority:low)",
     "+@work and (status:done or priority:high)",
     "(+@work or +@home) and not is:closed",
@@ -184,6 +206,17 @@ fn corpus(env: &mut common::TestEnv) -> (Vec<Task>, Vec<Task>) {
 
     // Untagged and unassigned, so `user:` and the tag atoms have a negative case.
     active.push(Task::new("Delta plain"));
+
+    // `_` is a legal tag character and a `LIKE` wildcard. These two exist so
+    // that `+a_b` has both a task it must match and one it must not: with the
+    // old translation, `a_b` matched `axb/c` as well.
+    let mut underscore = Task::new("Epsilon underscore tag");
+    underscore.tags = vec!["a_b/c".into()];
+    active.push(underscore);
+
+    let mut wildcarded = Task::new("Zeta wildcard decoy");
+    wildcarded.tags = vec!["axb/c".into()];
+    active.push(wildcarded);
 
     // ── Archive tier ─────────────────────────────────────────────────────────
     // Ancient enough to be pruned into the cold tier.

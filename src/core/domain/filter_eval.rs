@@ -314,7 +314,10 @@ fn equals(field: &Field, value: &Value, task: &Task, ctx: &EvalCtx) -> bool {
 }
 
 /// `Status` has no `FromStr`; filters need one and nothing else does.
-fn status_from(raw: &str) -> Option<Status> {
+///
+/// Public because the SQL compiler must accept exactly the spellings this
+/// accepts. Two parsers would mean `status:OPEN` matching here and not there.
+pub fn status_from(raw: &str) -> Option<Status> {
     match raw.to_ascii_lowercase().as_str() {
         "open" => Some(Status::Open),
         "started" => Some(Status::Started),
