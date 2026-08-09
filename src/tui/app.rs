@@ -319,6 +319,9 @@ pub struct App {
     /// Active filter tokens (`+tag`, `-tag`, `parent:`, `context:`, `user:`),
     /// threaded into [`FilterArgs`] on every [`App::reload`].
     filter_tokens: Vec<String>,
+    /// The last filter that parsed, kept so a half-typed expression leaves the
+    /// tree as it was instead of widening it to everything.
+    last_good_filter: Option<filter::FilterSet>,
     /// `--future`: include tasks scheduled in the future.
     filter_future: bool,
     /// `true` when the forecast view auto-enabled `filter_future` on entry.
@@ -391,6 +394,7 @@ impl App {
             task_dates: HashMap::new(),
             detail_scroll: 0,
             filter_tokens: Vec::new(),
+            last_good_filter: None,
             filter_future: false,
             forecast_auto_future: false,
             filter_all: false,
@@ -472,12 +476,24 @@ impl App {
     /// auto-opens any new context sections, and caches the task→section map
     /// for cross-view selection seeding.
     pub fn tree_items(&mut self) -> Vec<tui_tree_widget::TreeItem<'static, uuid::Uuid>> {
-        let filter_set = self
-            .current_filter_set()
-            .unwrap_or_else(|_| filter::FilterSet {
-                include_blocked_parents: true,
-                ..Default::default()
-            });
+        // A filter that does not parse must not silently widen the view. The
+        // default `FilterSet` matches everything, so falling back to it would
+        // render an UNFILTERED tree next to the status line's error — the tree
+        // growing is the opposite of what a typo should do. Keep the last
+        // filter that worked instead.
+        let filter_set = match self.current_filter_set() {
+            Ok(set) => {
+                self.last_good_filter = Some(set.clone());
+                set
+            }
+            Err(_) => self
+                .last_good_filter
+                .clone()
+                .unwrap_or_else(|| filter::FilterSet {
+                    include_blocked_parents: true,
+                    ..Default::default()
+                }),
+        };
         let store = self.repo.store();
         let state = store.get_state().unwrap_or_default();
         let build = super::tree::build_items(

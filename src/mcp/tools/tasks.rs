@@ -99,14 +99,9 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
     // Archived view: the same grammar as the active tier, plus pagination; no
     // scoring and no implicit gate, most recently completed first.
     if bool_param(params, "archived") {
-        crate::core::domain::filter_expr::validate_for_store(&filter_set.expr)?;
-        filter_set.reject_view_terms_for_store()?;
         let result = ctx.store.query_tasks(&crate::core::TaskQuery {
             archived: true,
-            filter: Some(crate::core::store::QueryFilter::new(
-                filter_set.expr.clone(),
-                today,
-            )),
+            filter: Some(filter_set.to_store_filter(today)?),
             page,
             page_size,
             ..Default::default()

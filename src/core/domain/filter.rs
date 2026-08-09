@@ -65,6 +65,24 @@ pub struct FilterSet {
 }
 
 impl FilterSet {
+    /// The storage-level filter for this query, or an error naming the part
+    /// that a tier query cannot answer.
+    ///
+    /// One helper rather than one per surface: the CLI's `--archived` and the
+    /// MCP `list_tasks(archived)` ask the same question, and two copies of the
+    /// guard is two places for the refusal list to drift.
+    pub fn to_store_filter(
+        &self,
+        today: chrono::NaiveDate,
+    ) -> crate::core::Result<crate::core::store::QueryFilter> {
+        crate::core::domain::filter_expr::validate_for_store(&self.expr)?;
+        self.reject_view_terms_for_store()?;
+        Ok(crate::core::store::QueryFilter::new(
+            self.expr.clone(),
+            today,
+        ))
+    }
+
     /// Refuses the view terms a storage-level query cannot apply.
     ///
     /// `parent:`, `context:` and `user:` are lifted out of the expression into
@@ -139,7 +157,7 @@ pub fn apply(
 
     // Built once for the whole query, not per task: every index the evaluator
     // consults is a fact about the candidate set, not about one task.
-    let indexes = EvalIndexes::build(&tasks);
+    let indexes = EvalIndexes::build_for(&filter.expr, &tasks);
     let eval_ctx = EvalCtx {
         today,
         indexes: &indexes,

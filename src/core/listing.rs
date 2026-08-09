@@ -11,7 +11,10 @@
 //! - `--closed` needs only closed tasks, which is its own pushdown;
 //! - `--all` (`disable_implicit`) and `parent:` project scoping genuinely
 //!   need the full set (a project root or intermediate node may be closed),
-//!   so they fall back to loading everything.
+//!   so they fall back to loading everything;
+//! - so do the relational predicates `is:blocked` and `is:project`, which are
+//!   answered from an index over the loaded set: narrow the load and the index
+//!   silently acquires holes.
 
 use std::collections::HashSet;
 
@@ -25,7 +28,10 @@ use crate::core::store::{Store, TaskQuery};
 /// The result is what `filter::apply` should run on; it is *not* yet
 /// filtered.
 pub fn load_candidates(store: &dyn Store, filter: &FilterSet) -> Result<Vec<Task>> {
-    if filter.disable_implicit || filter.parent_slug.is_some() {
+    if filter.disable_implicit
+        || filter.parent_slug.is_some()
+        || crate::core::domain::filter_expr::needs_full_corpus(&filter.expr)
+    {
         return store.list_tasks();
     }
     let statuses = if filter.closed_only {
@@ -122,6 +128,36 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(load_candidates(&store, &scoped).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn relational_predicates_load_everything() {
+        // These are answered from an index over the loaded set, so a status
+        // pushdown would put holes in it — a parent whose children are all
+        // closed would look childless.
+        let mut done = Task::new("Done");
+        done.mark_done(chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
+        let open = Task::new("Open");
+        let (_dir, store) = store_with(&[done, open]);
+
+        for query in ["is:project", "is:blocked", "+@work and is:project"] {
+            let filter = FilterSet {
+                expr: crate::core::domain::filter_expr::parse(query).unwrap(),
+                ..Default::default()
+            };
+            assert_eq!(
+                load_candidates(&store, &filter).unwrap().len(),
+                2,
+                "{query} must see closed tasks too"
+            );
+        }
+
+        // A query that asks nothing relational keeps the status pushdown.
+        let filter = FilterSet {
+            expr: crate::core::domain::filter_expr::parse("+@work due<+7d").unwrap(),
+            ..Default::default()
+        };
+        assert_eq!(load_candidates(&store, &filter).unwrap().len(), 1);
     }
 
     #[test]

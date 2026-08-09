@@ -342,10 +342,8 @@ pub struct Overrides {
 /// silently matching nothing.
 pub fn lift_overrides(expr: Expr) -> Result<(Expr, Overrides)> {
     let mut overrides = Overrides::default();
-    let parts = match expr {
-        Expr::And(parts) => parts,
-        other => vec![other],
-    };
+    let mut parts = Vec::new();
+    flatten_conjunction(expr, &mut parts);
 
     let mut kept = Vec::with_capacity(parts.len());
     for part in parts {
@@ -361,6 +359,25 @@ pub fn lift_overrides(expr: Expr) -> Result<(Expr, Overrides)> {
         reject_unsupported(part)?;
     }
     Ok((combine_list_or_identity(kept), overrides))
+}
+
+/// Collects the whole conjunction spine into `out`, descending through nested
+/// `And` nodes.
+///
+/// `AND` is associative, so `a and (b and c)` is the same query as `a and b
+/// and c` — but the parser keeps the parentheses as a nested node, and a view
+/// term is only lifted from a *top-level* part. Without flattening,
+/// `+bug and (parent:infra and +x)` would be refused for appearing "inside an
+/// or or a not" when it is inside neither.
+fn flatten_conjunction(expr: Expr, out: &mut Vec<Expr>) {
+    match expr {
+        Expr::And(parts) => {
+            for part in parts {
+                flatten_conjunction(part, out);
+            }
+        }
+        other => out.push(other),
+    }
 }
 
 /// Lifts `part` into `overrides` when it is a view term, reporting whether it
@@ -443,6 +460,27 @@ fn combine_list_or_identity(mut parts: Vec<Expr>) -> Expr {
     } else {
         Expr::And(parts)
     }
+}
+
+/// Whether answering `expr` needs every task, not just the ones a status
+/// pushdown would load.
+///
+/// `is:blocked` asks whether a blocker is still open and `is:project` whether
+/// anything calls the task its parent — both are questions about *other*
+/// tasks, and both are answered from an index built over the candidate set. If
+/// that set was narrowed by status first, the index has holes: a parent whose
+/// children are all closed looks childless, and under `--closed` no open
+/// blocker is loaded at all. The listing pipeline therefore has to widen the
+/// load, exactly as it already does for `parent:`.
+pub fn needs_full_corpus(expr: &Expr) -> bool {
+    let mut needed = false;
+    let _ = walk(expr, &mut |atom| {
+        if matches!(atom, Atom::Is(Named::Blocked) | Atom::Is(Named::Project)) {
+            needed = true;
+        }
+        Ok(())
+    });
+    needed
 }
 
 /// Refuses the atoms a storage-level query cannot answer.

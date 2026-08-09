@@ -1075,7 +1075,7 @@ only phrases, parentheses and `#resource` tags need shell quoting.
 | `<field><op><value>` | `due<+7d`, `priority>=medium`, `created>2026-08-01` | Ordered comparison (`<`, `<=`, `>`, `>=`) over `priority`, the dates, and numeric `data.*`. |
 | `<field>:<low>..<high>` | `due:2026-08-01..eom` | Inclusive range. |
 | `has:<field>` / `no:<field>` | `has:due`, `no:assignee`, `has:context` | Whether the field is set. `has:context` asks whether the task carries any `@` tag. |
-| `is:<name>` | `is:overdue`, `is:blocked`, `is:project`, `is:recurring`, `is:closed`, `is:assigned` | Named predicates. |
+| `is:<name>` | `is:overdue`, `is:blocked`, `is:project`, `is:recurring`, `is:closed`, `is:assigned` | Named predicates. See the note below on `is:project` and `is:blocked`. |
 | `and` `or` `not` `( )` | `+@work and (due<+7d or is:overdue)` | Booleans, also spelled `&`, `|`, `!`. Adjacency means `and`, and precedence runs `not` > `and` > `or`. Quote an operator word (`"or"`) to search for it literally. |
 | `parent:<slug>` | `parent:work`, `parent:launch-blog` | Task is a descendant (direct or transitive child) of the task with this slug. |
 | `context:<@tag>` | `context:@home` | Include exactly this tag for this query only, ignoring whatever the stored state includes. Exclusions still apply. |
@@ -1097,6 +1097,21 @@ The **tag state** is applied separately and is *not* disabled by `--all`, which 
 the statuses shown rather than the tags: a tag excluded on purpose stays excluded until
 it is un-excluded. Tasks carrying an excluded tag are hidden, and while any tag is
 required, tasks that carry no required tag are hidden too.
+
+### `is:project` and `is:blocked` interact with the implicit gate
+
+Both ask about *other* tasks, so the default list — which hides a parent while
+any child is open, and hides a task while any blocker is open — removes most of
+what they select before the query is even evaluated:
+
+- `next list is:project` lists only projects whose children are **all**
+  resolved. A project with an open subtask is hidden by the gate, because the
+  advice is to work on the subtask.
+- `next list is:blocked` lists nothing, since a blocked task is hidden by the
+  gate for the same reason.
+
+Add `--all` to see them: `next list --all is:blocked` is the useful spelling.
+The predicates themselves are exact — the gate is what narrows the view.
 
 ### Dates in a filter
 

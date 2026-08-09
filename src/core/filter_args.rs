@@ -151,6 +151,26 @@ mod tests {
     }
 
     #[test]
+    fn a_view_term_lifts_from_anywhere_in_the_conjunction() {
+        // `and` is associative, so parentheses around part of a conjunction
+        // must not change what the query means. Before this was flattened,
+        // the nested `and` was refused for being "inside an or or a not".
+        for query in [
+            "+bug parent:infra +x",
+            "+bug and (parent:infra and +x)",
+            "(+bug and parent:infra) and +x",
+            "((parent:infra))",
+        ] {
+            let parsed = args(&[query]);
+            assert_eq!(
+                parsed.overrides.parent_slug.as_deref(),
+                Some("infra"),
+                "{query}"
+            );
+        }
+    }
+
+    #[test]
     fn a_view_term_inside_a_boolean_is_refused() {
         for tokens in [
             ["+bug", "or", "parent:infra"].as_slice(),

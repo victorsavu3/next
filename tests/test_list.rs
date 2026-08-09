@@ -132,6 +132,139 @@ fn list_accepts_a_full_expression() {
     assert!(apply_filter(&mut env, vec!["\"doc design\"".to_string()]).is_empty());
 }
 
+/// Runs the real listing pipeline: `load_candidates` (which pushes the status
+/// gate into the store) followed by `filter::apply`.
+///
+/// `apply_filter` above deliberately starts from the whole task list, so it
+/// cannot see what the status pushdown hides — which is exactly the bug this
+/// exercises.
+fn pipeline(env: &mut common::TestEnv, query: &str, closed_only: bool) -> Vec<String> {
+    let today = Local::now().date_naive();
+    let mut filter_args = FilterArgs::parse(vec![query.to_string()]).unwrap();
+    filter_args.closed = closed_only;
+    let filter_set = filter_args.to_filter_set().unwrap();
+
+    let store = env.ctx.repo.store();
+    let state = store.get_state().unwrap();
+    let candidates = next::core::listing::load_candidates(store, &filter_set).unwrap();
+    filter::apply(
+        candidates,
+        &filter_set,
+        &state,
+        today,
+        &std::collections::HashMap::new(),
+    )
+    .into_iter()
+    .map(|t| t.title)
+    .collect()
+}
+
+/// `is:project` is answered from an index over the tasks the listing loaded.
+/// The default load is active-only, so a parent whose children are all closed
+/// looked childless and the predicate returned nothing.
+#[test]
+fn is_project_counts_a_closed_child() {
+    let mut env = common::setup();
+    let today = Local::now().date_naive();
+
+    add::run(
+        add::Args {
+            slug: Some("proj".into()),
+            ..add_args("Parent of a finished child")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(
+        add::Args {
+            parent: Some("proj".into()),
+            ..add_args("Finished child")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    // Finish the child, so nothing but the parent remains active.
+    let child = env
+        .ctx
+        .repo
+        .store()
+        .list_tasks()
+        .unwrap()
+        .into_iter()
+        .find(|t| t.title == "Finished child")
+        .expect("child exists");
+    let mut done = child.clone();
+    done.mark_done(today);
+    env.ctx
+        .repo
+        .transaction(|store, vcs, root| {
+            store.save_task(&done)?;
+            vcs.commit(&[next::core::storage::task_path(root, &done)], "done")?;
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(
+        pipeline(&mut env, "is:project", false),
+        vec!["Parent of a finished child"],
+        "a closed child still makes its parent a project"
+    );
+}
+
+/// The sibling case: under `--closed` only closed tasks load, so the
+/// open-blocker index was empty and `is:blocked` could never fire.
+#[test]
+fn is_blocked_works_under_closed_only() {
+    let mut env = common::setup();
+    let today = Local::now().date_naive();
+
+    add::run(add_args("Open blocker"), &mut env.ctx).unwrap();
+    let blocker = env
+        .ctx
+        .repo
+        .store()
+        .list_tasks()
+        .unwrap()
+        .into_iter()
+        .find(|t| t.title == "Open blocker")
+        .expect("blocker exists");
+
+    add::run(
+        add::Args {
+            blocked_by: vec![blocker.id.to_string()],
+            ..add_args("Closed but blocked")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    let blocked = env
+        .ctx
+        .repo
+        .store()
+        .list_tasks()
+        .unwrap()
+        .into_iter()
+        .find(|t| t.title == "Closed but blocked")
+        .expect("blocked exists");
+    let mut done = blocked.clone();
+    done.mark_done(today);
+    env.ctx
+        .repo
+        .transaction(|store, vcs, root| {
+            store.save_task(&done)?;
+            vcs.commit(&[next::core::storage::task_path(root, &done)], "done")?;
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(
+        pipeline(&mut env, "is:blocked", true),
+        vec!["Closed but blocked"],
+        "the open blocker must be loaded even though the listing is closed-only"
+    );
+}
+
 /// A malformed query is refused, not silently read as something else.
 #[test]
 fn list_rejects_a_malformed_expression() {

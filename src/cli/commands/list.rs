@@ -4,26 +4,6 @@ use chrono::Local;
 use crate::AppContext;
 use crate::{cli::render, core::FilterArgs};
 
-/// The archived tier's filter, or an error naming the part it cannot answer.
-///
-/// Archived rows carry full task data in the cache, so the whole grammar works
-/// here — except the handful of atoms that need a view of *other* tasks or of
-/// git history, which a tier query does not have.
-pub(crate) fn archived_filter(
-    filter_set: &filter::FilterSet,
-    today: chrono::NaiveDate,
-) -> anyhow::Result<crate::core::store::QueryFilter> {
-    crate::core::domain::filter_expr::validate_for_store(&filter_set.expr)
-        .map_err(|e| anyhow::anyhow!(e))?;
-    filter_set
-        .reject_view_terms_for_store()
-        .map_err(|e| anyhow::anyhow!(e))?;
-    Ok(crate::core::store::QueryFilter::new(
-        filter_set.expr.clone(),
-        today,
-    ))
-}
-
 #[derive(clap::Args, Debug)]
 pub struct Args {
     /// Include tasks scheduled in the future.
@@ -85,7 +65,7 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     if args.archived {
         let page = ctx.repo.store().query_tasks(&crate::core::TaskQuery {
             archived: true,
-            filter: Some(archived_filter(&filter_set, today)?),
+            filter: Some(filter_set.to_store_filter(today)?),
             page: args.page,
             page_size: args
                 .page_size

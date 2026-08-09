@@ -68,16 +68,24 @@ fn parse_offset(expr: &str, today: NaiveDate) -> Option<NaiveDate> {
         b'-' => (false, &expr[1..]),
         _ => return None,
     };
-    let (digits, unit) = rest.split_at(rest.len().checked_sub(1)?);
+    // Split on the last CHARACTER, not the last byte. `split_at` takes a byte
+    // index and panics when it lands inside a multi-byte character, and this
+    // value comes straight from the user: `due<+7é` would abort the CLI and
+    // take down an MCP server thread.
+    let (unit, digits) = {
+        let mut chars = rest.chars();
+        let unit = chars.next_back()?;
+        (unit, chars.as_str())
+    };
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     let magnitude: u64 = digits.parse().ok()?;
-    let (days, months) = match unit.to_ascii_lowercase().as_str() {
-        "d" => (magnitude, 0),
-        "w" => (magnitude.checked_mul(7)?, 0),
-        "m" => (0, u32::try_from(magnitude).ok()?),
-        "y" => (0, u32::try_from(magnitude).ok()?.checked_mul(12)?),
+    let (days, months) = match unit.to_ascii_lowercase() {
+        'd' => (magnitude, 0),
+        'w' => (magnitude.checked_mul(7)?, 0),
+        'm' => (0, u32::try_from(magnitude).ok()?),
+        'y' => (0, u32::try_from(magnitude).ok()?.checked_mul(12)?),
         _ => return None,
     };
     if months > 0 {
@@ -174,6 +182,18 @@ mod tests {
             date(2028, 2, 29),
             "a leap February ends on the 29th"
         );
+    }
+
+    #[test]
+    fn a_multibyte_unit_does_not_panic() {
+        // `split_at` takes a BYTE index. `rest.len() - 1` lands inside the
+        // last character whenever it is multi-byte, and `str::split_at` panics
+        // rather than erroring. Reachable straight from `next list 'due<+7é'`
+        // and from an MCP filter_tokens value, so it aborts the CLI and takes
+        // down a server thread.
+        for expr in ["+7é", "-2ü", "+1日", "+7🎉", "é", "+é", "-é", "+7\u{0301}"] {
+            assert!(parse_compact(expr, base()).is_none(), "{expr:?}");
+        }
     }
 
     #[test]

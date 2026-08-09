@@ -66,12 +66,23 @@ pub struct EvalIndexes {
 }
 
 impl EvalIndexes {
-    /// Builds every index in one pass over `tasks`.
-    pub fn build(tasks: &[Task]) -> Self {
+    /// Builds the indexes `expr` will actually consult, in one pass.
+    ///
+    /// `lineage` is the expensive one — a map entry and a cloned slug per task
+    /// — and it is read only by `parent:`, which the surfaces lift out of the
+    /// expression before it ever reaches here. Building it unconditionally
+    /// cost every query an allocation per task for a code path no query could
+    /// reach, which matters at the scale this repo benchmarks at.
+    pub fn build_for(expr: &Expr, tasks: &[Task]) -> Self {
+        let wants_lineage = mentions_parent(expr);
         let mut indexes = EvalIndexes {
             open_ids: HashSet::new(),
             parent_ids: HashSet::new(),
-            lineage: HashMap::with_capacity(tasks.len()),
+            lineage: if wants_lineage {
+                HashMap::with_capacity(tasks.len())
+            } else {
+                HashMap::new()
+            },
         };
         for task in tasks {
             if task.is_active() {
@@ -80,11 +91,25 @@ impl EvalIndexes {
             if let Some(parent) = task.parent_id {
                 indexes.parent_ids.insert(parent);
             }
-            indexes
-                .lineage
-                .insert(task.id, (task.parent_id, task.slug.clone()));
+            if wants_lineage {
+                indexes
+                    .lineage
+                    .insert(task.id, (task.parent_id, task.slug.clone()));
+            }
         }
         indexes
+    }
+
+    /// Builds every index, whatever the expression needs — for callers that do
+    /// not have one to inspect (tests, and any future programmatic AST).
+    pub fn build(tasks: &[Task]) -> Self {
+        Self::build_for(
+            &Expr::Atom(Atom::Equals {
+                field: Field::Parent,
+                values: Vec::new(),
+            }),
+            tasks,
+        )
     }
 
     /// IDs of the open tasks in the candidate set.
@@ -113,6 +138,17 @@ impl EvalIndexes {
             current = *parent;
         }
         false
+    }
+}
+
+/// Whether `expr` contains a `parent:` predicate, which is the only thing that
+/// reads the lineage index.
+fn mentions_parent(expr: &Expr) -> bool {
+    match expr {
+        Expr::And(parts) | Expr::Or(parts) => parts.iter().any(mentions_parent),
+        Expr::Not(inner) => mentions_parent(inner),
+        Expr::Atom(Atom::Equals { field, .. }) => *field == Field::Parent,
+        Expr::Atom(_) => false,
     }
 }
 
