@@ -535,32 +535,6 @@ pub fn validate_for_store(expr: &Expr) -> Result<()> {
     })
 }
 
-/// The `+tag` / `-tag` conjunction this expression is, when it is only that.
-///
-/// The archived tier still filters through the storage layer's tag columns
-/// rather than through the evaluator, so it can serve exactly this shape and
-/// nothing more. Returning `None` lets the caller say so instead of quietly
-/// ignoring the rest of the query. Stage 2 removes the restriction.
-pub fn as_tag_filters(expr: &Expr) -> Option<(Vec<String>, Vec<String>)> {
-    let parts: Vec<&Expr> = match expr {
-        Expr::And(parts) => parts.iter().collect(),
-        other => vec![other],
-    };
-    let mut required = Vec::new();
-    let mut excluded = Vec::new();
-    for part in parts {
-        match part {
-            Expr::Atom(Atom::Tag(name)) => required.push(name.clone()),
-            Expr::Not(inner) => match &**inner {
-                Expr::Atom(Atom::Tag(name)) => excluded.push(name.clone()),
-                _ => return None,
-            },
-            _ => return None,
-        }
-    }
-    Some((required, excluded))
-}
-
 // ─── Errors ─────────────────────────────────────────────────────────────────
 
 /// A parse failure, carrying enough to name the offending input.

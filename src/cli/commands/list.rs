@@ -18,8 +18,8 @@ pub struct Args {
     #[arg(long)]
     pub closed: bool,
 
-    /// Show archived tasks (most recently completed first). Tag filters and
-    /// pagination apply; scoring and the implicit gate do not.
+    /// Show archived tasks (most recently completed first). The same filter
+    /// grammar and pagination apply; scoring and the implicit gate do not.
     #[arg(long, conflicts_with_all = ["all", "closed", "future"])]
     pub archived: bool,
 

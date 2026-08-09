@@ -99,6 +99,13 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
     // Archived view: the same grammar as the active tier, plus pagination; no
     // scoring and no implicit gate, most recently completed first.
     if bool_param(params, "archived") {
+        // `context` scopes the whole view, which a tier query does not apply.
+        // The archived branch returns before the override below is read, so
+        // accepting it here would list the ENTIRE archive while looking as if
+        // it had been scoped — the failure this stage refuses everywhere else.
+        if params.get("context").is_some() {
+            anyhow::bail!("context scopes the whole view, which this listing does not apply");
+        }
         let result = ctx.store.query_tasks(&crate::core::TaskQuery {
             archived: true,
             filter: Some(filter_set.to_store_filter(today)?),

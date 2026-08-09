@@ -382,16 +382,21 @@ fn text_column(field: &Field) -> Option<&'static str> {
 /// The column holding a date field, and how to read a date out of it.
 ///
 /// `due`, `start` and `completed_at` store a bare `YYYY-MM-DD`, which compares
-/// correctly as text. `created_at` and `updated_at` store an RFC 3339 UTC
-/// timestamp, so the leading 10 characters are the same UTC date the evaluator
-/// gets from `.date_naive()`.
+/// correctly as text.
+///
+/// `created_at` and `updated_at` are deliberately ABSENT even though the cache
+/// has both columns. The in-memory reference reads them from the `task_dates`
+/// map, and a storage query carries none — so it answers "matches nothing"
+/// where SQL would answer from the column. Translating them would make the SQL
+/// *exact* and therefore unchecked, and the two paths would disagree.
+/// `validate_for_store` refuses these fields at the front door, but it is far
+/// from here and `TaskQuery::filter` is public, so the compiler declines to
+/// claim an exactness it cannot honour rather than relying on a distant guard.
 fn date_column(field: &Field) -> Option<&'static str> {
     Some(match field {
         Field::Due => "due",
         Field::Start => "start",
         Field::Completed => "completed_at",
-        Field::Created => "substr(created_at, 1, 10)",
-        Field::Updated => "substr(updated_at, 1, 10)",
         _ => return None,
     })
 }
@@ -431,8 +436,6 @@ mod tests {
             "due:2026-05-20",
             "due<+7d",
             "due:2026-05-01..2026-05-31",
-            "created>2026-01-01",
-            "updated<today",
             "has:due",
             "has:assignee",
             "has:tag",
@@ -617,9 +620,16 @@ mod tests {
     }
 
     #[test]
-    fn git_dates_compare_on_the_date_half_of_the_timestamp() {
-        let f = sql("created>2026-01-01");
-        assert!(f.sql.contains("substr(created_at, 1, 10)"), "{}", f.sql);
+    fn git_dates_are_not_pushed_even_though_the_columns_exist() {
+        // The reference evaluator reads these from the `task_dates` map, and a
+        // storage query carries none — so it answers "matches nothing" where
+        // SQL would answer from the column. Pushing them would mark the atom
+        // exact, nothing would re-check it, and the two paths would disagree.
+        for query in ["created>2026-01-01", "updated<today", "has:created"] {
+            let f = sql(query);
+            assert!(!f.exact, "{query} must not claim exactness");
+            assert_eq!(f.sql, "1", "{query}");
+        }
     }
 
     // ── Injection ────────────────────────────────────────────────────────────

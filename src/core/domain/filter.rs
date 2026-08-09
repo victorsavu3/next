@@ -97,7 +97,10 @@ impl FilterSet {
             "parent:"
         } else if self.required_override.is_some() {
             "context:"
-        } else if self.user_override.is_some() {
+        // An EMPTY user override is `--all-users`, which means "apply no user
+        // filter" — exactly what this listing already does, so it is a no-op
+        // rather than a term to refuse. Only a named user is a real view term.
+        } else if self.user_override.as_ref().is_some_and(|u| !u.is_empty()) {
             "user:"
         } else {
             return Ok(());

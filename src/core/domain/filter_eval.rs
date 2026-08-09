@@ -74,7 +74,17 @@ impl EvalIndexes {
     /// cost every query an allocation per task for a code path no query could
     /// reach, which matters at the scale this repo benchmarks at.
     pub fn build_for(expr: &Expr, tasks: &[Task]) -> Self {
-        let wants_lineage = mentions_parent(expr);
+        Self::build_inner(tasks, mentions_parent(expr))
+    }
+
+    /// Builds every index, whatever any expression might need — for callers
+    /// that have no expression to inspect (tests, and any future programmatic
+    /// AST).
+    pub fn build(tasks: &[Task]) -> Self {
+        Self::build_inner(tasks, true)
+    }
+
+    fn build_inner(tasks: &[Task], wants_lineage: bool) -> Self {
         let mut indexes = EvalIndexes {
             open_ids: HashSet::new(),
             parent_ids: HashSet::new(),
@@ -98,18 +108,6 @@ impl EvalIndexes {
             }
         }
         indexes
-    }
-
-    /// Builds every index, whatever the expression needs — for callers that do
-    /// not have one to inspect (tests, and any future programmatic AST).
-    pub fn build(tasks: &[Task]) -> Self {
-        Self::build_for(
-            &Expr::Atom(Atom::Equals {
-                field: Field::Parent,
-                values: Vec::new(),
-            }),
-            tasks,
-        )
     }
 
     /// IDs of the open tasks in the candidate set.

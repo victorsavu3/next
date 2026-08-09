@@ -390,6 +390,11 @@ fn a_filter_value_cannot_inject_sql() {
 // and nothing else.
 
 /// Runs `list_tasks(archived: true)` with a filter, as an agent would.
+///
+/// The MCP surface is behind a non-default feature, so these three tests are
+/// gated. Without the gate a plain `cargo test` fails to compile the whole
+/// target — the store-level differentials above included.
+#[cfg(feature = "mcp")]
 fn archived_titles(env: &mut common::TestEnv, query: &str) -> Vec<String> {
     let result = next::mcp::tools::tasks::list_tasks(
         &serde_json::json!({ "archived": true, "filter_tokens": [query] }),
@@ -404,6 +409,7 @@ fn archived_titles(env: &mut common::TestEnv, query: &str) -> Vec<String> {
         .collect()
 }
 
+#[cfg(feature = "mcp")]
 #[test]
 fn the_archived_tier_accepts_the_whole_grammar() {
     let mut env = common::setup();
@@ -462,6 +468,61 @@ fn the_archived_tier_accepts_the_whole_grammar() {
     assert_eq!(archived_titles(&mut env, "").len(), 3);
 }
 
+/// `--all-users` means "apply no user filter", which is what an archive
+/// listing already does — so it must be a no-op, not a refusal about a `user:`
+/// term nobody typed. It reaches the store as `user_override = Some(vec![])`,
+/// which the guard used to treat as a real view term.
+#[test]
+fn all_users_is_a_no_op_on_the_archived_tier() {
+    let mut env = common::setup();
+    corpus(&mut env);
+
+    let mut args = next::core::FilterArgs::parse(vec![]).unwrap();
+    args.all_users = true;
+    let filter_set = args.to_filter_set().unwrap();
+    let filter = filter_set
+        .to_store_filter(today())
+        .expect("--all-users must not be refused");
+
+    let page = env
+        .ctx
+        .repo
+        .store()
+        .query_tasks(&TaskQuery {
+            archived: true,
+            filter: Some(filter),
+            ..TaskQuery::unpaginated()
+        })
+        .unwrap();
+    assert_eq!(page.total, 3, "the whole archive, unfiltered by user");
+
+    // A named user is still a real view term and still refused.
+    let named = next::core::FilterArgs::parse(vec!["user:alice".into()])
+        .unwrap()
+        .to_filter_set()
+        .unwrap();
+    let err = named.to_store_filter(today()).unwrap_err().to_string();
+    assert!(err.contains("scopes the whole view"), "{err}");
+}
+
+#[cfg(feature = "mcp")]
+#[test]
+fn the_archived_tier_refuses_the_context_parameter() {
+    // The archived branch returns before the `context` override is applied, so
+    // accepting the parameter listed the ENTIRE archive while looking scoped.
+    let mut env = common::setup();
+    corpus(&mut env);
+
+    let err = next::mcp::tools::tasks::list_tasks(
+        &serde_json::json!({ "archived": true, "context": ["@work"] }),
+        &mut env.ctx.repo,
+    )
+    .expect_err("context must be refused on the archived tier")
+    .to_string();
+    assert!(err.contains("scopes the whole view"), "{err}");
+}
+
+#[cfg(feature = "mcp")]
 #[test]
 fn the_archived_tier_refuses_what_it_cannot_answer() {
     let mut env = common::setup();
@@ -487,6 +548,7 @@ fn the_archived_tier_refuses_what_it_cannot_answer() {
     }
 }
 
+#[cfg(feature = "mcp")]
 #[test]
 fn the_archived_tier_paginates_a_residual_query_correctly() {
     // The trap: filtering after LIMIT gives short pages and a total that counts
