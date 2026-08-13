@@ -1794,9 +1794,11 @@ impl App {
     }
 
     /// Primary toggle on the highlighted row of the focused section:
-    /// * Contexts → toggle the context's membership in `active_contexts`.
-    /// * Resources → toggle the resource's availability.
-    /// * Users → toggle the user's membership in `active_users`.
+    /// * Tags → cycle the tag's state (none → required → excluded → accepted).
+    ///   Every kind of tag cycles the same way; `@` and `#` are naming
+    ///   conventions, not behaviour.
+    /// * Users → toggle the user's membership in `active_users`, which stays
+    ///   its own axis rather than becoming a tag.
     fn state_toggle(&mut self) {
         let Some(panel) = self.state_panel.as_ref() else {
             return;
