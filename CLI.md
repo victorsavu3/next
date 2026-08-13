@@ -1114,11 +1114,15 @@ Case is ignored; accents are **not**, so `café` and `cafe` are different words.
 A term made only of punctuation (`"---"`) matches nothing — there is no word in
 it to look for.
 
-The same rules apply whether or not the SQLite cache is present: the cache
-answers from a full-text index and a cacheless store scans the text directly,
-and the two are held to the same behaviour by a differential test. Searching
-reaches archived tasks too, including segments pruned out of the working tree
-that `grep` cannot see.
+The rules above hold whether or not the SQLite cache is present. The cache
+answers an ASCII search from a full-text index; a non-ASCII term, or a store
+with no cache, scans the text directly. Both give the same answer — the split
+exists because the index and the scan only tokenise identically over ASCII, so
+anything else takes the path that is definitive rather than the one that is
+fast.
+
+Searching reaches archived tasks too, including segments pruned out of the
+working tree that `grep` cannot see.
 
 ### `is:project` and `is:blocked` interact with the implicit gate
 

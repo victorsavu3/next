@@ -137,6 +137,64 @@ fn fts5_is_available_and_tokenises_the_way_the_scan_does() {
     assert_eq!(hits("\"router wifi\""), 0, "a phrase is ordered");
 }
 
+/// Depended on by: `search_sql` refusing to push a non-ASCII term.
+///
+/// These are the cases where unicode61 and Rust's `is_alphanumeric` +
+/// `to_lowercase` genuinely disagree. They are asserted as *divergences*, not
+/// as bugs: the pushdown avoids them by only pushing ASCII, and if a future
+/// SQLite made them agree, this test failing is the signal that the
+/// restriction could be relaxed.
+#[test]
+fn unicode61_and_rust_tokenisation_diverge_beyond_ascii() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE f USING fts5(body, tokenize = 'unicode61 remove_diacritics 0');
+         INSERT INTO f VALUES('cafe\u{301} break');
+         INSERT INTO f VALUES('İSTANBUL trip');",
+    )
+    .unwrap();
+    let hits = |q: &str| -> i64 {
+        conn.query_row("SELECT count(*) FROM f WHERE f MATCH ?", [q], |r| r.get(0))
+            .unwrap_or(-1)
+    };
+
+    // NFD "café" is THE case that makes the ASCII restriction necessary, and
+    // it diverges in the unsafe direction:
+    //
+    //   - Rust: U+0301 is not alphanumeric, so `words` SPLITS there and the
+    //     token is plain `cafe` — a search for `cafe` matches.
+    //   - unicode61: keeps the mark with the letter, so the indexed token is
+    //     `café` and a search for `cafe` does NOT match.
+    //
+    // The index therefore returns FEWER rows than the scan — a subset, which
+    // drops results silently no matter what the caller does with `exact`. A
+    // user pasting a title from an NFD source (macOS, some web forms) and then
+    // searching for it would simply not find their own task.
+    assert_eq!(
+        "cafe\u{301}"
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .count(),
+        4,
+        "Rust does NOT count a combining accent as alphanumeric — it splits there"
+    );
+    assert_eq!(
+        hits("\"cafe\""),
+        0,
+        "but unicode61 keeps the mark, so the index misses what the scan finds"
+    );
+
+    // `İ` (U+0130): Rust lowercases it to `i` + U+0307, which is two chars and
+    // whose second is a combining mark; unicode61 does not fold it the same
+    // way. The two tokenisations of the same word are simply different.
+    assert_eq!("İ".to_lowercase().chars().count(), 2, "Rust expands it");
+    assert_eq!(
+        hits("\"istanbul\""),
+        0,
+        "unicode61 does not fold it to plain i"
+    );
+}
+
 /// Depended on by: `search_sql` rebuilding the phrase from tokens and quoting
 /// it, rather than passing the user's term through.
 ///

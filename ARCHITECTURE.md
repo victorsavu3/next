@@ -766,15 +766,22 @@ An FTS5 virtual table over `title`, `description`, `notes` and `url` — not
 so the index tokenises exactly as `filter_eval::words` does: split on
 non-alphanumeric, lowercase, **keep** accents.
 
-That shared tokeniser is the whole trick. `sql_filter::search_sql` runs the
-user's term through `words` and rebuilds the phrase from the resulting tokens,
-so what reaches SQLite is a quoted string of alphanumerics. Two consequences:
+`sql_filter::search_sql` runs the user's term through `words` and rebuilds the
+phrase from the resulting tokens, so what reaches SQLite is a quoted string of
+alphanumerics. That gives **no FTS5 injection and no MATCH syntax errors**: a
+user searching for `AND`, `*`, `^` or a quote gets those tokenised away or
+quoted as literals.
 
-- **No FTS5 injection, and no MATCH syntax errors.** A user searching for
-  `AND`, `*`, `^` or a quote gets those tokenised away or quoted as literals.
-- **The index answers what the scan would**, which is what lets the atom be
-  marked exact. A differential test pins the two together over accented text,
-  CJK, emoji, hyphenation and FTS5 operator words.
+**The agreement stops at ASCII, and the pushdown stops with it.** Rust's
+`is_alphanumeric` keeps combining marks (NFD accents, Indic vowel signs) inside
+a token where unicode61 splits on them, and `to_lowercase` folds cases
+unicode61 does not (`İ` expands to two characters; Cherokee; Georgian
+Mtavruli). Some of those make the index match *more* than the scan, which a
+re-check could absorb — but others make it match *less*, and a subset drops
+rows silently however the atom is marked. So `search_sql` pushes a term only
+when every token is ASCII, and hands anything else to the scan. The rule is
+narrow enough to state and prove rather than hope for; `tests/sqlite_assumptions.rs`
+pins the engine behaviours it rests on.
 
 The compiled predicate is `tasks.id IN (SELECT task_id FROM task_fts WHERE
 task_fts MATCH ?)`. It is emphatically **not** `EXISTS (… AND task_id =
