@@ -27,9 +27,18 @@ pub struct Args {
     #[arg(long)]
     pub all_users: bool,
 
-    /// Output as JSON.
-    #[arg(long)]
+    /// Output as JSON. Alias for `--format json`.
+    #[arg(long, conflicts_with = "format")]
     pub json: bool,
+
+    /// Output format.
+    #[arg(long, value_enum)]
+    pub format: Option<crate::cli::commands::OutputFormat>,
+
+    /// Print only how many tasks match. Under pagination this is the total
+    /// across all pages, not the size of one page.
+    #[arg(long)]
+    pub count: bool,
 
     /// Maximum number of tasks to show. Overrides `list_limit` in config.
     /// Shorthand for `--page-size` (both cap the window on the result).
@@ -53,12 +62,13 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
 
     crate::core::reject_flag_like_tokens(&args.tokens, "next list --help")?;
+    let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
     let mut filter_args = FilterArgs::parse(args.tokens)?;
     filter_args.future = args.future;
     filter_args.all = args.all;
     filter_args.closed = args.closed;
     filter_args.all_users = args.all_users;
-    filter_args.json = args.json;
+    filter_args.json = format.is_json();
 
     let filter_set = filter_args.to_filter_set()?;
 
@@ -73,6 +83,12 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
                 .unwrap_or(crate::core::store::DEFAULT_PAGE_SIZE),
             ..Default::default()
         })?;
+        if args.count {
+            // The total across every page, which is what someone asking "how
+            // many?" means — not how many happened to fit on this one.
+            println!("{}", page.total);
+            return Ok(());
+        }
         if filter_args.json {
             println!("{}", serde_json::to_string_pretty(&page)?);
         } else {
@@ -110,6 +126,13 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
         &tag_metas,
         &task_dates,
     );
+
+    if args.count {
+        // Counted before pagination, so the answer does not depend on the
+        // page size the caller happened to pass.
+        println!("{}", scored.len());
+        return Ok(());
+    }
 
     // Precedence: --page-size, then the legacy --limit / list_limit caps.
     let page_size = args

@@ -30,6 +30,9 @@ fn tree_args(all: bool) -> tree::Args {
         all,
         closed: false,
         json: false,
+        format: None,
+        count: false,
+        tokens: vec![],
     }
 }
 
@@ -40,6 +43,9 @@ fn capture_tree_closed(env: &common::TestEnv) -> String {
             all: false,
             closed: true,
             json: false,
+            format: None,
+            count: false,
+            tokens: vec![],
         },
         &env.ctx,
         &mut buf,
@@ -175,6 +181,9 @@ fn tree_json_output() {
             all: false,
             closed: false,
             json: true,
+            format: None,
+            count: false,
+            tokens: vec![],
         },
         &env.ctx,
     )

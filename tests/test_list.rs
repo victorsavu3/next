@@ -513,6 +513,8 @@ fn list_args_with_limit(limit: Option<usize>) -> next::cli::commands::list::Args
         archived: false,
         all_users: false,
         json: false,
+        format: None,
+        count: false,
         limit,
         page_size: None,
         page: 1,

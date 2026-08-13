@@ -86,6 +86,8 @@ fn main() -> anyhow::Result<()> {
             archived: false,
             all_users: false,
             json: false,
+            format: None,
+            count: false,
             limit: None,
             page_size: None,
             page: 1,

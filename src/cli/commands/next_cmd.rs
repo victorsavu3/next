@@ -26,6 +26,14 @@ pub struct Args {
     #[arg(long)]
     pub json: bool,
 
+    /// Output format.
+    ///
+    /// No `--count` here, unlike `list`: `next --count N` already means "show
+    /// me N tasks", and a command whose whole purpose is the top of the list
+    /// has nothing useful to say about how many matched in total.
+    #[arg(long, value_enum, conflicts_with = "json")]
+    pub format: Option<crate::cli::commands::OutputFormat>,
+
     /// Filter expression, e.g. `+@work -bug due<+7d` or a bare word to search.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub tokens: Vec<String>,
@@ -40,7 +48,8 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     filter_args.future = args.future;
     filter_args.all = args.all;
     filter_args.all_users = args.all_users;
-    filter_args.json = args.json;
+    filter_args.json =
+        crate::cli::commands::OutputFormat::resolve(args.format, args.json).is_json();
 
     let filter_set = filter_args.to_filter_set()?;
     let state = ctx.repo.store().get_state()?;

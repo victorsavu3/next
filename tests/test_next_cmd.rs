@@ -32,6 +32,7 @@ fn next_args(count: Option<usize>) -> next_cmd::Args {
         all: false,
         all_users: false,
         json: false,
+        format: None,
         tokens: vec![],
     }
 }

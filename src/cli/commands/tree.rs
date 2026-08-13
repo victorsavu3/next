@@ -21,9 +21,26 @@ pub struct Args {
     #[arg(long)]
     pub closed: bool,
 
-    /// Output as JSON (flat list with parent_id fields).
-    #[arg(long)]
+    /// Output as JSON (flat list with parent_id fields). Alias for
+    /// `--format json`.
+    #[arg(long, conflicts_with = "format")]
     pub json: bool,
+
+    /// Output format.
+    #[arg(long, value_enum)]
+    pub format: Option<crate::cli::commands::OutputFormat>,
+
+    /// Print only how many tasks match.
+    #[arg(long)]
+    pub count: bool,
+
+    /// Filter expression, e.g. `+@work -bug due<+7d` or a bare word to search.
+    ///
+    /// A task is shown when it matches, and so are its ancestors — a tree with
+    /// the branches removed would leave matching subtasks floating with no
+    /// visible parent.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub tokens: Vec<String>,
 }
 
 pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
@@ -32,29 +49,66 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
 
 pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> anyhow::Result<()> {
     let all_tasks = ctx.repo.store().list_tasks()?;
+    let today = Local::now().date_naive();
+    let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
+
+    crate::core::reject_flag_like_tokens(&args.tokens, "next tree --help")?;
+    let mut filter_args = crate::core::FilterArgs::parse(args.tokens.clone())?;
+    filter_args.all = args.all;
+    filter_args.closed = args.closed;
+    let query = filter_args.to_filter_set()?;
+    let has_query = !args.tokens.is_empty();
 
     let closed_tasks: Option<Vec<Task>> = if args.closed {
         let state = ctx.repo.store().get_state()?;
-        let today = Local::now().date_naive();
         let filter_set = FilterSet {
             closed_only: true,
             include_blocked_parents: true,
-            ..Default::default()
+            ..query.clone()
         };
-        // No query here — `--closed` is a status gate, so the evaluator is
-        // never asked about a field the git dates would answer.
+        let task_dates = ctx.repo.task_git_dates_for(&all_tasks);
         Some(filter::apply(
             all_tasks.clone(),
             &filter_set,
             &state,
             today,
-            &std::collections::HashMap::new(),
+            &task_dates,
         ))
     } else {
         None
     };
 
-    if args.json {
+    // The query narrows whichever set the status flags selected. Ancestors of
+    // a match come along: a tree that dropped them would leave matching
+    // subtasks dangling with no visible parent, which is not a tree.
+    let matched: Option<HashSet<Uuid>> = if has_query {
+        let state = ctx.repo.store().get_state()?;
+        let filter_set = FilterSet {
+            disable_implicit: true,
+            include_blocked_parents: true,
+            ..query.clone()
+        };
+        let task_dates = ctx.repo.task_git_dates_for(&all_tasks);
+        let hits = filter::apply(all_tasks.clone(), &filter_set, &state, today, &task_dates);
+        let mut keep: HashSet<Uuid> = hits.iter().map(|t| t.id).collect();
+        let by_id: HashMap<Uuid, &Task> = all_tasks.iter().map(|t| (t.id, t)).collect();
+        for hit in &hits {
+            let mut parent = hit.parent_id;
+            // Bounded by the task count, so a cycle cannot hang the walk.
+            for _ in 0..all_tasks.len() {
+                let Some(pid) = parent else { break };
+                if !keep.insert(pid) {
+                    break;
+                }
+                parent = by_id.get(&pid).and_then(|t| t.parent_id);
+            }
+        }
+        Some(keep)
+    } else {
+        None
+    };
+
+    if format.is_json() {
         let tasks: Vec<&Task> = if args.all {
             all_tasks.iter().collect()
         } else if let Some(ref closed) = closed_tasks {
@@ -62,11 +116,15 @@ pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> any
         } else {
             all_tasks.iter().filter(|t| t.is_active()).collect()
         };
+        let tasks: Vec<&Task> = match &matched {
+            Some(keep) => tasks.into_iter().filter(|t| keep.contains(&t.id)).collect(),
+            None => tasks,
+        };
         writeln!(out, "{}", serde_json::to_string_pretty(&tasks)?)?;
         return Ok(());
     }
 
-    let visible_ids: HashSet<Uuid> = if args.all {
+    let mut visible_ids: HashSet<Uuid> = if args.all {
         all_tasks.iter().map(|t| t.id).collect()
     } else if let Some(closed) = closed_tasks {
         closed.into_iter().map(|t| t.id).collect()
@@ -77,6 +135,13 @@ pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> any
             .map(|t| t.id)
             .collect()
     };
+    if let Some(keep) = &matched {
+        visible_ids.retain(|id| keep.contains(id));
+    }
+    if args.count {
+        writeln!(out, "{}", visible_ids.len())?;
+        return Ok(());
+    }
 
     // Children map: parent_id -> child tasks (visible only).
     let mut children: HashMap<Uuid, Vec<&Task>> = HashMap::new();

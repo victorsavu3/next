@@ -33,6 +33,8 @@ fn forecast_args(days: Option<u32>) -> forecast::Args {
         all: false,
         all_users: false,
         json: false,
+        format: None,
+        count: false,
         tokens: vec![],
     }
 }
