@@ -216,19 +216,28 @@ Tags can suppress time-based urgency entirely with `next tag set-no-time-urgency
 
 ---
 
-## Filter tokens
+## Filtering
 
-All list commands accept filter tokens in any order:
+All list commands (`list`, `next`, `tree`, `forecast`) take a filter
+expression. The trailing arguments are joined into one query, so short filters
+need no quoting — and the MCP `filter` parameter takes the identical string.
 
-| Token | Example | Meaning |
-|-------|---------|---------|
-| `+<tag>` | `+@home`, `+python` | Task must have this tag |
-| `-<tag>` | `-@work` | Task must not have this tag |
-| `parent:<slug>` | `parent:launch-blog` | Task is a descendant of (or is) the task with this slug |
-| `context:<@tag>` | `context:@home` | Include exactly this tag for this query, ignoring the stored inclusions |
-| `user:<name>` | `user:alice` | Override user filter for this query |
-| `--future` | | Include tasks with a future `start` date |
-| `--all` | | Disable all implicit filtering |
+> **A bare word searches; it is not a tag.** `next list bug` looks for "bug" in
+> the title, description, notes and url. For tasks *tagged* `bug`, write
+> `next list +bug`.
+
+| Form | Example | Meaning |
+|------|---------|---------|
+| `<word>` | `bug`, `"cold tier"`, `arch*` | Search the text. Whole words; a phrase is ordered; `*` matches by prefix |
+| `+<tag>` / `-<tag>` | `+@home`, `-@work` | Must / must not have the tag, nested tags included |
+| `<field>:<value>` | `status:open`, `due<+7d`, `data.k:v` | Field predicates, with `<` `<=` `>` `>=` and `a..b` ranges on ordered fields |
+| `has:` / `no:` / `is:` | `has:due`, `is:overdue` | Field presence and named predicates |
+| `and` `or` `not` `( )` | `+@work and not is:blocked` | Booleans; adjacency means `and` |
+| `parent:<slug>` | `parent:launch-blog` | Scope to a project subtree |
+| `--future` / `--all` | | Include future-start tasks / disable implicit filtering |
+| `--count` / `--format` | | Print the match count / choose `table` or `json` |
+
+See [CLI.md](CLI.md#filter-syntax) for the full reference.
 
 ---
 
@@ -465,7 +474,7 @@ systemctl --user start next-mcp
 
 | Tool | R/M | Description |
 |------|-----|-------------|
-| `list_tasks` | R | List scored tasks; accepts filter tokens + `context` override, `page`/`page_size` pagination, and `archived: true` for the archive |
+| `list_tasks` | R | List scored tasks; accepts one `filter` expression string (same syntax as the CLI), `page`/`page_size` pagination, and `archived: true` for the archive |
 | `get_task` | R | Full details of one task + direct children + score breakdown |
 | `add_task` | M | Create a task (inherits the required `@context` tags if the task has none) |
 | `update_task` | M | Edit fields or transition state (start/stop/done/cancel/move); `done` accepts `completed_at` |

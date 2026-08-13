@@ -32,32 +32,11 @@ pub fn get_forecast(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<
         .map(|n| n as u32)
         .unwrap_or(crate::core::config::DEFAULT_FORECAST_HORIZON_DAYS);
 
-    let tokens: Vec<String> = params
-        .get("filter_tokens")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let filter_args = FilterArgs::parse(tokens)?;
-    let mut filter_set = filter_args.to_filter_set()?;
-
-    // `context` param overrides the active context from state for this call.
-    if params.get("context").is_some() {
-        let ctx_tags: Vec<String> = params
-            .get("context")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default();
-        filter_set.required_override = Some(ctx_tags);
-    }
+    // The same one-string filter the CLI and `list_tasks` take; `filter_tokens`
+    // and `context` are refused by name rather than ignored.
+    super::tasks::reject_removed_filter_params(params)?;
+    let filter_args = FilterArgs::parse_query(&super::tasks::filter_string(params))?;
+    let filter_set = filter_args.to_filter_set()?;
 
     let state = ctx.store.get_state()?;
     let candidates = crate::core::listing::load_candidates(&*ctx.store, &filter_set)?;

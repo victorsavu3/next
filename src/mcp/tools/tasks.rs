@@ -75,9 +75,42 @@ fn has_edit_params(params: &Value) -> bool {
 
 // ── list_tasks ───────────────────────────────────────────────────────────────
 
+/// The `filter` expression for this call, empty when absent.
+///
+/// One string, identical to what the CLI takes — that sameness is the point of
+/// the parameter, so an agent and a person can copy a query between them.
+pub(crate) fn filter_string(params: &Value) -> String {
+    params
+        .get("filter")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned()
+}
+
+/// Refuses the parameters S4 removed, naming their replacement.
+///
+/// An agent holding the old schema would otherwise get a generic "unknown
+/// parameter" — or worse, silence, since an ignored `filter_tokens` reads as
+/// "no filter" and returns the entire list looking perfectly successful. One
+/// error turns a confusing failure into a self-service fix.
+pub(crate) fn reject_removed_filter_params(params: &Value) -> anyhow::Result<()> {
+    if params.get("filter_tokens").is_some() {
+        anyhow::bail!(
+            "filter_tokens was replaced by filter; pass the whole expression as one string, \
+             e.g. filter: \"+@work due<+7d\""
+        );
+    }
+    if params.get("context").is_some() {
+        anyhow::bail!(
+            "the context parameter was removed; put the tag in filter instead, \
+             e.g. filter: \"+@work\""
+        );
+    }
+    Ok(())
+}
+
 pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let today = Local::now().date_naive();
-    let tokens = strings_param(params, "filter_tokens");
     let include_all = bool_param(params, "include_all");
     let limit: Option<u32> = params
         .get("limit")
@@ -92,20 +125,14 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
         .or(limit)
         .unwrap_or(crate::core::store::DEFAULT_PAGE_SIZE);
 
-    let mut filter_args = crate::core::FilterArgs::parse(tokens)?;
+    reject_removed_filter_params(params)?;
+    let mut filter_args = crate::core::FilterArgs::parse_query(&filter_string(params))?;
     filter_args.all = include_all;
-    let mut filter_set = filter_args.to_filter_set()?;
+    let filter_set = filter_args.to_filter_set()?;
 
     // Archived view: the same grammar as the active tier, plus pagination; no
     // scoring and no implicit gate, most recently completed first.
     if bool_param(params, "archived") {
-        // `context` scopes the whole view, which a tier query does not apply.
-        // The archived branch returns before the override below is read, so
-        // accepting it here would list the ENTIRE archive while looking as if
-        // it had been scoped — the failure this stage refuses everywhere else.
-        if params.get("context").is_some() {
-            anyhow::bail!("context scopes the whole view, which this listing does not apply");
-        }
         let result = ctx.store.query_tasks(&crate::core::TaskQuery {
             archived: true,
             filter: Some(filter_set.to_store_filter(today)?),
@@ -114,11 +141,6 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
             ..Default::default()
         })?;
         return Ok(serde_json::to_value(&result)?);
-    }
-
-    // `context` param overrides the active context from state for this call.
-    if params.get("context").is_some() {
-        filter_set.required_override = Some(strings_param(params, "context"));
     }
 
     let state = ctx.store.get_state()?;

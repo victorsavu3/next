@@ -21,12 +21,11 @@ pub fn all_tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "list_tasks",
-            description: "List tasks scored by urgency. filter_tokens are joined with spaces and parsed as one filter expression. Returns { items, page, page_size, total }; total > items.len() means the result is truncated — fetch the next page.",
+            description: "List tasks scored by urgency. Pass the query as one `filter` string, the same syntax the `next list` CLI takes. Returns { items, page, page_size, total }; total > items.len() means the result is truncated — fetch the next page.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "filter_tokens": { "type": "array", "items": { "type": "string" }, "description": "Filter expression, joined with spaces. A BARE WORD SEARCHES the title, description, notes and url — a tag needs its sigil: +tag requires it, -tag excludes it (hierarchical: +@work matches @work/backend). Also: field predicates (status:open, priority:high, due<+7d, due:2026-08-01..eom, assignee:alice, slug:x, data.key:v), has:field / no:field, is:overdue|blocked|project|recurring|closed|assigned, quoted phrases (\"cold tier\") and prefixes (arch*), and the booleans and/or/not with parentheses (adjacency means and). parent:slug, context:@name and user:name scope the whole query and may not appear inside or/not. Example: [\"+@work\", \"due<+7d\", \"not\", \"is:blocked\"]" },
-                    "context": { "type": "array", "items": { "type": "string" }, "description": "Override the required tags for this call (e.g. [\"@work\"]). Pass [] to require nothing, which shows every tag that is not excluded. Exclusions still come from the stored state." },
+                    "filter": { "type": "string", "description": "Filter expression — ONE string, identical to what the `next list` CLI takes. A BARE WORD SEARCHES the title, description, notes and url; a tag needs its sigil: +tag requires it, -tag excludes it (hierarchical: +@work matches @work/backend). Also: field predicates (status:open, priority:high, due<+7d, due:2026-08-01..eom, assignee:alice, slug:x, data.key:v), has:field / no:field, is:overdue|blocked|project|recurring|closed|assigned, quoted phrases (\"cold tier\") and prefixes (arch*), and the booleans and/or/not with parentheses (adjacency means and). parent:slug, context:@name and user:name scope the whole query and may not appear inside or/not. Example: \"+@work due<+7d not is:blocked\"" },
                     "limit": { "type": "integer", "description": "Legacy alias for page_size" },
                     "page_size": { "type": "integer", "description": "Tasks per page (default 50)" },
                     "page": { "type": "integer", "description": "1-indexed page of results (default 1)" },
@@ -217,8 +216,7 @@ pub fn all_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "horizon_days": { "type": "integer", "description": "Days to look ahead (default: 90)" },
-                    "filter_tokens": { "type": "array", "items": { "type": "string" }, "description": "Filter expression, same grammar as list_tasks: a bare word searches, +tag requires, -tag excludes." },
-                    "context": { "type": "array", "items": { "type": "string" }, "description": "Override active context for this call. Overrides state." }
+                    "filter": { "type": "string", "description": "Filter expression, one string, same grammar as list_tasks: a bare word searches, +tag requires, -tag excludes." }
                 }
             }),
         },
@@ -257,7 +255,25 @@ deadlines from raising that urgency.
 
 When creating tasks, reuse an existing tag from the lists below rather than \
 inventing a near-duplicate, and apply the required context unless the user says \
-otherwise.";
+otherwise.
+
+## Filtering
+
+`list_tasks` and `get_forecast` take one `filter` string, the same syntax the \
+`next list` command takes — a query can be copied between them unchanged.
+
+A BARE WORD IS A SEARCH over title, description, notes and url; a tag needs \
+its sigil. `+tag` requires it, `-tag` excludes it, and both match nested tags \
+(`+@work` covers `@work/backend`). Beyond that: field predicates \
+(`status:open`, `priority:high`, `due<+7d`, `assignee:alice`, `data.key:v`), \
+`has:`/`no:`, `is:overdue|blocked|project|recurring|closed|assigned`, quoted \
+phrases and `prefix*`, and `and`/`or`/`not` with parentheses — adjacency means \
+`and`. Example: `filter: \"+@work due<+7d not is:blocked\"`.
+
+Searching matches whole words, so `arch` does not match `archive`; use \
+`arch*`. Note that `is:blocked` and `is:project` return little by default, \
+because the implicit gate already hides blocked tasks and projects with open \
+subtasks — pass `include_all` to see them.";
 
 /// Builds the `instructions` string returned in the MCP `initialize` result.
 ///

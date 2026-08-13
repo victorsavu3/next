@@ -443,7 +443,7 @@ fn a_filter_value_cannot_inject_sql() {
 #[cfg(feature = "mcp")]
 fn archived_titles(env: &mut common::TestEnv, query: &str) -> Vec<String> {
     let result = next::mcp::tools::tasks::list_tasks(
-        &serde_json::json!({ "archived": true, "filter_tokens": [query] }),
+        &serde_json::json!({ "archived": true, "filter": query }),
         &mut env.ctx.repo,
     )
     .unwrap_or_else(|e| panic!("{query}: {e}"));
@@ -551,21 +551,41 @@ fn all_users_is_a_no_op_on_the_archived_tier() {
     assert!(err.contains("scopes the whole view"), "{err}");
 }
 
+/// The S4 break: `filter_tokens` and `context` are gone, and an agent holding
+/// the old schema is told what replaced them rather than left guessing. An
+/// ignored `filter_tokens` would read as "no filter" and return the whole
+/// list looking perfectly successful, which is the failure worth preventing.
 #[cfg(feature = "mcp")]
 #[test]
-fn the_archived_tier_refuses_the_context_parameter() {
-    // The archived branch returns before the `context` override is applied, so
-    // accepting the parameter listed the ENTIRE archive while looking scoped.
+fn the_removed_parameters_name_their_replacement() {
     let mut env = common::setup();
     corpus(&mut env);
 
     let err = next::mcp::tools::tasks::list_tasks(
-        &serde_json::json!({ "archived": true, "context": ["@work"] }),
+        &serde_json::json!({ "filter_tokens": ["+@work"] }),
         &mut env.ctx.repo,
     )
-    .expect_err("context must be refused on the archived tier")
+    .expect_err("filter_tokens must be refused")
     .to_string();
-    assert!(err.contains("scopes the whole view"), "{err}");
+    assert!(err.contains("replaced by filter"), "{err}");
+    assert!(err.contains("one string"), "{err}");
+
+    let err = next::mcp::tools::tasks::list_tasks(
+        &serde_json::json!({ "context": ["@work"] }),
+        &mut env.ctx.repo,
+    )
+    .expect_err("context must be refused")
+    .to_string();
+    assert!(err.contains("put the tag in filter"), "{err}");
+
+    // The forecast tool took both too, so it refuses both as well.
+    let err = next::mcp::tools::view::get_forecast(
+        &serde_json::json!({ "filter_tokens": ["+@work"] }),
+        &mut env.ctx.repo,
+    )
+    .expect_err("get_forecast must refuse it too")
+    .to_string();
+    assert!(err.contains("replaced by filter"), "{err}");
 }
 
 #[cfg(feature = "mcp")]
@@ -585,7 +605,7 @@ fn the_archived_tier_refuses_what_it_cannot_answer() {
         ("user:alice", "scopes the whole view"),
     ] {
         let err = next::mcp::tools::tasks::list_tasks(
-            &serde_json::json!({ "archived": true, "filter_tokens": [query] }),
+            &serde_json::json!({ "archived": true, "filter": query }),
             &mut env.ctx.repo,
         )
         .expect_err(&format!("{query} should be refused"))
@@ -605,7 +625,7 @@ fn the_archived_tier_paginates_a_residual_query_correctly() {
     let result = next::mcp::tools::tasks::list_tasks(
         &serde_json::json!({
             "archived": true,
-            "filter_tokens": ["archived"],   // a search: residual, not pushed
+            "filter": "archived",
             "page": 1,
             "page_size": 1
         }),
