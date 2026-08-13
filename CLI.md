@@ -1098,6 +1098,28 @@ the statuses shown rather than the tags: a tag excluded on purpose stays exclude
 it is un-excluded. Tasks carrying an excluded tag are hidden, and while any tag is
 required, tasks that carry no required tag are hidden too.
 
+### How search matches
+
+Search is **word-oriented**, not substring: text is split on non-alphanumeric
+characters and lowercased, and a term matches whole words.
+
+| You type | Matches | Does not match |
+|----------|---------|----------------|
+| `arch` | "arch" | "archive", "search" |
+| `arch*` | "arch", "archive", "archiving" | "research" |
+| `"cold tier"` | "the cold tier segment" | "tier cold", "cold storage tier" |
+| `café` | "Café", "CAFÉ" | "cafe" |
+
+Case is ignored; accents are **not**, so `café` and `cafe` are different words.
+A term made only of punctuation (`"---"`) matches nothing — there is no word in
+it to look for.
+
+The same rules apply whether or not the SQLite cache is present: the cache
+answers from a full-text index and a cacheless store scans the text directly,
+and the two are held to the same behaviour by a differential test. Searching
+reaches archived tasks too, including segments pruned out of the working tree
+that `grep` cannot see.
+
 ### `is:project` and `is:blocked` interact with the implicit gate
 
 Both ask about *other* tasks, so the default list — which hides a parent while

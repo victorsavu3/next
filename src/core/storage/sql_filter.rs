@@ -27,7 +27,7 @@
 
 use chrono::NaiveDate;
 
-use crate::core::domain::filter_expr::{Atom, CompareOp, Expr, Field, Named, Value};
+use crate::core::domain::filter_expr::{Atom, CompareOp, Expr, Field, Named, TextField, Value};
 use crate::core::domain::task::Priority;
 
 /// A compiled `WHERE` fragment and the parameters it binds, in order.
@@ -206,9 +206,52 @@ fn atom_sql(atom: &Atom, today: NaiveDate) -> Option<SqlFilter> {
         }
         Atom::Has(field) => has_sql(field),
         Atom::Is(named) => is_sql(*named, today),
-        // Full-text search stays in memory until the FTS index lands (S3).
-        Atom::Search { .. } => None,
+        Atom::Search {
+            field,
+            term,
+            prefix,
+        } => search_sql(*field, term, *prefix),
     }
+}
+
+/// A search atom, as an FTS5 `MATCH` against the `task_fts` index.
+///
+/// The term is tokenised with the evaluator's own [`words`] and the phrase is
+/// rebuilt from those tokens, so what reaches SQLite is a quoted string of
+/// alphanumerics. That has two consequences worth stating plainly:
+///
+/// - **No FTS5 injection is possible.** A user searching for `AND`, `*`, `"`
+///   or `^` gets those characters tokenised away or quoted as literals, never
+///   interpreted as query syntax — and never a MATCH syntax error either.
+/// - **The index answers what the scan would answer**, because both start from
+///   the same tokens. That is what lets this atom claim to be exact.
+///
+/// A term with no word characters at all (`"---"`) matches nothing, exactly as
+/// the scan says: there is no token to look for.
+fn search_sql(field: Option<TextField>, term: &str, prefix: bool) -> Option<SqlFilter> {
+    let tokens = crate::core::domain::filter_eval::words(term);
+    if tokens.is_empty() {
+        return Some(SqlFilter::nothing());
+    }
+    // Tokens are alphanumeric-only, so the quotes cannot be escaped out of.
+    let mut query = format!("\"{}\"", tokens.join(" "));
+    if prefix {
+        query.push('*');
+    }
+    if let Some(text) = field {
+        // FTS5 column filter. The column name is ours, not the user's.
+        query = format!("{{{}}} : {}", text.name(), query);
+    }
+    // `IN (SELECT …)`, deliberately not `EXISTS (… AND task_id = tasks.id)`.
+    // The `EXISTS` form is CORRELATED: SQLite re-runs the MATCH once per task
+    // row, which turns a single index lookup into one full-text query per task
+    // and cost 2.4 s at 5 000 tasks in the bench. This form runs the MATCH
+    // once, materialises the matching ids, and probes `tasks` by primary key.
+    Some(SqlFilter::new(
+        "tasks.id IN (SELECT task_id FROM task_fts WHERE task_fts MATCH ?)",
+        vec![query],
+        true,
+    ))
 }
 
 /// `field:a,b` — membership, which is a disjunction over the values.
@@ -444,6 +487,12 @@ mod tests {
             "is:archived",
             "is:assigned",
             "is:overdue",
+            // Search, as of S3 — the FTS index answers what the scan would.
+            "sometext",
+            "\"a phrase\"",
+            "arch*",
+            "title:something",
+            "notes:measured",
             "+a and +b",
             "+a or +b",
             "not +a",
@@ -456,9 +505,8 @@ mod tests {
     #[test]
     fn unpushable_atoms_widen_to_everything() {
         for query in [
-            "sometext",        // search — until S3
-            "title:something", // scoped search
             "data.estimate:3", // inside the JSON blob
+            "data.estimate>1", // ditto, ordered
             "is:recurring",    // inside the JSON blob
             "is:blocked",      // about other tasks
             "is:project",      // about other tasks
@@ -472,10 +520,14 @@ mod tests {
 
     // ── The superset rule ────────────────────────────────────────────────────
 
+    // Search used to be the canonical unpushable atom; since S3 it compiles to
+    // an FTS MATCH, so these use `data.*` — still residual, because the value
+    // lives in the JSON blob.
+
     #[test]
     fn a_conjunction_keeps_the_half_it_can_push() {
-        // `+@work sometext` — the tag narrows in SQL, the search is rechecked.
-        let f = sql("+@work sometext");
+        // The tag narrows in SQL, the data predicate is rechecked in memory.
+        let f = sql("+@work data.estimate:3");
         assert!(!f.exact);
         assert!(f.sql.contains("task_tags"), "{}", f.sql);
         assert!(f.sql.contains(" AND 1"), "{}", f.sql);
@@ -484,8 +536,8 @@ mod tests {
     #[test]
     fn a_disjunction_with_an_unpushable_branch_widens_to_everything() {
         // THE subset trap: pushing only `+@work` here would drop every task
-        // that matched the search but not the tag.
-        let f = sql("+@work or sometext");
+        // that matched the data predicate but not the tag.
+        let f = sql("+@work or data.estimate:3");
         assert!(!f.exact);
         assert!(
             f.sql.starts_with("(EXISTS (SELECT 1 FROM task_tags"),
@@ -494,21 +546,21 @@ mod tests {
         );
         assert!(
             f.sql.ends_with(" OR 1)"),
-            "the OR must still admit everything the search could match — {}",
+            "the OR must still admit everything the residual could match — {}",
             f.sql
         );
     }
 
     #[test]
     fn negating_an_inexact_operand_widens_instead_of_narrowing() {
-        // `not (search)` must not become `NOT 1` — that is empty, and every
-        // task not mentioning the term would vanish.
-        let f = sql("not sometext");
+        // `not (residual)` must not become `NOT 1` — that is empty, and every
+        // task not matching the term would vanish.
+        let f = sql("not data.estimate:3");
         assert!(!f.exact);
         assert_eq!(f.sql, "1");
 
         // Same trap one level down: the operand mixes pushable and not.
-        let f = sql("not (+@work and sometext)");
+        let f = sql("not (+@work and data.estimate:3)");
         assert!(!f.exact);
         assert_eq!(f.sql, "1");
     }
@@ -523,8 +575,8 @@ mod tests {
 
     #[test]
     fn a_nested_mix_still_only_widens() {
-        // not(a or search) → widens; and(that, b) → keeps b.
-        let f = sql("not (+a or sometext) and +b");
+        // not(a or residual) → widens; and(that, b) → keeps b.
+        let f = sql("not (+a or data.estimate:3) and +b");
         assert!(!f.exact);
         assert!(f.sql.contains("task_tags"), "{}", f.sql);
     }

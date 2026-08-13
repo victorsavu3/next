@@ -234,7 +234,13 @@ fn search(task: &Task, field: Option<TextField>, term: &str, prefix: bool) -> bo
 
 /// Splits text into lowercase alphanumeric words, which is the tokenisation an
 /// FTS5 `unicode61` index performs.
-fn words(text: &str) -> Vec<String> {
+///
+/// Public because the FTS query builder tokenises the user's term with *this*
+/// function before handing it to SQLite. That is what makes the two paths
+/// agree, and it is also the injection defence: the tokens it returns contain
+/// only alphanumerics, so no FTS5 metacharacter (`"`, `*`, `:`, `^`, `(`, `)`,
+/// `AND`/`OR`/`NOT` as bare words) can survive into a MATCH string.
+pub fn words(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
         .map(|w| w.to_lowercase())

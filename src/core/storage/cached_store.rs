@@ -77,6 +77,11 @@ impl CachedStore {
                 .map_err(|e| TaskError::Other(format!("sqlite clear tasks: {e}")))?;
             conn.execute("DELETE FROM task_tags", [])
                 .map_err(|e| TaskError::Other(format!("sqlite clear task_tags: {e}")))?;
+            // The rebuild re-inserts every row, so the index has to be wiped
+            // with them — otherwise a rebuild leaves the old entries behind
+            // and every task ends up indexed twice.
+            conn.execute("DELETE FROM task_fts", [])
+                .map_err(|e| TaskError::Other(format!("sqlite clear task_fts: {e}")))?;
             for (path, task) in &tasks {
                 // Prefer the rename-stable UUID suffix; fall back to the
                 // exact filename (covers slug-named files).
@@ -283,6 +288,7 @@ fn delete_by_path(conn: &Connection, path: &str) -> Result<Option<(String, Optio
             .map_err(|e| TaskError::Other(format!("sqlite delete by path: {e}")))?;
         conn.execute("DELETE FROM task_tags WHERE task_id = ?1", params![id])
             .map_err(|e| TaskError::Other(format!("sqlite delete tags by path: {e}")))?;
+        delete_fts_row(conn, id)?;
     }
     Ok(row)
 }
@@ -442,6 +448,7 @@ impl Store for CachedStore {
                 .map_err(|e| TaskError::Other(format!("sqlite delete task: {e}")))?;
             conn.execute("DELETE FROM task_tags WHERE task_id = ?1", params![id_str])
                 .map_err(|e| TaskError::Other(format!("sqlite delete task tags: {e}")))?;
+            delete_fts_row(conn, &id_str)?;
             Ok(())
         })
     }
@@ -740,7 +747,7 @@ fn configure_connection(conn: &Connection) -> Result<()> {
 
 /// Bumped whenever the table layout changes. A mismatch drops and recreates
 /// the task tables and clears the stored head so `open()` rebuilds from TOML.
-const SCHEMA_VERSION: &str = "3";
+const SCHEMA_VERSION: &str = "4";
 
 /// The version of the binary that wrote the cache, stamped into `meta`.
 ///
@@ -769,6 +776,7 @@ fn setup_schema(conn: &Connection) -> Result<()> {
             "
             DROP TABLE IF EXISTS tasks;
             DROP TABLE IF EXISTS task_tags;
+            DROP TABLE IF EXISTS task_fts;
             DELETE FROM meta WHERE key = 'head_hash';
             ",
         )
@@ -804,6 +812,28 @@ fn setup_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_path   ON tasks(path);
         CREATE INDEX IF NOT EXISTS idx_task_tags_tag ON task_tags(tag);
+
+        -- Full-text index over the searchable prose. `slug` is absent on
+        -- purpose: it is an identifier, `slug:` is an exact match, and
+        -- indexing it would let a bare word match a title-derived filename.
+        --
+        -- `remove_diacritics 0` keeps the tokenizer aligned with the
+        -- in-memory scan, which lowercases and splits on non-alphanumeric but
+        -- does NOT fold accents. The default (1) would make the index match
+        -- `cafe` against `café` where the scan does not.
+        --
+        -- Self-contained rather than external-content: the `tasks` primary key
+        -- is TEXT, so an external-content table would need a separate rowid
+        -- mapping to keep in step — one more thing to drift. The cost is a
+        -- second copy of the text, which is the size increase measured below.
+        CREATE VIRTUAL TABLE IF NOT EXISTS task_fts USING fts5(
+            task_id UNINDEXED,
+            title,
+            description,
+            notes,
+            url,
+            tokenize = 'unicode61 remove_diacritics 0'
+        );
         ",
     )
     .map_err(|e| TaskError::Other(format!("sqlite schema setup: {e}")))
@@ -932,6 +962,37 @@ fn upsert_task_row(
         )
         .map_err(|e| TaskError::Other(format!("sqlite insert tag for {}: {e}", task.id)))?;
     }
+    upsert_fts_row(conn, task)?;
+    Ok(())
+}
+
+/// Replaces a task's row in the full-text index.
+///
+/// Delete-then-insert rather than an upsert: FTS5 has no `ON CONFLICT`, and a
+/// task edited from "fix the printer" to "fix the scanner" must stop matching
+/// `printer`. Leaving the old row would make the index answer for text that no
+/// longer exists — the drift this index is most likely to develop.
+fn upsert_fts_row(conn: &Connection, task: &Task) -> Result<()> {
+    let id_str = task.id.to_string();
+    delete_fts_row(conn, &id_str)?;
+    conn.execute(
+        "INSERT INTO task_fts(task_id, title, description, notes, url)
+         VALUES(?1, ?2, ?3, ?4, ?5)",
+        params![
+            id_str,
+            task.title,
+            task.description.as_deref().unwrap_or(""),
+            task.notes.as_deref().unwrap_or(""),
+            task.url.as_deref().unwrap_or(""),
+        ],
+    )
+    .map_err(|e| TaskError::Other(format!("sqlite index task {}: {e}", task.id)))?;
+    Ok(())
+}
+
+fn delete_fts_row(conn: &Connection, id_str: &str) -> Result<()> {
+    conn.execute("DELETE FROM task_fts WHERE task_id = ?1", params![id_str])
+        .map_err(|e| TaskError::Other(format!("sqlite unindex task {id_str}: {e}")))?;
     Ok(())
 }
 
@@ -966,6 +1027,123 @@ mod tests {
 
     use super::*;
     use crate::core::storage::GitBackend;
+
+    /// Rows in the full-text index for `task`, and the total index size.
+    ///
+    /// Search alone cannot see index drift: a duplicate row still returns the
+    /// task once through the `EXISTS` subquery, and an orphan row is invisible
+    /// because the join finds no task. Both are real — bloat, and a rebuild
+    /// that doubles every time it runs — so these tests count rows directly.
+    fn fts_rows(store: &CachedStore, task_id: &str) -> (i64, i64) {
+        store
+            .with_conn(|conn| {
+                let mine = conn
+                    .query_row(
+                        "SELECT count(*) FROM task_fts WHERE task_id = ?1",
+                        params![task_id],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .unwrap();
+                let total = conn
+                    .query_row("SELECT count(*) FROM task_fts", [], |r| r.get::<_, i64>(0))
+                    .unwrap();
+                Ok((mine, total))
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn the_index_holds_exactly_one_row_per_task_through_every_write_path() {
+        let (dir, mut store, vcs) = setup();
+
+        let mut task = Task::new("Fix the printer");
+        task.notes = Some("It jams on thick paper.".into());
+        store.save_task(&task).unwrap();
+        let id = task.id.to_string();
+        assert_eq!(fts_rows(&store, &id), (1, 1), "after the first save");
+
+        // Re-saving must replace, not accumulate.
+        store.save_task(&task).unwrap();
+        assert_eq!(fts_rows(&store, &id), (1, 1), "after re-saving");
+
+        // An edit must not leave the old text behind — the drift that would
+        // make the index answer for prose that no longer exists.
+        task.title = "Fix the scanner".into();
+        task.notes = None;
+        store.save_task(&task).unwrap();
+        assert_eq!(fts_rows(&store, &id), (1, 1), "after an edit");
+
+        // A rebuild re-inserts every row; the index must be wiped with them.
+        let head = vcs.head_hash().unwrap();
+        store.rebuild(&head).unwrap();
+        assert_eq!(fts_rows(&store, &id), (1, 1), "after a rebuild");
+        store.rebuild(&head).unwrap();
+        assert_eq!(fts_rows(&store, &id), (1, 1), "after a second rebuild");
+
+        // A task whose FILE disappeared is the case the per-task replace
+        // cannot reach: without the bulk wipe, the rebuild reads what is on
+        // disk and never learns the vanished task should be unindexed, so its
+        // row survives forever as an orphan.
+        let mut ghost = Task::new("Vanishing act");
+        store.save_task(&ghost).unwrap();
+        let ghost_id = ghost.id.to_string();
+        assert_eq!(fts_rows(&store, &ghost_id).0, 1, "ghost indexed");
+        fs::remove_file(super::super::task_path(dir.path(), &ghost)).unwrap();
+        store.rebuild(&head).unwrap();
+        assert_eq!(
+            fts_rows(&store, &ghost_id).0,
+            0,
+            "a task removed from disk must leave no index row behind"
+        );
+        ghost.title = "unused".into();
+
+        // Deleting drops the row rather than orphaning it.
+        store.delete_task(task.id).unwrap();
+        assert_eq!(fts_rows(&store, &id), (0, 0), "after delete");
+
+        drop(dir);
+    }
+
+    #[test]
+    fn an_archived_then_resurrected_task_keeps_one_index_row() {
+        // The review gate's case: archived, resurrected and re-archived must
+        // leave exactly one row — not zero, and not two.
+        let (dir, mut store, _vcs) = setup();
+
+        let mut task = Task::new("Ancient business");
+        task.notes = Some("Concerning the cold tier.".into());
+        let id = task.id.to_string();
+        store.save_task(&task).unwrap();
+        assert_eq!(fts_rows(&store, &id), (1, 1));
+
+        let entry = super::super::archive::ArchivedTask {
+            task: task.clone(),
+            created_at: None,
+            updated_at: None,
+        };
+        store
+            .note_archived_segment("archive/2025/03-001.toml", std::slice::from_ref(&entry))
+            .unwrap();
+        assert_eq!(fts_rows(&store, &id), (1, 1), "archived");
+
+        // Writing the same segment again (a re-scan) must not duplicate.
+        store
+            .note_archived_segment("archive/2025/03-001.toml", std::slice::from_ref(&entry))
+            .unwrap();
+        assert_eq!(fts_rows(&store, &id), (1, 1), "segment rewritten");
+
+        // Resurrection moves it back to the active tier.
+        store.resurrect_task(&task).unwrap();
+        assert_eq!(fts_rows(&store, &id), (1, 1), "resurrected");
+
+        // And back into the archive again.
+        store
+            .note_archived_segment("archive/2025/03-001.toml", &[entry])
+            .unwrap();
+        assert_eq!(fts_rows(&store, &id), (1, 1), "re-archived");
+
+        drop(dir);
+    }
 
     fn setup() -> (TempDir, CachedStore, GitBackend) {
         let dir = TempDir::new().unwrap();

@@ -8,8 +8,16 @@
 //! |----------------------------------|---------------------|
 //! | single edit (save + git commit)  | < 100 ms            |
 //! | filtered query                   | < 1 s               |
+//! | full-text search                 | < 1 s               |
 //! | incremental reconcile, ≤200 files| < 10 s              |
 //! | full cache rebuild               | < 10 min            |
+//!
+//! Tasks carry realistic prose (a description and ~160 words of notes), which
+//! matters for more than fidelity: the full-text index stores a second copy of
+//! that text, so a corpus of empty tasks would report a cache cost no real
+//! repository ever sees — and would hide how search scales. The search
+//! benchmarks caught a correlated-subquery formulation that cost 2.4 s for a
+//! common term at 5 000 tasks, which a small real repository showed as 0.02 s.
 //!
 //! Run with `cargo bench --bench large_repo`. `NEXT_BENCH_TASKS` sets the
 //! total task count (default 5 000 so a run stays under a minute; set
@@ -50,6 +58,57 @@ fn month_anchor(months_ago: u32) -> chrono::NaiveDate {
     chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() - chrono::Months::new(months_ago)
 }
 
+/// The vocabulary the synthetic prose is drawn from.
+///
+/// Deterministic and small on purpose: a term's hit rate is then a known
+/// fraction of the corpus, so a search benchmark measures the index rather
+/// than the luck of a random draw. `needle` appears in roughly 1 task in 200,
+/// which is the selective-search case worth timing.
+const VOCAB: &[&str] = &[
+    "cache",
+    "segment",
+    "archive",
+    "filter",
+    "query",
+    "index",
+    "storage",
+    "commit",
+    "manifest",
+    "pruned",
+    "reconcile",
+    "scoring",
+    "urgency",
+    "deadline",
+    "recurrence",
+    "plugin",
+];
+
+/// Description and notes for synthetic task `i`.
+///
+/// Real task notes here run to hundreds of words, and the whole point of
+/// measuring is that the index copies this text — so a benchmark over empty
+/// tasks would report a cache cost that no real repository would ever see.
+fn prose(i: usize) -> (String, String) {
+    let mut description = String::new();
+    for w in 0..40 {
+        description.push_str(VOCAB[(i + w) % VOCAB.len()]);
+        description.push(' ');
+    }
+    let mut notes = String::with_capacity(1024);
+    for w in 0..160 {
+        notes.push_str(VOCAB[(i * 7 + w) % VOCAB.len()]);
+        notes.push(' ');
+        if w % 20 == 19 {
+            notes.push('\n');
+        }
+    }
+    // One term in ~200 tasks, so a selective search has real work to do.
+    if i.is_multiple_of(200) {
+        notes.push_str("needle");
+    }
+    (description, notes)
+}
+
 /// Builds the synthetic repository following the design's workload model
 /// (§3 of the proposal): ~1% of tasks are open at any moment — the archive
 /// pass is what keeps the active tier this small — so they live as
@@ -67,6 +126,9 @@ fn build_repo(root: &Path, total: usize) -> (Vec<Task>, usize) {
         if i % 10 == 0 {
             t.tags = vec!["@bench/hot".into()];
         }
+        let (description, notes) = prose(i);
+        t.description = Some(description);
+        t.notes = Some(notes);
         std::fs::write(
             next::core::storage::task_path(root, &t),
             toml::to_string_pretty(&t).unwrap(),
@@ -82,6 +144,9 @@ fn build_repo(root: &Path, total: usize) -> (Vec<Task>, usize) {
     let now = chrono::Utc::now();
     for i in 0..archived_count {
         let mut t = Task::new(format!("Archived task {i}"));
+        let (description, notes) = prose(i);
+        t.description = Some(description);
+        t.notes = Some(notes);
         // Spread completions over months, ~3000/month → 3 segments per month.
         t.mark_done(month_anchor(month));
         entries.push(ArchivedTask {
@@ -229,6 +294,97 @@ fn main() {
         limit: Duration::from_secs(1),
     });
     assert_eq!(archived.total as usize, archived_count);
+
+    // ── Full-text search: the FTS index, over both tiers ────────────────────
+    //
+    // `needle` is in ~1 task in 200, so this is the selective case. It is also
+    // the query shape that decides whether the archive tier can be searched at
+    // all: before the index it was a scan of every deserialised row.
+    let search = |query: &str| TaskQuery {
+        filter: Some(next::core::store::QueryFilter::new(
+            next::core::domain::filter_expr::parse(query).unwrap(),
+            chrono::Local::now().date_naive(),
+        )),
+        ..TaskQuery::default()
+    };
+
+    let t = Instant::now();
+    let found = store.query_tasks(&search("needle")).unwrap();
+    results.push(Budget {
+        name: "search, selective (page 1)",
+        took: t.elapsed(),
+        limit: Duration::from_secs(1),
+    });
+    assert!(found.total > 0, "the needle must be findable");
+
+    // A common term matches most of the corpus — the pagination case, where
+    // the index has to rank far more rows than fit on a page.
+    let t = Instant::now();
+    let common = store.query_tasks(&search("cache")).unwrap();
+    results.push(Budget {
+        name: "search, common term (page 1)",
+        took: t.elapsed(),
+        limit: Duration::from_secs(1),
+    });
+    assert!(common.total > 0, "a vocabulary word must match");
+
+    // Prefix search cannot use a plain term index, so it is timed separately.
+    let t = Instant::now();
+    store.query_tasks(&search("archiv*")).unwrap();
+    results.push(Budget {
+        name: "search, prefix (page 1)",
+        took: t.elapsed(),
+        limit: Duration::from_secs(1),
+    });
+
+    // Searching the ARCHIVE is the payoff: this reaches text in segments that
+    // a working-tree grep cannot see at all.
+    let t = Instant::now();
+    let archived_hits = store
+        .query_tasks(&TaskQuery {
+            archived: true,
+            ..search("needle")
+        })
+        .unwrap();
+    results.push(Budget {
+        name: "search, archived tier",
+        took: t.elapsed(),
+        limit: Duration::from_secs(1),
+    });
+    assert!(
+        archived_hits.total > 0,
+        "archived text must be searchable — that is the point of indexing it"
+    );
+
+    // ── Cache footprint ─────────────────────────────────────────────────────
+    //
+    // The full-text index stores a second copy of every task's prose, so it is
+    // the largest single cost of making search indexed. Reported rather than
+    // budgeted: what counts as too big is a judgement about the machine, not a
+    // number the benchmark can assert.
+    drop(store);
+    let cache_bytes = std::fs::metadata(root.join(".next.db"))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let fts_bytes = {
+        let conn = rusqlite::Connection::open(root.join(".next.db")).unwrap();
+        conn.query_row(
+            "SELECT COALESCE(SUM(pgsize), 0) FROM dbstat WHERE name LIKE 'task_fts%'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(-1)
+    };
+    let mib = |b: f64| b / (1024.0 * 1024.0);
+    println!("\ncache: {:.1} MiB total", mib(cache_bytes as f64));
+    if fts_bytes >= 0 {
+        println!(
+            "  full-text index: {:.1} MiB ({:.0}% of the cache, {:.0} bytes/task)",
+            mib(fts_bytes as f64),
+            100.0 * fts_bytes as f64 / cache_bytes as f64,
+            fts_bytes as f64 / total as f64,
+        );
+    }
 
     // ── Report ───────────────────────────────────────────────────────────────
     println!("\n{total} tasks — budgets are the 1M worst-case bounds:");

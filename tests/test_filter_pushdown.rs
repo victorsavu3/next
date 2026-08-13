@@ -88,12 +88,46 @@ const EXPRESSIONS: &[&str] = &[
     "completed<2026-01-01",
     "completed:2025-01-01..2025-12-31",
     "due:2026-08-01",
-    // Fully residual (nothing to push).
+    // Search — pushed to the FTS index as of S3, and marked exact, so these
+    // are the cases proving the index and the scan are one dialect.
     "alpha",
     "\"the cold\"",
     "arch*",
     "title:beta",
     "notes:measured",
+    // Case and accent folding: the scan lowercases without stripping
+    // diacritics, so the index is built `remove_diacritics 0` to match.
+    "café",
+    "CAFÉ",
+    "Café",
+    "naïve",
+    "cafe",
+    "resume",
+    // CJK — the likeliest place for two tokenizers to part ways.
+    "日本語",
+    "テスト",
+    // Words that are FTS5 operators. Quoting the rebuilt phrase is what keeps
+    // these literal instead of syntax (or a MATCH parse error). `and`/`or` are
+    // reserved in *our* grammar too, so they arrive already quoted; `near` is
+    // FTS5-only and reaches the index as a bare word.
+    "\"and\"",
+    "\"OR\"",
+    "near",
+    "NEAR",
+    // Characters that are FTS5 syntax. They tokenise away on both sides.
+    "\"sym*bol\"",
+    "\"12345\"",
+    "🎉",
+    "\"---\"",
+    // Hyphenation and digits split the same way on both sides.
+    "wifi",
+    "router",
+    "\"wifi router\"",
+    "12345",
+    // Prefix search over the same material.
+    "caf*",
+    "wifi-rout*",
+    "日本*",
     "data.estimate:3",
     "data.estimate>1",
     "has:data.estimate",
@@ -206,6 +240,15 @@ fn corpus(env: &mut common::TestEnv) -> (Vec<Task>, Vec<Task>) {
 
     // Untagged and unassigned, so `user:` and the tag atoms have a negative case.
     active.push(Task::new("Delta plain"));
+
+    // The text that decides whether the FTS index and the in-memory scan are
+    // the same dialect: accents, CJK, emoji, hyphenation, digits, and words
+    // that are FTS5 operators. If these two ever disagree, the search atom
+    // must stop claiming to be exact.
+    let mut unicode = Task::new("Café naïve résumé");
+    unicode.description = Some("日本語 テスト and OR not NEAR".into());
+    unicode.notes = Some("wifi-router 12345 🎉 sym*bol \"quoted\"".into());
+    active.push(unicode);
 
     // `_` is a legal tag character and a `LIKE` wildcard. These two exist so
     // that `+a_b` has both a task it must match and one it must not: with the
@@ -597,5 +640,56 @@ fn atoms_that_need_other_tasks_are_refused_not_silently_empty() {
     for query in EXPRESSIONS {
         validate_for_store(&parse(query).unwrap())
             .unwrap_or_else(|e| panic!("{query} should be accepted: {e}"));
+    }
+}
+
+/// Guards the guard: the search cases in the corpus must actually match
+/// something. A differential where both paths return nothing agrees perfectly
+/// and proves nothing — the same trap the old bare-token test fell into.
+#[test]
+fn the_unicode_search_cases_are_not_vacuous() {
+    let mut env = common::setup();
+    corpus(&mut env);
+    let store = env.ctx.repo.store();
+
+    let matches = |query: &str| -> u64 {
+        let expr = parse(query).unwrap_or_else(|e| panic!("{query}: {e}"));
+        store
+            .query_tasks(&TaskQuery {
+                filter: Some(QueryFilter::new(expr, today())),
+                ..TaskQuery::unpaginated()
+            })
+            .unwrap()
+            .total
+    };
+
+    // Positive controls: each of these must find the unicode task.
+    for query in [
+        "café",
+        "CAFÉ",
+        "naïve",
+        "日本語",
+        "テスト",
+        "near",
+        "NEAR",
+        "wifi",
+        "router",
+        "\"wifi router\"",
+        "12345",
+        "caf*",
+        "日本*",
+        "\"and\"",
+        "\"sym*bol\"",
+    ] {
+        assert!(
+            matches(query) > 0,
+            "{query} matched nothing — its differential case is vacuous"
+        );
+    }
+
+    // Negative controls: the accent rule and the word-boundary rule are doing
+    // real work, and a term of pure punctuation finds nothing.
+    for query in ["cafe", "resume", "🎉", "\"---\"", "zzzznothing"] {
+        assert_eq!(matches(query), 0, "{query} should match nothing");
     }
 }

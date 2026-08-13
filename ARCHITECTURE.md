@@ -750,13 +750,46 @@ total that counted candidates rather than matches.
 
 Pushed: tags (via `task_tags`), status, priority (through a `CASE` rank — `'high'`
 sorts before `'low'` as text), slug, assignee, `user:` (keeping its unassigned
-branch), `due`/`start`/`completed`, `has:`/`no:` on those, and
-`is:closed|archived|assigned|overdue`. Residual: search (until S3), `data.*`,
-`is:recurring`, and anything inside the JSON blob.
+branch), `due`/`start`/`completed`, `has:`/`no:` on those,
+`is:closed|archived|assigned|overdue`, and full-text search (via `task_fts`).
+Residual: `data.*`, `is:recurring`, and anything else inside the JSON blob.
+`created:`/`updated:` are deliberately not pushed — see `date_column`.
 
 Every value is a bound parameter. The only literal the compiler writes into the
 SQL is the priority rank, because a bound parameter arrives as TEXT and SQLite
 orders every integer before every string.
+
+### Full-text search (`task_fts`)
+
+An FTS5 virtual table over `title`, `description`, `notes` and `url` — not
+`slug`, which is an identifier. Built `tokenize = 'unicode61 remove_diacritics 0'`
+so the index tokenises exactly as `filter_eval::words` does: split on
+non-alphanumeric, lowercase, **keep** accents.
+
+That shared tokeniser is the whole trick. `sql_filter::search_sql` runs the
+user's term through `words` and rebuilds the phrase from the resulting tokens,
+so what reaches SQLite is a quoted string of alphanumerics. Two consequences:
+
+- **No FTS5 injection, and no MATCH syntax errors.** A user searching for
+  `AND`, `*`, `^` or a quote gets those tokenised away or quoted as literals.
+- **The index answers what the scan would**, which is what lets the atom be
+  marked exact. A differential test pins the two together over accented text,
+  CJK, emoji, hyphenation and FTS5 operator words.
+
+The compiled predicate is `tasks.id IN (SELECT task_id FROM task_fts WHERE
+task_fts MATCH ?)`. It is emphatically **not** `EXISTS (… AND task_id =
+tasks.id)`: that form is correlated, so SQLite re-runs the full-text query once
+per task row — 2.4 s versus 16 ms for a common term at 5 000 tasks.
+
+Index maintenance has **five** touch points, not the three the design
+anticipated: `upsert_task_row`, `delete_by_path`, `delete_task`, the bulk wipe
+in `rebuild`, and `upsert_segment_rows` (which reaches the index through the
+first two). Miss one and the index drifts silently — searches answer for text
+that no longer exists, or a rebuild leaves orphans behind.
+
+The cost, from `cargo bench --bench large_repo`: the index is about half the
+cache (≈2.3 KB per task with realistic prose), which is the second copy of the
+text it stores.
 
 ### `filter_eval` is the reference semantics
 
@@ -969,6 +1002,7 @@ non-zero exit code.
 | `domain::filter_expr` | `src/core/domain/filter_expr.rs` | Unit tests: one per atom form and operator spelling, precedence and grouping, error messages for malformed input, and `parse(print(e)) == e` round-trips |
 | `domain::filter_eval` | `src/core/domain/filter_eval.rs` | Unit tests: each atom against a hand-built task, both operator spellings, precedence, and the bare-token/`+tag` split pinned in both directions |
 | `storage::sql_filter` | `src/core/storage/sql_filter.rs` | Unit tests per atom form, plus the superset rule under `or`/`not` and a check that values are bound, never interpolated |
+| `task_fts` maintenance | `src/core/storage/cached_store.rs` | Unit tests counting index rows through every write path — save, re-save, edit, rebuild, delete, archive, resurrect, re-archive — since search alone cannot see a duplicate or an orphan |
 | Filter pushdown | `tests/test_filter_pushdown.rs` | Differential: ~50 expressions run down both the SQL and in-memory paths over a corpus spanning active, warm-archive and pruned-cold rows, plus a rebuilt cache; pagination under a residual filter; injection attempts |
 | `TomlStore` | `src/core/storage/toml_store.rs` | Round-trip tests: write task to `tempdir`, read back, assert equal fields; migration unit tests: write legacy `state.toml`, call `TomlStore::open()`, assert per-tag files created and `state.toml` cleaned |
 | `GitBackend` | `src/core/storage/git_backend.rs` | Integration tests against `tempdir` git repo; assert commits and HEAD |
