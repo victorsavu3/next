@@ -262,8 +262,11 @@ fn corpus(env: &mut common::TestEnv) -> (Vec<Task>, Vec<Task>) {
     active.push(wildcarded);
 
     // ── Archive tier ─────────────────────────────────────────────────────────
-    // Ancient enough to be pruned into the cold tier.
+    // Ancient enough to be pruned into the cold tier. `sarcophagus` appears
+    // nowhere else, so searching for it proves the pruned segment — which is
+    // not in the working tree at all — is indexed like everything else.
     let mut ancient = Task::new("Ancient archived work");
+    ancient.notes = Some("Filed inside a sarcophagus.".into());
     ancient.slug = Some("ancient".into());
     ancient.tags = vec!["@work".into()];
     ancient.priority = Priority::High;
@@ -641,6 +644,81 @@ fn atoms_that_need_other_tasks_are_refused_not_silently_empty() {
         validate_for_store(&parse(query).unwrap())
             .unwrap_or_else(|e| panic!("{query} should be accepted: {e}"));
     }
+}
+
+/// The payoff of indexing the archive: text in a segment that has been pruned
+/// out of the checkout entirely is still searchable. `grep` cannot reach it.
+#[test]
+fn a_pruned_cold_segment_is_searchable() {
+    let mut env = common::setup();
+    corpus(&mut env);
+    let root = env.ctx.repo.repo_root.clone();
+
+    // The segment really is gone from the working tree.
+    assert!(
+        !root.join("archive/2025/03-001.toml").exists(),
+        "the cold segment should have been pruned out of the checkout"
+    );
+
+    let hits = env
+        .ctx
+        .repo
+        .store()
+        .query_tasks(&TaskQuery {
+            archived: true,
+            filter: Some(QueryFilter::new(parse("sarcophagus").unwrap(), today())),
+            ..TaskQuery::unpaginated()
+        })
+        .unwrap();
+    assert_eq!(hits.total, 1, "the pruned segment's text must be findable");
+    assert_eq!(hits.items[0].title, "Ancient archived work");
+}
+
+/// A cache written by an older schema must rebuild itself, virtual table and
+/// all — otherwise the first search after an upgrade queries a table that does
+/// not exist, or one left empty by the rebuild that skipped it.
+#[test]
+fn an_older_cache_rebuilds_its_index_on_open() {
+    let mut env = common::setup();
+    corpus(&mut env);
+    let root = env.ctx.repo.repo_root.clone();
+
+    // Re-open at a fresh path so the cache is built from scratch, then confirm
+    // search works — the baseline the upgrade has to reach.
+    let open = |db: &str| {
+        let inner =
+            next::core::storage::TomlStore::open(root.clone(), root.join("state.toml")).unwrap();
+        let vcs = next::core::storage::GitBackend::open(&root).unwrap();
+        let head = next::core::store::VcsBackend::head_hash(&vcs).unwrap();
+        next::core::storage::CachedStore::open(inner, root.join(db), &head).unwrap()
+    };
+
+    let fresh = open(".next-upgrade.db");
+    let search = |store: &dyn Store, term: &str| {
+        store
+            .query_tasks(&TaskQuery {
+                archived: true,
+                filter: Some(QueryFilter::new(parse(term).unwrap(), today())),
+                ..TaskQuery::unpaginated()
+            })
+            .unwrap()
+            .total
+    };
+    assert_eq!(search(&fresh, "sarcophagus"), 1);
+    drop(fresh);
+
+    // Now pretend it was written by the previous schema and re-open.
+    let conn = rusqlite::Connection::open(root.join(".next-upgrade.db")).unwrap();
+    conn.execute("UPDATE meta SET value = '3' WHERE key = 'schema_version'", [])
+        .unwrap();
+    drop(conn);
+
+    let upgraded = open(".next-upgrade.db");
+    assert_eq!(
+        search(&upgraded, "sarcophagus"),
+        1,
+        "search must work again after the schema self-heal"
+    );
 }
 
 /// Guards the guard: the search cases in the corpus must actually match
