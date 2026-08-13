@@ -709,8 +709,11 @@ fn an_older_cache_rebuilds_its_index_on_open() {
 
     // Now pretend it was written by the previous schema and re-open.
     let conn = rusqlite::Connection::open(root.join(".next-upgrade.db")).unwrap();
-    conn.execute("UPDATE meta SET value = '3' WHERE key = 'schema_version'", [])
-        .unwrap();
+    conn.execute(
+        "UPDATE meta SET value = '3' WHERE key = 'schema_version'",
+        [],
+    )
+    .unwrap();
     drop(conn);
 
     let upgraded = open(".next-upgrade.db");

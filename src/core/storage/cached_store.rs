@@ -284,11 +284,16 @@ fn delete_by_path(conn: &Connection, path: &str) -> Result<Option<(String, Optio
         .optional()
         .map_err(|e| TaskError::Other(format!("sqlite lookup by path: {e}")))?;
     if let Some((id, _)) = &row {
+        // The index is keyed by the tasks rowid, so read it before the row it
+        // belongs to is gone.
+        let rowid = task_rowid(conn, id)?;
         conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])
             .map_err(|e| TaskError::Other(format!("sqlite delete by path: {e}")))?;
         conn.execute("DELETE FROM task_tags WHERE task_id = ?1", params![id])
             .map_err(|e| TaskError::Other(format!("sqlite delete tags by path: {e}")))?;
-        delete_fts_row(conn, id)?;
+        if let Some(rowid) = rowid {
+            delete_fts_row(conn, rowid)?;
+        }
     }
     Ok(row)
 }
@@ -444,11 +449,14 @@ impl Store for CachedStore {
             None => self.inner.delete_task(id)?,
         }
         self.with_conn(|conn| {
+            let rowid = task_rowid(conn, &id_str)?;
             conn.execute("DELETE FROM tasks WHERE id = ?1", params![id_str])
                 .map_err(|e| TaskError::Other(format!("sqlite delete task: {e}")))?;
             conn.execute("DELETE FROM task_tags WHERE task_id = ?1", params![id_str])
                 .map_err(|e| TaskError::Other(format!("sqlite delete task tags: {e}")))?;
-            delete_fts_row(conn, &id_str)?;
+            if let Some(rowid) = rowid {
+                delete_fts_row(conn, rowid)?;
+            }
             Ok(())
         })
     }
@@ -747,7 +755,7 @@ fn configure_connection(conn: &Connection) -> Result<()> {
 
 /// Bumped whenever the table layout changes. A mismatch drops and recreates
 /// the task tables and clears the stored head so `open()` rebuilds from TOML.
-const SCHEMA_VERSION: &str = "4";
+const SCHEMA_VERSION: &str = "5";
 
 /// The version of the binary that wrote the cache, stamped into `meta`.
 ///
@@ -822,12 +830,13 @@ fn setup_schema(conn: &Connection) -> Result<()> {
         -- does NOT fold accents. The default (1) would make the index match
         -- `cafe` against `café` where the scan does not.
         --
-        -- Self-contained rather than external-content: the `tasks` primary key
-        -- is TEXT, so an external-content table would need a separate rowid
-        -- mapping to keep in step — one more thing to drift. The cost is a
-        -- second copy of the text, which is the size increase measured below.
+        -- Keyed by `rowid`, which is deliberately the SAME rowid the matching
+        -- `tasks` row has. A virtual table cannot carry an index, so the
+        -- obvious `task_id UNINDEXED` column would make every delete a FULL
+        -- SCAN of the index — and a delete runs on every single write, which
+        -- made a rebuild quadratic. `rowid` is the one column fts5 can look up
+        -- directly, so keying on it turns that scan into a point lookup.
         CREATE VIRTUAL TABLE IF NOT EXISTS task_fts USING fts5(
-            task_id UNINDEXED,
             title,
             description,
             notes,
@@ -966,20 +975,22 @@ fn upsert_task_row(
     Ok(())
 }
 
-/// Replaces a task's row in the full-text index.
+/// Replaces a task's row in the full-text index, keyed by the `tasks` rowid.
 ///
 /// Delete-then-insert rather than an upsert: FTS5 has no `ON CONFLICT`, and a
 /// task edited from "fix the printer" to "fix the scanner" must stop matching
 /// `printer`. Leaving the old row would make the index answer for text that no
 /// longer exists — the drift this index is most likely to develop.
 fn upsert_fts_row(conn: &Connection, task: &Task) -> Result<()> {
-    let id_str = task.id.to_string();
-    delete_fts_row(conn, &id_str)?;
+    let Some(rowid) = task_rowid(conn, &task.id.to_string())? else {
+        return Ok(());
+    };
+    delete_fts_row(conn, rowid)?;
     conn.execute(
-        "INSERT INTO task_fts(task_id, title, description, notes, url)
+        "INSERT INTO task_fts(rowid, title, description, notes, url)
          VALUES(?1, ?2, ?3, ?4, ?5)",
         params![
-            id_str,
+            rowid,
             task.title,
             task.description.as_deref().unwrap_or(""),
             task.notes.as_deref().unwrap_or(""),
@@ -990,10 +1001,23 @@ fn upsert_fts_row(conn: &Connection, task: &Task) -> Result<()> {
     Ok(())
 }
 
-fn delete_fts_row(conn: &Connection, id_str: &str) -> Result<()> {
-    conn.execute("DELETE FROM task_fts WHERE task_id = ?1", params![id_str])
-        .map_err(|e| TaskError::Other(format!("sqlite unindex task {id_str}: {e}")))?;
+/// Drops one row from the index. A `rowid` lookup, so it costs a seek rather
+/// than a scan of every indexed task — see the schema comment.
+fn delete_fts_row(conn: &Connection, rowid: i64) -> Result<()> {
+    conn.execute("DELETE FROM task_fts WHERE rowid = ?1", params![rowid])
+        .map_err(|e| TaskError::Other(format!("sqlite unindex rowid {rowid}: {e}")))?;
     Ok(())
+}
+
+/// The `tasks` rowid for a task id, which is also its key in `task_fts`.
+fn task_rowid(conn: &Connection, id_str: &str) -> Result<Option<i64>> {
+    conn.query_row(
+        "SELECT rowid FROM tasks WHERE id = ?1",
+        params![id_str],
+        |r| r.get::<_, i64>(0),
+    )
+    .optional()
+    .map_err(|e| TaskError::Other(format!("sqlite rowid lookup: {e}")))
 }
 
 fn deserialize_task(data: String) -> Result<Task> {
@@ -1037,13 +1061,18 @@ mod tests {
     fn fts_rows(store: &CachedStore, task_id: &str) -> (i64, i64) {
         store
             .with_conn(|conn| {
-                let mine = conn
-                    .query_row(
-                        "SELECT count(*) FROM task_fts WHERE task_id = ?1",
-                        params![task_id],
-                        |r| r.get::<_, i64>(0),
-                    )
-                    .unwrap();
+                // The index is keyed by the tasks rowid, so a task with no
+                // tasks row has no index row by construction.
+                let mine = match task_rowid(conn, task_id).unwrap() {
+                    Some(rowid) => conn
+                        .query_row(
+                            "SELECT count(*) FROM task_fts WHERE rowid = ?1",
+                            params![rowid],
+                            |r| r.get::<_, i64>(0),
+                        )
+                        .unwrap(),
+                    None => 0,
+                };
                 let total = conn
                     .query_row("SELECT count(*) FROM task_fts", [], |r| r.get::<_, i64>(0))
                     .unwrap();

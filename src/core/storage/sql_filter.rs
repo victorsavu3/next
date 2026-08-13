@@ -233,6 +233,25 @@ fn search_sql(field: Option<TextField>, term: &str, prefix: bool) -> Option<SqlF
     if tokens.is_empty() {
         return Some(SqlFilter::nothing());
     }
+    // ── The limit of the agreement ──────────────────────────────────────────
+    //
+    // The scan tokenises with Rust's `is_alphanumeric` + `to_lowercase`; FTS5
+    // uses unicode61's own tables. Over ASCII those agree exactly. Beyond it
+    // they do not, and not always in the safe direction:
+    //
+    // - `is_alphanumeric` keeps combining marks (NFD accents, Indic vowel
+    //   signs) inside a token where unicode61 treats them as separators;
+    // - `to_lowercase` folds cases unicode61 does not (`İ` becomes two chars,
+    //   Cherokee, Georgian Mtavruli).
+    //
+    // Some of those make FTS match MORE than the scan, which a re-check could
+    // absorb — but others make it match LESS, and a subset silently drops rows
+    // no matter what the caller does with `exact`. Rather than guess which,
+    // anything outside ASCII is left to the scan: correct always, slower for a
+    // rare query. Pinned by `tests/sqlite_assumptions.rs`.
+    if tokens.iter().any(|t| !t.is_ascii()) {
+        return None;
+    }
     // Tokens are alphanumeric-only, so the quotes cannot be escaped out of.
     let mut query = format!("\"{}\"", tokens.join(" "));
     if prefix {
@@ -248,7 +267,7 @@ fn search_sql(field: Option<TextField>, term: &str, prefix: bool) -> Option<SqlF
     // and cost 2.4 s at 5 000 tasks in the bench. This form runs the MATCH
     // once, materialises the matching ids, and probes `tasks` by primary key.
     Some(SqlFilter::new(
-        "tasks.id IN (SELECT task_id FROM task_fts WHERE task_fts MATCH ?)",
+        "tasks.rowid IN (SELECT rowid FROM task_fts WHERE task_fts MATCH ?)",
         vec![query],
         true,
     ))
@@ -734,3 +753,8 @@ mod tests {
         );
     }
 }
+
+// The SQLite behaviours this compiler depends on — LIKE's case folding, the
+// integer/text sort order, NULL under NOT, FTS5 tokenisation — are pinned in
+// `tests/sqlite_assumptions.rs`. They are properties of the engine rather than
+// of this code, and each one is load-bearing for a predicate marked *exact*.
