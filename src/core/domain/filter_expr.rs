@@ -1,9 +1,11 @@
 //! The filter expression grammar: a query string parsed into an [`Expr`] tree.
 //!
-//! This is stage 0 of the filter language: parsing only. Nothing here evaluates
-//! an expression or touches a [`Task`](crate::core::domain::task::Task) — the
-//! evaluator, the SQL pushdown and the surface wiring are separate stages, and
-//! the AST is the contract between them.
+//! Parsing only. Nothing here evaluates an expression or touches a
+//! [`Task`](crate::core::domain::task::Task): the evaluator lives in
+//! [`filter_eval`](crate::core::domain::filter_eval), the SQL translation in
+//! `storage::sql_filter`, and the AST is the contract between them. Keeping
+//! this file free of any notion of a task is what lets those two be checked
+//! against each other.
 //!
 //! The one design decision that shapes everything else is that **a bare word is
 //! a full-text search**, not a tag. Tags therefore require a sigil (`+tag` /

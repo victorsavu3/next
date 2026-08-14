@@ -1164,6 +1164,30 @@ listing has neither a view of other tasks nor git history to consult:
 | `created:`, `updated:` | They come from git history, which this listing does not load. |
 | `context:`, `user:` | They scope the whole view, which this listing does not apply. |
 
+### The fields
+
+| Field | Values | Ordered? |
+|-------|--------|----------|
+| `status` | `open`, `started`, `done`, `cancelled` | no |
+| `priority` | `low`, `medium`, `high` | yes — `low < medium < high` |
+| `due`, `start`, `completed` | a date (see below) | yes |
+| `created`, `updated` | a date, from git history | yes |
+| `assignee` | a username | no |
+| `user` | a username; also matches **unassigned** tasks | no |
+| `slug` | exact match, not a prefix | no |
+| `parent` | a slug — scopes the query to that subtree | no |
+| `tag`, `context` | a tag; `tag:x` is the long form of `+x` | no |
+| `title`, `description`, `notes`, `url` | scope a search to one field | no |
+| `data.<key>` | a task-data value; compares by its stored JSON type | yes, when numeric |
+
+Ordered fields take `<`, `<=`, `>`, `>=` and `low..high`; every field takes `:`
+and a comma-separated set (`status:open,started`). A field that is unset on a
+task never compares true — a task with no deadline matches neither `due<+7d`
+nor `due>+7d`.
+
+An unknown field name is an error rather than a fallback to search, so a pasted
+URL needs quoting: `next list '"http://example.com/x"'`.
+
 ### Precedence, quoting and reserved words
 
 Precedence runs `not` > `and` > `or`, and adjacency means `and` — so

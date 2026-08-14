@@ -788,6 +788,14 @@ task_fts MATCH ?)`. It is emphatically **not** `EXISTS (… AND task_id =
 tasks.id)`: that form is correlated, so SQLite re-runs the full-text query once
 per task row — 2.4 s versus 16 ms for a common term at 5 000 tasks.
 
+The index is keyed by `rowid`, deliberately the same rowid the matching `tasks`
+row has, and **not** by a `task_id` column. A virtual table cannot carry an
+index and fts5 only accepts `MATCH`, `rowid` and `rank` constraints, so a
+`WHERE task_id = ?` delete is a full scan of the index — and a delete runs on
+every write, which made a rebuild quadratic: 50 000 tasks did not finish in an
+hour, versus 7 s once re-keyed. The two delete sites read the rowid before
+removing the task row it belongs to.
+
 Index maintenance has **five** touch points, not the three the design
 anticipated: `upsert_task_row`, `delete_by_path`, `delete_task`, the bulk wipe
 in `rebuild`, and `upsert_segment_rows` (which reaches the index through the
