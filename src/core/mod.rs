@@ -10,6 +10,7 @@ pub mod filter_args;
 pub mod forecast;
 pub mod listing;
 pub mod plugin;
+pub mod projection;
 pub mod recurrence;
 pub mod resolve;
 pub mod scoring;

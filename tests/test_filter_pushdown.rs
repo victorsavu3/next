@@ -588,6 +588,56 @@ fn the_removed_parameters_name_their_replacement() {
     assert!(err.contains("replaced by filter"), "{err}");
 }
 
+/// Field projection through the MCP tools, which is where the payload cost
+/// actually bites — an agent pays for every field of every row on every call.
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_projection_trims_the_payload() {
+    let mut env = common::setup();
+    corpus(&mut env);
+
+    let full =
+        next::mcp::tools::tasks::list_tasks(&serde_json::json!({}), &mut env.ctx.repo).unwrap();
+    let lean = next::mcp::tools::tasks::list_tasks(
+        &serde_json::json!({ "fields": ["id", "title"] }),
+        &mut env.ctx.repo,
+    )
+    .unwrap();
+
+    assert_eq!(
+        full["total"], lean["total"],
+        "projection must not change which tasks match"
+    );
+    let task = lean["items"][0]["task"].as_object().unwrap();
+    assert_eq!(task.len(), 2, "{task:?}");
+    assert!(task.contains_key("id") && task.contains_key("title"));
+
+    // The point of the feature, measured rather than asserted in the abstract.
+    let full_len = serde_json::to_string(&full).unwrap().len();
+    let lean_len = serde_json::to_string(&lean).unwrap().len();
+    assert!(
+        lean_len * 2 < full_len,
+        "the lean response should be far smaller: {lean_len} vs {full_len}"
+    );
+
+    // `get_task` projects the task and its children alike.
+    let one = next::mcp::tools::tasks::get_task(
+        &serde_json::json!({ "id": "alpha", "fields": ["id", "title"] }),
+        &mut env.ctx.repo,
+    )
+    .unwrap();
+    assert_eq!(one["task"].as_object().unwrap().len(), 2);
+
+    // An unknown name is refused with the alternatives, not ignored.
+    let err = next::mcp::tools::tasks::list_tasks(
+        &serde_json::json!({ "fields": ["nosuchfield"] }),
+        &mut env.ctx.repo,
+    )
+    .expect_err("unknown field must be refused")
+    .to_string();
+    assert!(err.contains("unknown field"), "{err}");
+}
+
 #[cfg(feature = "mcp")]
 #[test]
 fn the_archived_tier_refuses_what_it_cannot_answer() {

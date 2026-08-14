@@ -89,6 +89,7 @@ fn main() -> anyhow::Result<()> {
             format: None,
             count: false,
             explain: false,
+            fields: vec![],
             limit: None,
             page_size: None,
             page: 1,

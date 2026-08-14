@@ -1203,6 +1203,31 @@ exists because the parser recurses: without a bound, a deeply nested expression
 would overflow the stack, which aborts the process rather than raising an error
 the tool could report.
 
+### Choosing which fields come back
+
+`--fields` trims the JSON output to the fields you name. It applies to
+`next list --json` and `next show --json`:
+
+```sh
+next list --json --fields id,title,due
+next show rebuild-cache --json --fields id,title,status
+```
+
+The names are the same ones the filter grammar uses, so `due` means the same
+thing in `--fields due` as in `due<+7d`, plus `id` and `score`. `data.<key>`
+picks one entry out of the task data; `data` takes the whole map.
+
+A field you did not ask for is **absent** from the object, not `null` — `null`
+already means "this task has no due date", and a consumer could not tell the
+two apart otherwise.
+
+Projection does not change which tasks match: `--fields id` with a filter on
+`notes:x` still filters on notes. The default returns every field, so this
+changes nothing until you ask for it.
+
+The table output is unaffected for now — it already shows a fixed set of
+columns.
+
 ### Explaining a query
 
 `next list --explain` shows what a filter became instead of running it. Use it

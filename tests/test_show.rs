@@ -34,6 +34,7 @@ fn show_by_id() {
         show::Args {
             id: task.id.to_string(),
             json: false,
+            fields: vec![],
         },
         &env.ctx,
     )
@@ -55,6 +56,7 @@ fn show_by_slug() {
         show::Args {
             id: "my-slug".into(),
             json: false,
+            fields: vec![],
         },
         &env.ctx,
     )
@@ -71,6 +73,7 @@ fn show_by_id_prefix() {
         show::Args {
             id: prefix,
             json: false,
+            fields: vec![],
         },
         &env.ctx,
     )
@@ -86,6 +89,7 @@ fn show_json_output() {
         show::Args {
             id: task.id.to_string(),
             json: true,
+            fields: vec![],
         },
         &env.ctx,
     )
@@ -99,6 +103,7 @@ fn show_nonexistent_errors() {
         show::Args {
             id: "00000000-0000-0000-0000-000000000000".into(),
             json: false,
+            fields: vec![],
         },
         &env.ctx,
     )
@@ -132,6 +137,7 @@ fn show_task_with_all_optional_fields() {
         show::Args {
             id: "full-task".into(),
             json: false,
+            fields: vec![],
         },
         &env.ctx,
     )
@@ -162,6 +168,7 @@ fn show_task_with_parent() {
         show::Args {
             id: "child".into(),
             json: false,
+            fields: vec![],
         },
         &env.ctx,
     )
@@ -192,6 +199,7 @@ fn show_task_with_blocker() {
         show::Args {
             id: "blocked".into(),
             json: false,
+            fields: vec![],
         },
         &env.ctx,
     )

@@ -126,6 +126,7 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
         .unwrap_or(crate::core::store::DEFAULT_PAGE_SIZE);
 
     reject_removed_filter_params(params)?;
+    let projection = crate::core::projection::Projection::parse(&strings_param(params, "fields"))?;
     let mut filter_args = crate::core::FilterArgs::parse_query(&filter_string(params))?;
     filter_args.all = include_all;
     let filter_set = filter_args.to_filter_set()?;
@@ -140,7 +141,9 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
             page_size,
             ..Default::default()
         })?;
-        return Ok(serde_json::to_value(&result)?);
+        let mut json = serde_json::to_value(&result)?;
+        projection.apply_to_page(&mut json);
+        return Ok(json);
     }
 
     let state = ctx.store.get_state()?;
@@ -162,7 +165,9 @@ pub fn list_tasks(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Va
     );
 
     let result = crate::core::store::paginate(scored, page, page_size);
-    Ok(serde_json::to_value(&result)?)
+    let mut json = serde_json::to_value(&result)?;
+    projection.apply_to_page(&mut json);
+    Ok(json)
 }
 
 // ── get_task ─────────────────────────────────────────────────────────────────
@@ -202,12 +207,24 @@ pub fn get_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
         &tag_metas,
     );
 
-    Ok(json!({
+    let projection = crate::core::projection::Projection::parse(&strings_param(params, "fields"))?;
+    let mut out = json!({
         "task": task,
         "score": breakdown.total,
         "score_breakdown": breakdown,
         "children": children,
-    }))
+    });
+    if !projection.is_empty() {
+        projection.apply_to_task(&mut out["task"]);
+        // Children get the same shape — a caller asking for `id,title` wants
+        // that throughout, not one trimmed task beside a set of full ones.
+        if let Some(kids) = out["children"].as_array_mut() {
+            for child in kids {
+                projection.apply_to_task(child);
+            }
+        }
+    }
+    Ok(out)
 }
 
 // ── add_task ─────────────────────────────────────────────────────────────────

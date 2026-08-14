@@ -11,6 +11,11 @@ pub struct Args {
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
+
+    /// Return only these fields, e.g. `--fields id,title,due`. JSON output
+    /// only. Applies to the task and its children alike.
+    #[arg(long, value_delimiter = ',')]
+    pub fields: Vec<String>,
 }
 
 pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
@@ -45,15 +50,25 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
                 ..crate::core::TaskQuery::unpaginated()
             })?
             .items;
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "task": task,
-                "score": bd.total,
-                "score_breakdown": bd,
-                "children": children,
-            }))?
-        );
+        let projection = crate::core::projection::Projection::parse(&args.fields)?;
+        let mut json = serde_json::json!({
+            "task": task,
+            "score": bd.total,
+            "score_breakdown": bd,
+            "children": children,
+        });
+        if !projection.is_empty() {
+            projection.apply_to_task(&mut json["task"]);
+            // Children are tasks too, and a caller asking for `id,title` wants
+            // that shape throughout rather than one trimmed task beside a set
+            // of full ones.
+            if let Some(kids) = json["children"].as_array_mut() {
+                for child in kids {
+                    projection.apply_to_task(child);
+                }
+            }
+        }
+        println!("{}", serde_json::to_string_pretty(&json)?);
         return Ok(());
     }
 

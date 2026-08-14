@@ -45,6 +45,12 @@ pub struct Args {
     #[arg(long)]
     pub explain: bool,
 
+    /// Return only these fields, e.g. `--fields id,title,due`. JSON output
+    /// only for now; the table already projects. A field that was not asked
+    /// for is absent from the object rather than null.
+    #[arg(long, value_delimiter = ',')]
+    pub fields: Vec<String>,
+
     /// Maximum number of tasks to show. Overrides `list_limit` in config.
     /// Shorthand for `--page-size` (both cap the window on the result).
     #[arg(short = 'n', long)]
@@ -90,6 +96,9 @@ pub fn run_with_writer(
     filter_args.json = format.is_json();
 
     let filter_set = filter_args.to_filter_set()?;
+    // Parsed up front so an unknown field name fails before any work, rather
+    // than after a full scan.
+    let projection = crate::core::projection::Projection::parse(&args.fields)?;
 
     if args.archived {
         if args.explain {
@@ -133,7 +142,9 @@ pub fn run_with_writer(
             return Ok(());
         }
         if filter_args.json {
-            writeln!(out, "{}", serde_json::to_string_pretty(&page)?)?;
+            let mut json = serde_json::to_value(&page)?;
+            projection.apply_to_page(&mut json);
+            writeln!(out, "{}", serde_json::to_string_pretty(&json)?)?;
         } else {
             if page.items.is_empty() {
                 writeln!(out, "No archived tasks.")?;
@@ -207,8 +218,12 @@ pub fn run_with_writer(
     let page = crate::core::store::paginate(scored, args.page, page_size);
 
     if filter_args.json {
-        writeln!(out, "{}", serde_json::to_string_pretty(&page)?)?;
+        let mut json = serde_json::to_value(&page)?;
+        projection.apply_to_page(&mut json);
+        writeln!(out, "{}", serde_json::to_string_pretty(&json)?)?;
     } else {
+        // The table already shows a fixed set of columns, so `--fields` has
+        // nothing to do here yet.
         render::render_task_list(&page.items);
         render::render_page_footer(&page);
     }

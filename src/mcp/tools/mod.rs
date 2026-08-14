@@ -26,6 +26,7 @@ pub fn all_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "filter": { "type": "string", "description": "Filter expression — ONE string, identical to what the `next list` CLI takes. A BARE WORD SEARCHES the title, description, notes and url; a tag needs its sigil: +tag requires it, -tag excludes it (hierarchical: +@work matches @work/backend). Also: field predicates (status:open, priority:high, due<+7d, due:2026-08-01..eom, assignee:alice, slug:x, data.key:v), has:field / no:field, is:overdue|blocked|project|recurring|closed|assigned, quoted phrases (\"cold tier\") and prefixes (arch*), and the booleans and/or/not with parentheses (adjacency means and). parent:slug, context:@name and user:name scope the whole query and may not appear inside or/not. Example: \"+@work due<+7d not is:blocked\"" },
+                    "fields": { "type": "array", "items": { "type": "string" }, "description": "Return only these fields, e.g. [\"id\",\"title\",\"due\"]. Names are the filter grammar's: id, title, status, priority, due, start, completed, slug, parent, assignee, tags, blocked_by, description, notes, url, recurrence, long_term, score_adjustment, data, data.<key>, and score. A field not asked for is ABSENT from the object rather than null. Worth using: the default returns every field of every task, and notes can run to thousands of words." },
                     "limit": { "type": "integer", "description": "Legacy alias for page_size" },
                     "page_size": { "type": "integer", "description": "Tasks per page (default 50)" },
                     "page": { "type": "integer", "description": "1-indexed page of results (default 1)" },
@@ -41,7 +42,8 @@ pub fn all_tools() -> Vec<Tool> {
                 "type": "object",
                 "required": ["id"],
                 "properties": {
-                    "id": { "type": "string", "description": "UUID, UUID prefix, or slug" }
+                    "id": { "type": "string", "description": "UUID, UUID prefix, or slug" },
+                    "fields": { "type": "array", "items": { "type": "string" }, "description": "Return only these fields on the task and its children, e.g. [\"id\",\"title\",\"due\"]. Same names as list_tasks. A field not asked for is absent rather than null." }
                 }
             }),
         },

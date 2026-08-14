@@ -339,6 +339,7 @@ mod explain {
             format: None,
             count: false,
             explain: true,
+            fields: vec![],
             limit: None,
             page_size: None,
             page: 1,
@@ -442,6 +443,146 @@ mod explain {
         let out = explain(&env, vec!["+printer".to_string()]);
         assert!(!out.contains("Read as SEARCHES"), "{out}");
         assert!(out.contains("matched:           1"), "{out}");
+    }
+}
+
+/// Field projection over the JSON output, on the real commands.
+mod projection {
+    use super::*;
+
+    fn list_json(env: &common::TestEnv, fields: Vec<String>) -> serde_json::Value {
+        let args = next::cli::commands::list::Args {
+            future: false,
+            all: false,
+            closed: false,
+            archived: false,
+            all_users: false,
+            json: true,
+            format: None,
+            count: false,
+            explain: false,
+            fields,
+            limit: None,
+            page_size: None,
+            page: 1,
+            tokens: vec![],
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        next::cli::commands::list::run_with_writer(args, &env.ctx, &mut buf).unwrap();
+        serde_json::from_slice(&buf).unwrap()
+    }
+
+    fn with_a_rich_task() -> common::TestEnv {
+        let mut env = common::setup();
+        add::run(
+            add::Args {
+                slug: Some("rich".into()),
+                tags: vec!["@work".into()],
+                notes: Some("A very long note that costs real payload".into()),
+                description: Some("A description".into()),
+                ..add_args("Rebuild the cache")
+            },
+            &mut env.ctx,
+        )
+        .unwrap();
+        env
+    }
+
+    #[test]
+    fn without_fields_every_field_is_returned() {
+        let env = with_a_rich_task();
+        let json = list_json(&env, vec![]);
+        let task = &json["items"][0]["task"];
+        assert!(task.get("notes").is_some(), "the default is unchanged");
+        assert!(json["items"][0].get("score").is_some());
+    }
+
+    #[test]
+    fn only_the_requested_fields_come_back() {
+        let env = with_a_rich_task();
+        let json = list_json(&env, vec!["id".into(), "title".into()]);
+        let task = json["items"][0]["task"].as_object().unwrap();
+
+        assert_eq!(task.len(), 2, "{task:?}");
+        assert!(task.contains_key("id") && task.contains_key("title"));
+        assert!(
+            !task.contains_key("notes"),
+            "the payload this feature exists to avoid: {task:?}"
+        );
+        assert!(
+            !task.contains_key("description"),
+            "absent, not null: {task:?}"
+        );
+    }
+
+    #[test]
+    fn the_pagination_envelope_survives() {
+        let env = with_a_rich_task();
+        let json = list_json(&env, vec!["id".into()]);
+        assert_eq!(
+            json["total"], 1,
+            "a projecting caller still needs the total"
+        );
+        assert_eq!(json["page"], 1);
+        assert_eq!(json["page_size"], 50);
+    }
+
+    #[test]
+    fn projection_does_not_change_which_tasks_match() {
+        // Selection and presentation are different stages: filtering on notes
+        // must still work when notes are not returned.
+        let mut env = with_a_rich_task();
+        add::run(add_args("Unrelated"), &mut env.ctx).unwrap();
+
+        let args = next::cli::commands::list::Args {
+            future: false,
+            all: false,
+            closed: false,
+            archived: false,
+            all_users: false,
+            json: true,
+            format: None,
+            count: false,
+            explain: false,
+            fields: vec!["id".into()],
+            limit: None,
+            page_size: None,
+            page: 1,
+            tokens: vec!["notes:payload".into()],
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        next::cli::commands::list::run_with_writer(args, &env.ctx, &mut buf).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+
+        assert_eq!(json["total"], 1, "the filter still reads notes");
+        assert_eq!(json["items"][0]["task"].as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_unknown_field_fails_before_any_work() {
+        let env = with_a_rich_task();
+        let args = next::cli::commands::list::Args {
+            future: false,
+            all: false,
+            closed: false,
+            archived: false,
+            all_users: false,
+            json: true,
+            format: None,
+            count: false,
+            explain: false,
+            fields: vec!["nosuchfield".into()],
+            limit: None,
+            page_size: None,
+            page: 1,
+            tokens: vec![],
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        let err = next::cli::commands::list::run_with_writer(args, &env.ctx, &mut buf)
+            .expect_err("an unknown field must be refused")
+            .to_string();
+        assert!(err.contains("unknown field"), "{err}");
+        assert!(err.contains("title"), "it lists the alternatives: {err}");
     }
 }
 
@@ -696,6 +837,7 @@ fn list_args_with_limit(limit: Option<usize>) -> next::cli::commands::list::Args
         format: None,
         count: false,
         explain: false,
+        fields: vec![],
         limit,
         page_size: None,
         page: 1,
