@@ -1164,6 +1164,53 @@ listing has neither a view of other tasks nor git history to consult:
 | `created:`, `updated:` | They come from git history, which this listing does not load. |
 | `context:`, `user:` | They scope the whole view, which this listing does not apply. |
 
+### Precedence, quoting and reserved words
+
+Precedence runs `not` > `and` > `or`, and adjacency means `and` — so
+`a or b c` is `a or (b and c)`. Parentheses override it.
+
+`and`, `or` and `not` are reserved: they are read as operators wherever a term
+could go. To search for one as a word, quote it — `"or"`. The symbols `&`, `|`
+and `!` are the same operators, and `&|!()"` cannot appear in a bare term for
+that reason; quote a term that needs them.
+
+Nesting is limited to 32 levels. That is far past any hand-written query and
+exists because the parser recurses: without a bound, a deeply nested expression
+would overflow the stack, which aborts the process rather than raising an error
+the tool could report.
+
+### Explaining a query
+
+`next list --explain` shows what a filter became instead of running it. Use it
+when a query returns something unexpected:
+
+```sh
+next list --explain printer
+```
+
+```
+Query:    printer
+Parsed:   printer
+
+Read as SEARCHES (text, not tags):
+  printer
+  A bare word searches the title, description, notes and url.
+  For the TAG of that name, write +printer.
+
+Execution:
+  pushed into SQL:  nothing (no cache for this query)
+  candidates loaded: 12
+  matched:           0
+
+Nothing matched. The implicit gate hides closed tasks, future
+start dates, blocked tasks and parents with open subtasks —
+try --all to see past it.
+```
+
+It also reports the terms that scope the whole view (`parent:`, `context:`,
+`user:`), and says so plainly when no filter arrived at all — usually a sign
+the shell consumed it.
+
 ### Not yet supported
 
 - `score` cannot be filtered on: a task's score is computed after filtering.

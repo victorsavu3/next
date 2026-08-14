@@ -90,9 +90,24 @@ for the current mode/view is ignored.
 | `Tab` | Cycle to the next view (List → Tree → Forecast) |
 | `1` / `2` / `3` | Switch to List / Tree / Forecast |
 | `r` | Reload (re-run load + score) |
-| `/` | Open the filter bar |
+| `/` | Open the filter bar (see [Filtering](#filtering)) |
 | `S` (shift) | Open the state-management panel |
 | `y` | Trigger a background sync (no-op if one is already running) |
+
+### Filtering
+
+`/` opens the filter bar, which takes the same expression language as
+`next list` — see [CLI.md](CLI.md#filter-syntax) for the grammar. The list
+re-filters **as you type**, so you can see what a query selects before
+committing to it.
+
+A half-typed expression is expected rather than an error: every prefix of
+`due<+7d` is incomplete on the way in. While the buffer does not parse, the
+last filter that did stays applied, the results on screen stay put, and a dim
+hint beside the input says what is missing. `Enter` commits; `Esc` restores the
+list as it was before you opened the bar.
+
+Remember that a bare word searches the task text — `+tag` selects a tag.
 
 ### Per-task actions — List and Tree views
 

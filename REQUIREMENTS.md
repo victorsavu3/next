@@ -315,7 +315,35 @@ state (§3.1.1).
 
 ## 5. Filtering and queries
 
-All list commands MUST accept the following filter tokens, freely combinable:
+Filtering MUST be an expression language, and every surface MUST parse the same
+string with the same code: the CLI (`list`, `next`, `tree`, `forecast`, joining
+its trailing arguments), the TUI filter bar, and the MCP `filter` parameter. A
+query MUST be transferable between them unchanged — that is the property the
+single parser exists to guarantee, not merely a convenience.
+
+The grammar MUST provide: full-text search as the DEFAULT atom (a bare word,
+a quoted phrase, a `prefix*`), tags behind a sigil (`+tag` requires, `-tag`
+excludes, both matching nested tags), field predicates with `:` and the ordered
+operators `< <= > >=` and `low..high`, `has:`/`no:`, the named `is:` predicates,
+and the booleans `and`/`or`/`not` with parentheses in both word and symbol
+spellings. Adjacency MUST mean `and`, and precedence MUST run `not` > `and` >
+`or`.
+
+A bare word MUST search rather than select a tag. The two readings often return
+the same tasks, so `next list --explain` MUST name which terms were read as
+searches; there is deliberately no in-tool warning.
+
+Parser recursion MUST be bounded. Unbounded recursion on a nested expression
+overflows the stack, which aborts the process rather than raising a reportable
+error — on a long-running MCP server that would take down every session.
+
+An unparseable query MUST be refused with an error naming the cause. It MUST
+NOT be silently reinterpreted, and a surface MUST NOT fall back to "no filter",
+which would return everything while looking successful.
+
+### 5.1 Filter tokens
+
+All list commands MUST accept the following, freely combinable:
 
 | Syntax | Meaning |
 |--------|---------|
