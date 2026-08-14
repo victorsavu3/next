@@ -36,6 +36,72 @@ fn tree_args(all: bool) -> tree::Args {
     }
 }
 
+/// A filtered tree keeps a match's ancestors, or matching subtasks would be
+/// left dangling with no visible parent — which is not a tree.
+#[test]
+fn tree_filter_keeps_the_ancestors_of_a_match() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            slug: Some("proj".into()),
+            ..add_args("Parent project")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(
+        add::Args {
+            parent: Some("proj".into()),
+            tags: vec!["#rust".into()],
+            ..add_args("Tagged subtask")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(add_args("Unrelated task"), &mut env.ctx).unwrap();
+
+    let mut buf: Vec<u8> = Vec::new();
+    tree::run_with_writer(
+        tree::Args {
+            tokens: vec!["+#rust".into()],
+            ..tree_args(true)
+        },
+        &env.ctx,
+        &mut buf,
+    )
+    .unwrap();
+    let out = String::from_utf8(buf).unwrap();
+
+    assert!(out.contains("Tagged subtask"), "the match itself: {out}");
+    assert!(
+        out.contains("Parent project"),
+        "its parent comes along so the match has somewhere to hang: {out}"
+    );
+    assert!(
+        !out.contains("Unrelated task"),
+        "everything else is filtered out: {out}"
+    );
+}
+
+#[test]
+fn tree_count_prints_only_a_number() {
+    let mut env = common::setup();
+    add::run(add_args("One"), &mut env.ctx).unwrap();
+    add::run(add_args("Two"), &mut env.ctx).unwrap();
+
+    let mut buf: Vec<u8> = Vec::new();
+    tree::run_with_writer(
+        tree::Args {
+            count: true,
+            ..tree_args(false)
+        },
+        &env.ctx,
+        &mut buf,
+    )
+    .unwrap();
+    assert_eq!(String::from_utf8(buf).unwrap().trim(), "2");
+}
+
 fn capture_tree_closed(env: &common::TestEnv) -> String {
     let mut buf: Vec<u8> = Vec::new();
     tree::run_with_writer(

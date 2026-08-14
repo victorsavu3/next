@@ -335,6 +335,14 @@ pub struct App {
     /// `--all-users`: ignore the active user filter.
     filter_all_users: bool,
 
+    /// Why the half-typed expression is not applying, shown beside the filter
+    /// bar. `None` when the buffer parses.
+    filter_hint: Option<String>,
+
+    /// The tokens in force when the filter bar was opened, so Esc can restore
+    /// the list that live filtering has been changing.
+    filter_before_edit: Option<Vec<String>>,
+
     /// The editable filter buffer, live only while in [`Mode::Filter`].
     filter_input: Input,
 
@@ -401,6 +409,8 @@ impl App {
             filter_closed: false,
             filter_all_users: false,
             filter_input: Input::default(),
+            filter_hint: None,
+            filter_before_edit: None,
             mode: Mode::Normal,
             edit_form: None,
             move_picker: None,
@@ -603,6 +613,13 @@ impl App {
     /// The live filter buffer, for rendering the filter bar in [`Mode::Filter`].
     pub fn filter_input(&self) -> &Input {
         &self.filter_input
+    }
+
+    /// Why the buffer is not applying, if it is not. Rendered inline next to
+    /// the filter bar rather than in the status line, so it reads as guidance
+    /// about what is being typed rather than as a failure that already happened.
+    pub fn filter_hint(&self) -> Option<&str> {
+        self.filter_hint.as_deref()
     }
 
     /// The task the per-task actions / detail pane operate on.
@@ -1085,6 +1102,7 @@ impl App {
             Action::OpenFilter => self.open_filter(),
             Action::FilterInput(key) => {
                 self.filter_input.handle_event(&Event::Key(key));
+                self.apply_filter_live();
             }
             Action::CommitFilter => self.commit_filter(),
             Action::CancelFilter => self.cancel_filter(),
@@ -1977,21 +1995,70 @@ impl App {
     /// Enters [`Mode::Filter`], pre-filling the buffer with the current tokens.
     fn open_filter(&mut self) {
         self.filter_input = Input::new(self.filter_tokens.join(" "));
+        // Remembered so Esc can undo the live filtering, which has been
+        // rewriting the list on every keystroke since this point.
+        self.filter_before_edit = Some(self.filter_tokens.clone());
         self.mode = Mode::Filter;
         self.status = None;
+        self.filter_hint = None;
     }
 
-    /// Parses the buffer into `filter_tokens` (whitespace split) and reloads.
-    /// On a parse error the tokens are still updated but the list is preserved,
-    /// and the error is shown so the user can fix the buffer (`/` to re-edit).
+    /// The first line of a message, for a one-line hint slot.
+    ///
+    /// Parse errors carry the whole input plus a cause, which is right for a
+    /// terminal but too wide for the filter bar; the first line is the part
+    /// that says what to fix.
+    fn filter_hint_text(message: &str) -> String {
+        message.lines().next().unwrap_or(message).to_owned()
+    }
+
+    /// Re-filters as the user types, without leaving [`Mode::Filter`].
+    ///
+    /// Half-typed expressions are the normal case here — every prefix of
+    /// `due<+7d` passes through this — so a failure must be quiet and
+    /// non-destructive: keep the results already on screen, show one inline
+    /// hint, and never spam an error per keystroke. `filter_hint` holds that
+    /// message; `reload` is only called when the expression actually parses,
+    /// so a broken buffer costs nothing.
+    fn apply_filter_live(&mut self) {
+        let value = self.filter_input.value().to_owned();
+        let tokens: Vec<String> = value.split_whitespace().map(str::to_owned).collect();
+        let previous = std::mem::replace(&mut self.filter_tokens, tokens);
+
+        match self.reload() {
+            Ok(()) => {
+                self.filter_hint = None;
+                self.status = None;
+            }
+            Err(e) => {
+                // Put the tokens back so the visible list keeps matching the
+                // filter that produced it.
+                self.filter_tokens = previous;
+                self.filter_hint = Some(Self::filter_hint_text(&e.to_string()));
+            }
+        }
+    }
+
+    /// Commits the buffer and leaves [`Mode::Filter`].
+    ///
+    /// The list is already current — `apply_filter_live` has been running on
+    /// every keystroke — so this only has to settle the mode. Committing a
+    /// buffer that does not parse keeps the last good filter and says so,
+    /// rather than dropping the user into a list that ignores what they typed.
     fn commit_filter(&mut self) {
-        self.filter_tokens = self
+        let tokens: Vec<String> = self
             .filter_input
             .value()
             .split_whitespace()
             .map(str::to_owned)
             .collect();
         self.mode = Mode::Normal;
+        if self.filter_hint.is_some() {
+            let hint = self.filter_hint.take();
+            self.status = hint;
+            return;
+        }
+        self.filter_tokens = tokens;
         self.reload_with_status("filter applied");
     }
 
@@ -1999,6 +2066,15 @@ impl App {
     fn cancel_filter(&mut self) {
         self.mode = Mode::Normal;
         self.status = None;
+        self.filter_hint = None;
+        // Esc means "never mind", so the list has to go back to what it showed
+        // before the edit — live filtering has been changing it all along.
+        if let Some(previous) = self.filter_before_edit.take() {
+            if previous != self.filter_tokens {
+                self.filter_tokens = previous;
+                let _ = self.reload();
+            }
+        }
     }
 
     // ── Selection helpers (pure, clamp to bounds, no-op on empty list) ─────
@@ -2236,6 +2312,78 @@ mod tests {
             1,
             "subtask should nest under the project"
         );
+    }
+
+    /// Typing filters as you go, and a half-typed expression is not an error
+    /// event — it leaves the list alone and explains itself once.
+    #[test]
+    fn the_filter_applies_live_and_a_half_typed_one_holds_the_list() {
+        let mut tagged = Task::new("Rust task");
+        tagged.tags = vec!["#rust".to_owned()];
+        let other = Task::new("Something else");
+        let mut app = app_with_repo_tasks(vec![tagged, other]);
+
+        let titles = |app: &App| -> Vec<String> {
+            app.tasks().iter().map(|t| t.task.title.clone()).collect()
+        };
+        assert_eq!(titles(&app).len(), 2, "both tasks to start");
+
+        app.open_filter();
+        // Type `+#rust` one character at a time, as a user would.
+        for c in "+#rust".chars() {
+            app.filter_input = Input::new(format!("{}{c}", app.filter_input.value()));
+            app.apply_filter_live();
+        }
+        assert_eq!(
+            titles(&app),
+            vec!["Rust task".to_owned()],
+            "the list narrows while still in the filter bar"
+        );
+        assert!(app.filter_hint().is_none(), "a valid filter has no hint");
+
+        // Now a genuinely unparseable buffer. The list must not change, and
+        // the explanation belongs beside the bar rather than in the status.
+        app.filter_input = Input::new("+#rust due<".to_owned());
+        app.apply_filter_live();
+        assert_eq!(
+            titles(&app),
+            vec!["Rust task".to_owned()],
+            "a half-typed expression keeps the results already on screen"
+        );
+        let hint = app.filter_hint().expect("a hint explains why");
+        assert!(hint.contains("cannot parse"), "{hint}");
+        assert!(!hint.contains('\n'), "the hint is one line: {hint}");
+        assert!(
+            app.status().is_none(),
+            "not a status-line error while typing"
+        );
+
+        // Finishing the expression clears the hint again.
+        app.filter_input = Input::new("+#rust due<+7d".to_owned());
+        app.apply_filter_live();
+        assert!(app.filter_hint().is_none(), "hint clears once it parses");
+    }
+
+    /// Esc means "never mind", so it has to undo what live filtering did.
+    #[test]
+    fn cancelling_the_filter_restores_the_list_live_editing_changed() {
+        let mut tagged = Task::new("Rust task");
+        tagged.tags = vec!["#rust".to_owned()];
+        let other = Task::new("Something else");
+        let mut app = app_with_repo_tasks(vec![tagged, other]);
+
+        app.open_filter();
+        app.filter_input = Input::new("+#rust".to_owned());
+        app.apply_filter_live();
+        assert_eq!(app.tasks().len(), 1, "live filter narrowed the list");
+
+        app.cancel_filter();
+        assert_eq!(
+            app.tasks().len(),
+            2,
+            "Esc puts back the list that was there before the edit"
+        );
+        assert!(app.filter_tokens().is_empty(), "and the tokens with it");
     }
 
     #[test]

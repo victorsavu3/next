@@ -148,11 +148,20 @@ fn draw_filter_bar(frame: &mut Frame, area: Rect, app: &App) {
         let prefix = "filter: ";
         let inner_width = area.width.saturating_sub(prefix.len() as u16) as usize;
         let scroll = input.visual_scroll(inner_width.max(1));
-        let line = Line::from(vec![
+        let mut spans = vec![
             Span::styled(prefix, Style::default().fg(Color::Yellow)),
             Span::raw(input.value()[scroll.min(input.value().len())..].to_owned()),
-        ]);
-        frame.render_widget(Paragraph::new(line), area);
+        ];
+        // A half-typed expression is normal while typing, so the hint sits
+        // beside the input in dim text rather than shouting from the status
+        // line — the list below is still the last one that parsed.
+        if let Some(hint) = app.filter_hint() {
+            spans.push(Span::styled(
+                format!("   {hint}"),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
 
         // Place the terminal cursor at the edit position.
         let cursor_col =
