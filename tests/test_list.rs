@@ -392,6 +392,44 @@ mod explain {
         assert!(out.contains("--all"), "{out}");
     }
 
+    /// The active list evaluates the expression in memory — only the status
+    /// gate is pushed. Saying "nothing was pushed" was wrong in one direction
+    /// and "no cache for this query" wrong in another.
+    #[test]
+    fn it_says_where_the_filter_actually_ran() {
+        let mut env = common::setup();
+        add::run(add_args("Something"), &mut env.ctx).unwrap();
+
+        let out = explain(&env, vec!["+nosuchtag".to_string()]);
+        assert!(out.contains("the status gate only"), "{out}");
+        assert!(out.contains("evaluated in memory"), "{out}");
+        assert!(!out.contains("no cache"), "{out}");
+    }
+
+    /// The archived tier DOES compile the expression, so it reports the
+    /// fragment and whether SQL owns the answer.
+    #[test]
+    fn the_archived_tier_reports_its_compiled_sql() {
+        let mut env = common::setup();
+        add::run(add_args("Something"), &mut env.ctx).unwrap();
+
+        let mut args = list_args(vec!["+@work".to_string()]);
+        args.archived = true;
+        let mut buf: Vec<u8> = Vec::new();
+        next::cli::commands::list::run_with_writer(args, &env.ctx, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+
+        assert!(out.contains("pushed into SQL:"), "{out}");
+        assert!(
+            out.contains("task_tags"),
+            "the real compiled fragment, not a placeholder: {out}"
+        );
+        assert!(
+            out.contains("fully answered by SQL"),
+            "a tag filter is exact: {out}"
+        );
+    }
+
     #[test]
     fn a_tag_query_is_not_mislabelled_as_a_search() {
         let mut env = common::setup();

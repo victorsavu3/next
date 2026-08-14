@@ -16,17 +16,31 @@ use std::fmt::Write as _;
 use crate::core::domain::filter::FilterSet;
 use crate::core::domain::filter_expr::{Atom, Expr};
 
+/// Where a query's work actually happened.
+///
+/// The two tiers run differently and saying so is the point: the active list
+/// pushes only the status gate and evaluates the expression in memory, while
+/// the archived tier compiles as much of the expression as SQL can answer.
+/// Reporting "nothing was pushed" for both would be true of neither.
+pub enum Execution {
+    /// The active list: candidates loaded by status, expression evaluated in
+    /// memory over them.
+    InMemory,
+    /// The archived tier: `sql` is the compiled `WHERE`, and `exact` says
+    /// whether it is the answer or merely narrows the rows to re-check.
+    Sql { sql: String, exact: bool },
+}
+
 /// Renders the explanation for a parsed query.
 ///
 /// `candidates` and `matched` are the real counts from the run that produced
-/// them; `pushed` is what the storage layer was able to compile, or `None`
-/// when the query never reached a cache.
+/// them, and `execution` describes how that run was carried out.
 pub fn render(
     raw_query: &str,
     filter: &FilterSet,
     candidates: usize,
     matched: usize,
-    pushed: Option<&str>,
+    execution: &Execution,
 ) -> String {
     let mut out = String::new();
 
@@ -96,11 +110,25 @@ pub fn render(
     // merely narrowed it, which is exactly what someone debugging a slow or
     // surprising query wants to know.
     out.push_str("Execution:\n");
-    match pushed {
-        Some(sql) => {
-            let _ = writeln!(out, "  pushed into SQL:  {sql}");
+    match execution {
+        Execution::InMemory => {
+            out.push_str("  pushed into SQL:   the status gate only\n");
+            out.push_str("  the filter itself: evaluated in memory\n");
         }
-        None => out.push_str("  pushed into SQL:  nothing (no cache for this query)\n"),
+        Execution::Sql { sql, exact } => {
+            let _ = writeln!(out, "  pushed into SQL:   {sql}");
+            if *exact {
+                out.push_str(
+                    "  the filter itself: fully answered by SQL, which also \
+                     paginates\n",
+                );
+            } else {
+                out.push_str(
+                    "  the filter itself: SQL narrows the rows, then every one \
+                     is re-checked\n",
+                );
+            }
+        }
     }
     let _ = writeln!(out, "  candidates loaded: {candidates}");
     let _ = writeln!(out, "  matched:           {matched}");
@@ -168,7 +196,7 @@ mod tests {
 
     #[test]
     fn an_empty_query_says_the_shell_may_have_eaten_it() {
-        let out = render("", &set(""), 10, 10, None);
+        let out = render("", &set(""), 10, 10, &Execution::InMemory);
         assert!(out.contains("No filter was given"), "{out}");
         assert!(out.contains("shell may have consumed it"), "{out}");
     }
@@ -177,14 +205,14 @@ mod tests {
     fn a_bare_word_is_reported_as_a_search_with_the_tag_spelling() {
         // The whole reason --explain exists: someone typing the old token
         // syntax needs to see that `bug` searched instead of selecting a tag.
-        let out = render("bug", &set("bug"), 10, 0, None);
+        let out = render("bug", &set("bug"), 10, 0, &Execution::InMemory);
         assert!(out.contains("Read as SEARCHES"), "{out}");
         assert!(out.contains("write +bug"), "{out}");
     }
 
     #[test]
     fn a_tag_query_is_not_reported_as_a_search() {
-        let out = render("+bug", &set("+bug"), 10, 3, None);
+        let out = render("+bug", &set("+bug"), 10, 3, &Execution::InMemory);
         assert!(!out.contains("Read as SEARCHES"), "{out}");
     }
 
@@ -195,26 +223,67 @@ mod tests {
             &set("+@work and due<+7d"),
             5,
             2,
-            Some("(tag AND due)"),
+            &Execution::Sql {
+                sql: "(tag AND due)".to_owned(),
+                exact: true,
+            },
         );
         assert!(out.contains("Parsed:"), "{out}");
         assert!(out.contains("+@work"), "{out}");
         assert!(out.contains("due<+7d"), "{out}");
-        assert!(out.contains("pushed into SQL:  (tag AND due)"), "{out}");
+        assert!(out.contains("pushed into SQL:   (tag AND due)"), "{out}");
+        assert!(out.contains("fully answered by SQL"), "{out}");
         assert!(out.contains("candidates loaded: 5"), "{out}");
         assert!(out.contains("matched:           2"), "{out}");
     }
 
+    /// The distinction that matters for a slow query: an inexact fragment only
+    /// narrows the rows, and every one of them is re-checked afterwards.
+    #[test]
+    fn an_inexact_pushdown_says_the_rows_are_re_checked() {
+        let out = render(
+            "data.k:v",
+            &set("data.k:v"),
+            9,
+            1,
+            &Execution::Sql {
+                sql: "1".to_owned(),
+                exact: false,
+            },
+        );
+        assert!(out.contains("SQL narrows the rows"), "{out}");
+        assert!(!out.contains("fully answered"), "{out}");
+    }
+
+    /// The active list never pushes the expression, only the status gate —
+    /// saying "nothing was pushed" would be wrong in the other direction.
+    #[test]
+    fn the_active_list_says_where_the_filter_actually_ran() {
+        let out = render("+bug", &set("+bug"), 3, 1, &Execution::InMemory);
+        assert!(out.contains("the status gate only"), "{out}");
+        assert!(out.contains("evaluated in memory"), "{out}");
+        assert!(
+            !out.contains("no cache"),
+            "the old misleading wording: {out}"
+        );
+    }
+
     #[test]
     fn view_terms_are_reported_because_they_are_easy_to_forget() {
-        let out = render("parent:infra +bug", &set("parent:infra +bug"), 4, 1, None);
+        let out = render(
+            "parent:infra +bug",
+            &set("parent:infra +bug"),
+            4,
+            1,
+            &Execution::InMemory,
+        );
         assert!(out.contains("Scoped to:"), "{out}");
         assert!(out.contains("parent:infra"), "{out}");
     }
 
     #[test]
     fn an_empty_result_points_at_the_implicit_gate() {
-        let out = render("+bug", &set("+bug"), 7, 0, None);
+        let out = render("+bug", &set("+bug"), 7, 0, &Execution::InMemory);
         assert!(out.contains("implicit gate"), "{out}");
         assert!(out.contains("--all"), "{out}");
     }

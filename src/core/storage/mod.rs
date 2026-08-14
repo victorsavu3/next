@@ -31,6 +31,20 @@ use crate::core::{
 ///
 /// Examples: `@home/kitchen` → `__context__home/kitchen`,
 ///           `#laptop/personal` → `__resource__laptop/personal`.
+/// How much of `expr` the SQL compiler can answer, for `--explain`.
+///
+/// Returns the `WHERE` fragment and whether it is *exact* — an exact fragment
+/// is the answer, an inexact one only narrows the candidates and every row is
+/// re-checked in memory. That distinction is the thing worth knowing when a
+/// query is slow rather than wrong, so it is reported rather than summarised.
+pub fn explain_filter_pushdown(
+    expr: &crate::core::domain::filter_expr::Expr,
+    today: chrono::NaiveDate,
+) -> (String, bool) {
+    let compiled = sql_filter::compile(expr, today);
+    (compiled.sql, compiled.exact)
+}
+
 pub fn encode_tag_path(tag: &str) -> String {
     if let Some(rest) = tag.strip_prefix('@') {
         format!("__context__{rest}")

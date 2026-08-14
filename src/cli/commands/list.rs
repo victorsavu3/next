@@ -92,6 +92,30 @@ pub fn run_with_writer(
     let filter_set = filter_args.to_filter_set()?;
 
     if args.archived {
+        if args.explain {
+            let store_filter = filter_set.to_store_filter(today)?;
+            let (sql, exact) = crate::core::storage::explain_filter_pushdown(
+                &store_filter.expr,
+                store_filter.today,
+            );
+            let page = ctx.repo.store().query_tasks(&crate::core::TaskQuery {
+                archived: true,
+                filter: Some(store_filter),
+                ..crate::core::TaskQuery::unpaginated()
+            })?;
+            write!(
+                out,
+                "{}",
+                crate::cli::explain::render(
+                    &raw_query,
+                    &filter_set,
+                    page.total as usize,
+                    page.total as usize,
+                    &crate::cli::explain::Execution::Sql { sql, exact },
+                )
+            )?;
+            return Ok(());
+        }
         let page = ctx.repo.store().query_tasks(&crate::core::TaskQuery {
             archived: true,
             filter: Some(filter_set.to_store_filter(today)?),
@@ -159,7 +183,9 @@ pub fn run_with_writer(
                 &filter_set,
                 candidate_count,
                 scored.len(),
-                None,
+                // The active list pushes only the status gate; the expression
+                // itself is evaluated in memory by `filter::apply`.
+                &crate::cli::explain::Execution::InMemory,
             )
         )?;
         return Ok(());
