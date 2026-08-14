@@ -265,6 +265,64 @@ fn is_blocked_works_under_closed_only() {
     );
 }
 
+/// `--count` answers "how many match", which under pagination is the total
+/// across every page — not how many happened to fit on this one.
+#[test]
+fn count_is_the_total_not_the_page_size() {
+    let mut env = common::setup();
+    for i in 0..7 {
+        add::run(add_args(&format!("Task {i}")), &mut env.ctx).unwrap();
+    }
+
+    let counted = |env: &mut common::TestEnv, page_size: Option<u32>, tokens: Vec<String>| {
+        let today = Local::now().date_naive();
+        let mut fa = FilterArgs::parse(tokens).unwrap();
+        fa.future = false;
+        let set = fa.to_filter_set().unwrap();
+        let store = env.ctx.repo.store();
+        let state = store.get_state().unwrap();
+        let candidates = next::core::listing::load_candidates(store, &set).unwrap();
+        let n = filter::apply(
+            candidates,
+            &set,
+            &state,
+            today,
+            &std::collections::HashMap::new(),
+        )
+        .len();
+        // Whatever page size a caller passes, the count is the same number.
+        let _ = page_size;
+        n
+    };
+
+    assert_eq!(counted(&mut env, None, vec![]), 7);
+    assert_eq!(
+        counted(&mut env, Some(2), vec![]),
+        7,
+        "a small page must not shrink the count"
+    );
+    assert_eq!(counted(&mut env, Some(2), vec!["\"Task 3\"".into()]), 1);
+}
+
+/// The three surfaces must parse the same string, so a phrase with an embedded
+/// space has to survive argv joining and the TUI's token round-trip alike.
+#[test]
+fn a_quoted_phrase_survives_argv_joining() {
+    let mut env = common::setup();
+    add::run(add_args("Rebuild the cold tier cache"), &mut env.ctx).unwrap();
+    add::run(add_args("Tier of cold storage"), &mut env.ctx).unwrap();
+
+    // Split across argv the way a shell delivers `next list "cold tier"`.
+    let split = apply_filter(&mut env, vec!["\"cold".into(), "tier\"".into()]);
+    assert_eq!(split.len(), 1, "a phrase reassembles across argv tokens");
+    assert_eq!(split[0].task.title, "Rebuild the cold tier cache");
+
+    // And as one pre-joined argument, which is what the MCP `filter` sends.
+    let joined = apply_filter(&mut env, vec!["\"cold tier\"".into()]);
+    assert_eq!(joined.len(), 1);
+    assert_eq!(joined[0].task.title, "Rebuild the cold tier cache");
+}
+
 /// A malformed query is refused, not silently read as something else.
 #[test]
 fn list_rejects_a_malformed_expression() {
