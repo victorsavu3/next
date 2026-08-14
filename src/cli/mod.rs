@@ -1,5 +1,6 @@
 pub mod app_context;
 pub mod commands;
+pub mod explain;
 pub mod render;
 
 #[cfg(test)]

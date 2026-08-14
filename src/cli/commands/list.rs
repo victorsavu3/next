@@ -40,6 +40,11 @@ pub struct Args {
     #[arg(long)]
     pub count: bool,
 
+    /// Show what the filter parsed to and how it will be run, instead of
+    /// listing tasks. Use it when a query returns something unexpected.
+    #[arg(long)]
+    pub explain: bool,
+
     /// Maximum number of tasks to show. Overrides `list_limit` in config.
     /// Shorthand for `--page-size` (both cap the window on the result).
     #[arg(short = 'n', long)]
@@ -59,10 +64,24 @@ pub struct Args {
 }
 
 pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
+    run_with_writer(args, ctx, &mut std::io::stdout())
+}
+
+/// The body, with output injectable so a test can read what was printed —
+/// `--explain` in particular exists to be read, so its text is worth
+/// asserting rather than eyeballing.
+pub fn run_with_writer(
+    args: Args,
+    ctx: &AppContext,
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
 
     crate::core::reject_flag_like_tokens(&args.tokens, "next list --help")?;
     let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
+    // Kept for `--explain`, which shows the query as the user typed it —
+    // after argv joining, which is where a shell-eaten filter goes missing.
+    let raw_query = args.tokens.join(" ");
     let mut filter_args = FilterArgs::parse(args.tokens)?;
     filter_args.future = args.future;
     filter_args.all = args.all;
@@ -86,14 +105,14 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
         if args.count {
             // The total across every page, which is what someone asking "how
             // many?" means — not how many happened to fit on this one.
-            println!("{}", page.total);
+            writeln!(out, "{}", page.total)?;
             return Ok(());
         }
         if filter_args.json {
-            println!("{}", serde_json::to_string_pretty(&page)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&page)?)?;
         } else {
             if page.items.is_empty() {
-                println!("No archived tasks.");
+                writeln!(out, "No archived tasks.")?;
             }
             for task in &page.items {
                 let short = &task.id.to_string().replace('-', "")[..8];
@@ -101,7 +120,7 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
                     .completed_at
                     .map(|d| d.to_string())
                     .unwrap_or_else(|| "-".into());
-                println!("[{short}] {when}  {}", task.title);
+                writeln!(out, "[{short}] {when}  {}", task.title)?;
             }
             render::render_page_footer(&page);
         }
@@ -116,6 +135,7 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     // terms now, and the pool they are read from is the same one scoring uses.
     let pool = listing::extend_with_parents(ctx.repo.store(), candidates.clone())?;
     let task_dates = ctx.repo.task_git_dates_for(&pool);
+    let candidate_count = candidates.len();
 
     let filtered = filter::apply(candidates, &filter_set, &state, today, &task_dates);
     let scored = scoring::score_and_sort(
@@ -127,10 +147,28 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
         &task_dates,
     );
 
+    if args.explain {
+        // Reports the counts from the run just performed rather than
+        // recomputing them — an explanation that could disagree with the
+        // pipeline would be worse than none.
+        write!(
+            out,
+            "{}",
+            crate::cli::explain::render(
+                &raw_query,
+                &filter_set,
+                candidate_count,
+                scored.len(),
+                None,
+            )
+        )?;
+        return Ok(());
+    }
+
     if args.count {
         // Counted before pagination, so the answer does not depend on the
         // page size the caller happened to pass.
-        println!("{}", scored.len());
+        writeln!(out, "{}", scored.len())?;
         return Ok(());
     }
 
@@ -143,7 +181,7 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     let page = crate::core::store::paginate(scored, args.page, page_size);
 
     if filter_args.json {
-        println!("{}", serde_json::to_string_pretty(&page)?);
+        writeln!(out, "{}", serde_json::to_string_pretty(&page)?)?;
     } else {
         render::render_task_list(&page.items);
         render::render_page_footer(&page);

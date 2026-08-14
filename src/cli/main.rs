@@ -88,6 +88,7 @@ fn main() -> anyhow::Result<()> {
             json: false,
             format: None,
             count: false,
+            explain: false,
             limit: None,
             page_size: None,
             page: 1,

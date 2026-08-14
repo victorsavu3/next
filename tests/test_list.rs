@@ -323,6 +323,90 @@ fn a_quoted_phrase_survives_argv_joining() {
     assert_eq!(joined[0].task.title, "Rebuild the cold tier cache");
 }
 
+/// `--explain` is meant to be read, so its actual output is asserted rather
+/// than eyeballed. These run the real command, not the renderer.
+mod explain {
+    use super::*;
+
+    fn list_args(tokens: Vec<String>) -> next::cli::commands::list::Args {
+        next::cli::commands::list::Args {
+            future: false,
+            all: false,
+            closed: false,
+            archived: false,
+            all_users: false,
+            json: false,
+            format: None,
+            count: false,
+            explain: true,
+            limit: None,
+            page_size: None,
+            page: 1,
+            tokens,
+        }
+    }
+
+    fn explain(env: &common::TestEnv, tokens: Vec<String>) -> String {
+        let mut buf: Vec<u8> = Vec::new();
+        next::cli::commands::list::run_with_writer(list_args(tokens), &env.ctx, &mut buf).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn it_names_a_bare_word_as_a_search_and_shows_the_tag_spelling() {
+        let mut env = common::setup();
+        let tagged = add::Args {
+            tags: vec!["printer".to_string()],
+            ..add_args("Renew the passport")
+        };
+        add::run(tagged, &mut env.ctx).unwrap();
+
+        let out = explain(&env, vec!["printer".to_string()]);
+        assert!(out.contains("Query:    printer"), "{out}");
+        assert!(out.contains("Read as SEARCHES"), "{out}");
+        assert!(
+            out.contains("write +printer"),
+            "it must show the tag spelling: {out}"
+        );
+        // The counts come from the run itself.
+        assert!(out.contains("candidates loaded: 1"), "{out}");
+        assert!(out.contains("matched:           0"), "{out}");
+    }
+
+    #[test]
+    fn it_says_plainly_when_the_shell_ate_the_query() {
+        let env = common::setup();
+        let out = explain(&env, vec![]);
+        assert!(out.contains("No filter was given"), "{out}");
+        assert!(out.contains("shell may have consumed it"), "{out}");
+    }
+
+    #[test]
+    fn it_points_at_the_implicit_gate_when_nothing_matched() {
+        let mut env = common::setup();
+        add::run(add_args("Something"), &mut env.ctx).unwrap();
+
+        let out = explain(&env, vec!["+nosuchtag".to_string()]);
+        assert!(out.contains("matched:           0"), "{out}");
+        assert!(out.contains("implicit gate"), "{out}");
+        assert!(out.contains("--all"), "{out}");
+    }
+
+    #[test]
+    fn a_tag_query_is_not_mislabelled_as_a_search() {
+        let mut env = common::setup();
+        let tagged = add::Args {
+            tags: vec!["printer".to_string()],
+            ..add_args("Fix it")
+        };
+        add::run(tagged, &mut env.ctx).unwrap();
+
+        let out = explain(&env, vec!["+printer".to_string()]);
+        assert!(!out.contains("Read as SEARCHES"), "{out}");
+        assert!(out.contains("matched:           1"), "{out}");
+    }
+}
+
 /// A malformed query is refused, not silently read as something else.
 #[test]
 fn list_rejects_a_malformed_expression() {
@@ -573,6 +657,7 @@ fn list_args_with_limit(limit: Option<usize>) -> next::cli::commands::list::Args
         json: false,
         format: None,
         count: false,
+        explain: false,
         limit,
         page_size: None,
         page: 1,
