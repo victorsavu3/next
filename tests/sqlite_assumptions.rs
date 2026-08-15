@@ -137,6 +137,47 @@ fn fts5_is_available_and_tokenises_the_way_the_scan_does() {
     assert_eq!(hits("\"router wifi\""), 0, "a phrase is ordered");
 }
 
+/// Depended on by: `upsert_fts_row` replacing a row in ONE statement.
+///
+/// A separate `DELETE` then `INSERT` is not atomic against another writer:
+/// both can delete, then both insert the same rowid, and the second fails with
+/// a constraint violation. That is a real crash under concurrent edits, so the
+/// replace has to be one statement — which requires fts5 to honour
+/// `INSERT OR REPLACE` on its rowid.
+#[test]
+fn fts5_honours_insert_or_replace_on_rowid() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE f USING fts5(body, tokenize = 'unicode61 remove_diacritics 0');",
+    )
+    .unwrap();
+
+    conn.execute("INSERT INTO f(rowid, body) VALUES(1, 'printer')", [])
+        .unwrap();
+    conn.execute(
+        "INSERT OR REPLACE INTO f(rowid, body) VALUES(1, 'scanner')",
+        [],
+    )
+    .expect("fts5 must accept INSERT OR REPLACE on rowid");
+
+    let hits = |q: &str| -> i64 {
+        conn.query_row("SELECT count(*) FROM f WHERE f MATCH ?", [q], |r| r.get(0))
+            .unwrap_or(-1)
+    };
+    assert_eq!(hits("\"scanner\""), 1, "the new text is indexed");
+    assert_eq!(
+        hits("\"printer\""),
+        0,
+        "and the old text is gone — a replace, not a second row"
+    );
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM f", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1,
+        "exactly one row survives"
+    );
+}
+
 /// Depended on by: `search_sql` refusing to push a non-ASCII term.
 ///
 /// These are the cases where unicode61 and Rust's `is_alphanumeric` +

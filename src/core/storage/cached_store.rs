@@ -977,17 +977,18 @@ fn upsert_task_row(
 
 /// Replaces a task's row in the full-text index, keyed by the `tasks` rowid.
 ///
-/// Delete-then-insert rather than an upsert: FTS5 has no `ON CONFLICT`, and a
+/// `INSERT OR REPLACE` in ONE statement, not a delete followed by an insert. A
 /// task edited from "fix the printer" to "fix the scanner" must stop matching
-/// `printer`. Leaving the old row would make the index answer for text that no
-/// longer exists — the drift this index is most likely to develop.
+/// `printer`, so the old row has to go — but doing that as two statements is
+/// not atomic against another writer: both can delete, then both insert the
+/// same rowid, and the second fails the primary-key constraint. That surfaced
+/// as a hard error under concurrent edits.
 fn upsert_fts_row(conn: &Connection, task: &Task) -> Result<()> {
     let Some(rowid) = task_rowid(conn, &task.id.to_string())? else {
         return Ok(());
     };
-    delete_fts_row(conn, rowid)?;
     conn.execute(
-        "INSERT INTO task_fts(rowid, title, description, notes, url)
+        "INSERT OR REPLACE INTO task_fts(rowid, title, description, notes, url)
          VALUES(?1, ?2, ?3, ?4, ?5)",
         params![
             rowid,
