@@ -35,11 +35,14 @@ pub enum Execution {
 /// Renders the explanation for a parsed query.
 ///
 /// `candidates` and `matched` are the real counts from the run that produced
-/// them, and `execution` describes how that run was carried out.
+/// them, and `execution` describes how that run was carried out. `candidates`
+/// is `None` when the caller genuinely cannot know it — the archived tier
+/// re-checks an inexact pushdown inside the store and reports only the
+/// survivors — and saying so beats printing `matched` twice under two labels.
 pub fn render(
     raw_query: &str,
     filter: &FilterSet,
-    candidates: usize,
+    candidates: Option<usize>,
     matched: usize,
     execution: &Execution,
 ) -> String {
@@ -135,10 +138,22 @@ pub fn render(
             }
         }
     }
-    let _ = writeln!(out, "  candidates loaded: {candidates}");
+    match candidates {
+        Some(n) => {
+            let _ = writeln!(out, "  candidates loaded: {n}");
+        }
+        None => out.push_str(
+            "  candidates loaded: not counted (the store re-checks the rows \
+             and reports only the matches)\n",
+        ),
+    }
     let _ = writeln!(out, "  matched:           {matched}");
 
-    if matched == 0 && candidates > 0 {
+    // Only the active list applies the implicit gate, and only there is `--all`
+    // accepted: `--archived` declares it a conflict, so offering it on the
+    // archived tier is advice that cannot be taken.
+    if matches!(execution, Execution::InMemory) && matched == 0 && candidates.is_some_and(|c| c > 0)
+    {
         out.push_str(
             "\nNothing matched. The implicit gate hides closed tasks, future\n\
              start dates, blocked tasks and parents with open subtasks —\n\
@@ -234,7 +249,7 @@ mod tests {
 
     #[test]
     fn an_empty_query_says_the_shell_may_have_eaten_it() {
-        let out = render("", &set(""), 10, 10, &Execution::InMemory);
+        let out = render("", &set(""), Some(10), 10, &Execution::InMemory);
         assert!(out.contains("No filter was given"), "{out}");
         assert!(out.contains("shell may have consumed it"), "{out}");
     }
@@ -243,14 +258,14 @@ mod tests {
     fn a_bare_word_is_reported_as_a_search_with_the_tag_spelling() {
         // The whole reason --explain exists: someone typing the old token
         // syntax needs to see that `bug` searched instead of selecting a tag.
-        let out = render("bug", &set("bug"), 10, 0, &Execution::InMemory);
+        let out = render("bug", &set("bug"), Some(10), 0, &Execution::InMemory);
         assert!(out.contains("Read as SEARCHES"), "{out}");
         assert!(out.contains("write +bug"), "{out}");
     }
 
     #[test]
     fn a_tag_query_is_not_reported_as_a_search() {
-        let out = render("+bug", &set("+bug"), 10, 3, &Execution::InMemory);
+        let out = render("+bug", &set("+bug"), Some(10), 3, &Execution::InMemory);
         assert!(!out.contains("Read as SEARCHES"), "{out}");
     }
 
@@ -259,7 +274,7 @@ mod tests {
         let out = render(
             "+@work and due<+7d",
             &set("+@work and due<+7d"),
-            5,
+            Some(5),
             2,
             &Execution::Sql {
                 sql: "(tag AND due)".to_owned(),
@@ -282,7 +297,7 @@ mod tests {
         let out = render(
             "data.k:v",
             &set("data.k:v"),
-            9,
+            Some(9),
             1,
             &Execution::Sql {
                 sql: "1".to_owned(),
@@ -297,7 +312,7 @@ mod tests {
     /// saying "nothing was pushed" would be wrong in the other direction.
     #[test]
     fn the_active_list_says_where_the_filter_actually_ran() {
-        let out = render("+bug", &set("+bug"), 3, 1, &Execution::InMemory);
+        let out = render("+bug", &set("+bug"), Some(3), 1, &Execution::InMemory);
         assert!(out.contains("the status gate only"), "{out}");
         assert!(out.contains("evaluated in memory"), "{out}");
         assert!(
@@ -311,7 +326,7 @@ mod tests {
         let out = render(
             "parent:infra +bug",
             &set("parent:infra +bug"),
-            4,
+            Some(4),
             1,
             &Execution::InMemory,
         );
@@ -321,9 +336,50 @@ mod tests {
 
     #[test]
     fn an_empty_result_points_at_the_implicit_gate() {
-        let out = render("+bug", &set("+bug"), 7, 0, &Execution::InMemory);
+        let out = render("+bug", &set("+bug"), Some(7), 0, &Execution::InMemory);
         assert!(out.contains("implicit gate"), "{out}");
         assert!(out.contains("--all"), "{out}");
+    }
+
+    /// The gate belongs to the active list alone. On the archived tier there is
+    /// no gate to blame, and `--all` is a clap conflict with `--archived`, so
+    /// the hint would be an instruction to run a command that errors out.
+    #[test]
+    fn an_empty_sql_result_does_not_blame_a_gate_it_never_applied() {
+        for candidates in [Some(7), Some(0), None] {
+            let out = render(
+                "+bug",
+                &set("+bug"),
+                candidates,
+                0,
+                &Execution::Sql {
+                    sql: "1".to_owned(),
+                    exact: false,
+                },
+            );
+            assert!(!out.contains("implicit gate"), "{candidates:?}: {out}");
+            assert!(!out.contains("try --all"), "{candidates:?}: {out}");
+        }
+    }
+
+    /// An inexact pushdown reads a superset it never counts back out. Printing
+    /// the match count under "candidates loaded" would fake the one figure that
+    /// shows how far the pushdown widened.
+    #[test]
+    fn an_uncounted_candidate_set_says_so_instead_of_repeating_the_match_count() {
+        let out = render(
+            "data.k:v",
+            &set("data.k:v"),
+            None,
+            3,
+            &Execution::Sql {
+                sql: "1".to_owned(),
+                exact: false,
+            },
+        );
+        assert!(out.contains("candidates loaded: not counted"), "{out}");
+        assert!(out.contains("matched:           3"), "{out}");
+        assert!(!out.contains("candidates loaded: 3"), "{out}");
     }
 
     #[test]
@@ -340,7 +396,13 @@ mod tests {
     /// about it has nothing to say — and `+title:foo` is not even a query.
     #[test]
     fn a_scoped_search_is_not_reported_as_the_bare_token_mistake() {
-        let out = render("title:foo", &set("title:foo"), 10, 0, &Execution::InMemory);
+        let out = render(
+            "title:foo",
+            &set("title:foo"),
+            Some(10),
+            0,
+            &Execution::InMemory,
+        );
         assert!(!out.contains("Read as SEARCHES"), "{out}");
         assert!(!out.contains("write +"), "{out}");
     }
@@ -350,7 +412,7 @@ mod tests {
     #[test]
     fn a_term_that_cannot_be_a_tag_gets_the_block_without_a_suggestion() {
         for query in ["\"cold tier\"", "arch*", "café"] {
-            let out = render(query, &set(query), 10, 0, &Execution::InMemory);
+            let out = render(query, &set(query), Some(10), 0, &Execution::InMemory);
             assert!(out.contains("Read as SEARCHES"), "{query}: {out}");
             assert!(!out.contains("write +"), "{query}: {out}");
         }
@@ -360,7 +422,7 @@ mod tests {
     #[test]
     fn every_suggested_tag_parses_as_a_tag() {
         for query in ["bug", "wifi-router", "arch*", "\"cold tier\"", "café"] {
-            let out = render(query, &set(query), 10, 0, &Execution::InMemory);
+            let out = render(query, &set(query), Some(10), 0, &Execution::InMemory);
             let Some(rest) = out.split("write +").nth(1) else {
                 continue;
             };
@@ -380,7 +442,7 @@ mod tests {
     #[test]
     fn the_suggestion_names_the_bare_word_not_the_scoped_one() {
         let query = "title:arch bug";
-        let out = render(query, &set(query), 10, 0, &Execution::InMemory);
+        let out = render(query, &set(query), Some(10), 0, &Execution::InMemory);
         assert!(out.contains("Read as SEARCHES"), "{out}");
         assert!(out.contains("write +bug"), "{out}");
         assert!(!out.contains("  title:arch\n"), "{out}");
