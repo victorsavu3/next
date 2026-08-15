@@ -160,7 +160,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     // Process trailing +tag / -tag tokens. An unknown `--flag` (typically a
     // typo of a real flag) would land here because of allow_hyphen_values;
     // reject it up front instead of misreading it as a `-tag` removal.
-    crate::core::reject_flag_like_tokens(&args.tag_tokens, "next edit --help")?;
+    crate::cli::commands::reject_misplaced_flags::<Args>(&args.tag_tokens, "next edit")?;
     let mut add_tags = args.tags.clone();
     let mut remove_tags = args.remove_tags.clone();
     for token in &args.tag_tokens {

@@ -52,7 +52,7 @@ pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> any
     let today = Local::now().date_naive();
     let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
 
-    crate::core::reject_flag_like_tokens(&args.tokens, "next tree --help")?;
+    crate::cli::commands::reject_misplaced_flags::<Args>(&args.tokens, "next tree")?;
     let mut filter_args = crate::core::FilterArgs::parse(args.tokens.clone())?;
     filter_args.all = args.all;
     filter_args.closed = args.closed;

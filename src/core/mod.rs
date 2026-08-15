@@ -36,7 +36,7 @@ pub(crate) mod test_git;
 pub mod value;
 
 pub use error::{Result, TaskError};
-pub use filter_args::{reject_flag_like_tokens, FilterArgs};
+pub use filter_args::{reject_flag_like_tokens, FilterArgs, KnownFlags};
 pub use store::{Page, PullResult, Store, TaskQuery, VcsBackend};
 pub use sync::{sync, SyncOutcome};
 pub use task_repository::TaskRepository;

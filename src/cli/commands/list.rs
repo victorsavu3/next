@@ -83,7 +83,7 @@ pub fn run_with_writer(
 ) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
 
-    crate::core::reject_flag_like_tokens(&args.tokens, "next list --help")?;
+    crate::cli::commands::reject_misplaced_flags::<Args>(&args.tokens, "next list")?;
     let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
     // Kept for `--explain`, which shows the query as the user typed it —
     // after argv joining, which is where a shell-eaten filter goes missing.
