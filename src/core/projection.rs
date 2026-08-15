@@ -39,6 +39,9 @@ pub struct Projection {
     /// Whether the caller wants the computed score, which lives outside the
     /// task object.
     score: bool,
+    /// Whether the caller wants the score breakdown — the per-factor object
+    /// `get_task` and `show --json` return beside the score.
+    score_breakdown: bool,
 }
 
 /// Every projectable name, paired with the JSON key it selects.
@@ -98,6 +101,7 @@ impl Projection {
         let mut data_keys = Vec::new();
         let mut all_data = false;
         let mut score = false;
+        let mut score_breakdown = false;
 
         for name in names {
             let name = name.trim();
@@ -106,6 +110,10 @@ impl Projection {
             }
             if name == "score" {
                 score = true;
+                continue;
+            }
+            if name == "score_breakdown" {
+                score_breakdown = true;
                 continue;
             }
             if GIT_DERIVED.contains(&name) {
@@ -135,6 +143,7 @@ impl Projection {
                 None => {
                     let mut known: Vec<&str> = FIELDS.iter().map(|(n, _)| *n).collect();
                     known.push("score");
+                    known.push("score_breakdown");
                     known.push("data.<key>");
                     return Err(TaskError::Other(format!(
                         "unknown field {name:?} — expected one of {}",
@@ -149,13 +158,14 @@ impl Projection {
             data_keys,
             all_data,
             score,
+            score_breakdown,
         })
     }
 
     /// Whether the caller asked for anything. An empty projection means "give
     /// me everything", so callers can skip the work entirely.
     pub fn is_empty(&self) -> bool {
-        self.keys.is_empty() && !self.score
+        self.keys.is_empty() && !self.score && !self.score_breakdown
     }
 
     /// Trims a serialised task in place.
@@ -189,6 +199,40 @@ impl Projection {
             self.apply_to_task(task);
         }
         map.retain(|k, _| k == "task" || (k == "score" && self.score));
+    }
+
+    /// Trims a single-task detail envelope — `{ task, score, score_breakdown,
+    /// children }`, what `get_task` and `show --json` return.
+    ///
+    /// `score` and `score_breakdown` follow the rule a listing already applies
+    /// to `score`: present by default, dropped as soon as the caller names
+    /// anything and does not name them. The breakdown is the largest
+    /// non-prose object in the response and the one a caller asking for
+    /// `id,title` has least use for, so surviving every projection made the
+    /// stated driver — payload size — untrue on the two surfaces that return
+    /// it. `children` are tasks, so they take the task projection rather than
+    /// disappearing.
+    pub fn apply_to_detail(&self, detail: &mut Value) {
+        if self.is_empty() {
+            return;
+        }
+        let Some(map) = detail.as_object_mut() else {
+            return;
+        };
+        if let Some(task) = map.get_mut("task") {
+            self.apply_to_task(task);
+        }
+        if let Some(children) = map.get_mut("children").and_then(|v| v.as_array_mut()) {
+            for child in children {
+                self.apply_to_task(child);
+            }
+        }
+        if !self.score {
+            map.remove("score");
+        }
+        if !self.score_breakdown {
+            map.remove("score_breakdown");
+        }
     }
 
     /// Trims every item of a `Page` of scored tasks, leaving the pagination
@@ -300,6 +344,49 @@ mod tests {
         let mut scored = serde_json::json!({ "score": 4.5, "task": sample() });
         proj(&["id"]).apply_to_scored(&mut scored);
         assert!(scored.get("score").is_none());
+    }
+
+    fn detail() -> Value {
+        serde_json::json!({
+            "task": sample(),
+            "score": 4.5,
+            "score_breakdown": { "total": 4.5, "age": 1.0, "priority": 2.0 },
+            "children": [sample()],
+        })
+    }
+
+    #[test]
+    fn a_detail_keeps_the_breakdown_only_when_asked() {
+        // No projection: the response is untouched, breakdown included.
+        let mut d = detail();
+        let before = d.clone();
+        proj(&[]).apply_to_detail(&mut d);
+        assert_eq!(d, before);
+
+        // A projection that does not name them drops both — the same rule a
+        // listing applies to `score`.
+        let mut d = detail();
+        proj(&["id", "title"]).apply_to_detail(&mut d);
+        assert!(d.get("score").is_none(), "{d}");
+        assert!(d.get("score_breakdown").is_none(), "{d}");
+        assert_eq!(d["task"].as_object().unwrap().len(), 2);
+        assert_eq!(
+            d["children"][0].as_object().unwrap().len(),
+            2,
+            "children take the same shape as the task: {d}"
+        );
+
+        // Naming one keeps that one only.
+        let mut d = detail();
+        proj(&["id", "score_breakdown"]).apply_to_detail(&mut d);
+        assert!(d.get("score_breakdown").is_some(), "{d}");
+        assert!(d.get("score").is_none(), "{d}");
+
+        // …and `score_breakdown` alone is enough to make the projection
+        // non-empty, so the task is trimmed to nothing rather than ignored.
+        let mut d = detail();
+        proj(&["score_breakdown"]).apply_to_detail(&mut d);
+        assert!(d["task"].as_object().unwrap().is_empty(), "{d}");
     }
 
     #[test]
