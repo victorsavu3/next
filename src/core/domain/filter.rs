@@ -35,8 +35,12 @@ pub struct FilterSet {
     pub required_override: Option<Vec<String>>,
 
     /// Override active users for this query.
-    /// `None` → use `state.active_users`.
-    /// `Some(v)` → use `v` (pass an empty vec to disable user filtering entirely).
+    /// `None` → use `state.active_users`, which `disable_implicit` bypasses.
+    /// `Some(v)` → use `v` (pass an empty vec to disable user filtering
+    /// entirely, which is what `--all-users` sends).
+    ///
+    /// A non-empty override is an explicit `user:` term, so it applies even
+    /// under `disable_implicit`; see [`apply`].
     pub user_override: Option<Vec<String>>,
 
     /// Include tasks hidden by `start_date` in the future.
@@ -122,7 +126,12 @@ impl FilterSet {
 /// 3. Task must not be blocked by an open `blocked_by` task.
 /// 4. Task must not be a parent with open children (work on the children
 ///    instead) — unless `include_blocked_parents` is set, which keeps projects visible.
-/// 5. Task must be assigned to an active user, or unassigned.
+///
+/// **User scope** is applied outside that gate. `--all` bypasses the *stored*
+/// `state.active_users`, because that scope is implicit; it does not bypass a
+/// `user:` term the caller typed, which arrives as `user_override` and is as
+/// explicit as `parent:` or `context:`. Either way an unassigned task is shared
+/// and stays visible.
 ///
 /// **Tag state** ([`GlobalState::admits`]) is applied outside that gate, so a
 /// caller can bypass the status and blocking checks while still respecting
@@ -171,13 +180,14 @@ pub fn apply(
     // Tag state is independent of the implicit gate; see `effective_tag_state`.
     let effective_state = effective_tag_state(filter, state);
 
-    let active_users: &[String] = if filter.disable_implicit {
-        &[]
-    } else {
-        filter
-            .user_override
-            .as_deref()
-            .unwrap_or(&state.active_users)
+    // A `user:` term the caller typed is an explicit filter, so it outlives
+    // `--all` exactly as `parent:` and `context:` do. What `--all` bypasses is
+    // the *stored* scope in `state.active_users`, which is part of the implicit
+    // gate. An empty override is `--all-users`: no user filter at all.
+    let active_users: &[String] = match filter.user_override.as_deref() {
+        Some(users) => users,
+        None if filter.disable_implicit => &[],
+        None => &state.active_users,
     };
 
     tasks
@@ -206,13 +216,17 @@ pub fn apply(
                 {
                     return false;
                 }
-                // User filter: unassigned tasks are always visible; assigned tasks
-                // must match one of the active users.
-                if !active_users.is_empty() {
-                    if let Some(ref assignee) = task.assignee {
-                        if !active_users.iter().any(|u| u == assignee) {
-                            return false;
-                        }
+            }
+
+            // ── User scope ───────────────────────────────────────────────────
+            // Outside the gate on purpose: with no override this list is empty
+            // under `--all` and the check is a no-op, but a `user:` term the
+            // caller typed fills it and must still apply. Unassigned tasks are
+            // shared, so they stay visible under every user filter.
+            if !active_users.is_empty() {
+                if let Some(ref assignee) = task.assignee {
+                    if !active_users.iter().any(|u| u == assignee) {
+                        return false;
                     }
                 }
             }
@@ -916,6 +930,82 @@ mod tests {
         };
         let result = apply(vec![bob_task], &filter, &state, today());
         assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn disable_implicit_keeps_an_explicit_user_override() {
+        // `--all user:bob`: the stored scope is bypassed, the typed one is not.
+        let state = GlobalState {
+            active_users: vec!["alice".into()],
+            ..Default::default()
+        };
+
+        let mut alice_task = Task::new("Alice task");
+        alice_task.assignee = Some("alice".into());
+        let mut bob_task = Task::new("Bob task");
+        bob_task.assignee = Some("bob".into());
+        let shared = Task::new("Shared task");
+
+        let filter = FilterSet {
+            disable_implicit: true,
+            user_override: Some(vec!["bob".into()]),
+            ..Default::default()
+        };
+        let mut titles: Vec<String> =
+            apply(vec![alice_task, bob_task, shared], &filter, &state, today())
+                .into_iter()
+                .map(|t| t.title)
+                .collect();
+        titles.sort();
+        assert_eq!(titles, ["Bob task", "Shared task"]);
+    }
+
+    #[test]
+    fn disable_implicit_with_all_users_applies_no_user_filter() {
+        // `--all --all-users` reaches here as an empty override, which means
+        // exactly what it says even though `--all` is also set.
+        let state = GlobalState {
+            active_users: vec!["alice".into()],
+            ..Default::default()
+        };
+
+        let mut bob_task = Task::new("Bob task");
+        bob_task.assignee = Some("bob".into());
+        let mut carol_task = Task::new("Carol task");
+        carol_task.assignee = Some("carol".into());
+
+        let filter = FilterSet {
+            disable_implicit: true,
+            user_override: Some(vec![]),
+            ..Default::default()
+        };
+        assert_eq!(
+            apply(vec![bob_task, carol_task], &filter, &state, today()).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_user_override_reaches_closed_tasks_under_all() {
+        // The status gate is off, so the scope has to hold on closed tasks too
+        // — otherwise `--all user:bob` would leak alice's finished work.
+        let state = GlobalState::default();
+
+        let mut alice_done = Task::new("Alice done");
+        alice_done.assignee = Some("alice".into());
+        alice_done.mark_done(today());
+        let mut bob_done = Task::new("Bob done");
+        bob_done.assignee = Some("bob".into());
+        bob_done.mark_done(today());
+
+        let filter = FilterSet {
+            disable_implicit: true,
+            user_override: Some(vec!["bob".into()]),
+            ..Default::default()
+        };
+        let result = apply(vec![alice_done, bob_done], &filter, &state, today());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Bob done");
     }
 
     // ── closed_only ──────────────────────────────────────────────────────────
