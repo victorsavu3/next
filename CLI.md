@@ -182,7 +182,7 @@ List all tasks that pass the active filters, sorted by urgency score descending.
 **Usage**
 
 ```
-next list [filters...]
+next list [options] [filters...]
 ```
 
 **Options**
@@ -197,13 +197,32 @@ next list [filters...]
 | `-n` / `--limit` | integer | — | Show at most N tasks. Shorthand for `--page-size`; overrides `list_limit` in config. |
 | `--page-size` | integer | 50 | Tasks per page. |
 | `--page` | integer | 1 | 1-indexed page of results to show. |
-| `--json` | flag | false | Emit the result as JSON: `{ "items": [...], "page": N, "page_size": N, "total": N }`. |
+| `--json` | flag | false | Emit the result as JSON: `{ "items": [...], "page": N, "page_size": N, "total": N }`. The older spelling of `--format json`; the two cannot be combined. |
+| `--format <fmt>` | `table` \| `json` | `table` | Output format. Table and json are the whole list, deliberately; `--format` exists so `--json` is not the only vocabulary, not because a third format is coming. |
+| `--count` | flag | false | Print only how many tasks match, and nothing else. Counted before pagination, so the answer is the total across every page rather than the size of the one you happened to ask for. |
+| `--explain` | flag | false | Print what the filter parsed to and where it will run, instead of listing anything. See [Explaining a query](#explaining-a-query). |
+| `--fields <list>` | comma-separated names | everything | Return only these fields, e.g. `--fields id,title,due`. JSON output only — without `--json` it is a usage error, not a silent no-op. See [Choosing which fields come back](#choosing-which-fields-come-back). |
 
-Filter tokens (see [Filter Syntax](#filter-syntax)) may be placed anywhere in the argument list.
+The trailing arguments are the filter (see [Filter Syntax](#filter-syntax)); every
+flag must come **before** them. `next list --all +@work` is right, and
+`next list +@work --all` is refused with a message saying so. The trailing part is
+taken verbatim so that `-bug` and `-#printer` keep working as exclusions, which
+leaves nothing to distinguish a trailing `--all` from a term — so the command
+refuses rather than guesses. Exclusions are unaffected: they were always trailing
+and still are.
 
-A default cap can be set in config as `list_limit = N`; without one the page
-size defaults to 50. When the result is a window on a larger set, text output
-ends with an indication such as `page 2 of 14 · 13402 matching · --page 3 for more`.
+A default cap can be set in config as `list_limit = N`. The precedence is
+`--page-size`, then `-n` / `--limit`, then `list_limit`, then 50, and `--archived`
+follows the same one — an archive listing is still a listing, and a cap set once
+should not stop applying because the tasks moved tier. When the result is a window
+on a larger set, text output ends with an indication such as
+`page 2 of 14 · 13402 matching · --page 3 for more`.
+
+A query that contradicts the implicit gate — `status:done`, `is:closed`,
+`--closed status:open` — matches nothing, because the gate removes those tasks
+before the expression is ever evaluated. The listing prints a hint naming `--all`
+when it sees one; which tasks match is unchanged. See
+[A status predicate can contradict the gate](#a-status-predicate-can-contradict-the-gate).
 
 **Examples**
 
@@ -215,13 +234,22 @@ next list
 next list +python
 
 # Tasks available at home, including those not yet started
-next list context:@home --future
+next list --future context:@home
 
 # Everything, bypassing all implicit filters
 next list --all
 
 # Archived work-tagged tasks, second page
-next list --archived +@work --page 2
+next list --archived --page 2 +@work
+
+# How many tasks match, without printing any of them
+next list --count +@work
+
+# Why did that return nothing?
+next list --explain status:done
+
+# A lean payload for a script: three fields per task, no notes
+next list --json --fields id,title,due
 ```
 
 ---
@@ -275,18 +303,31 @@ Show the top N tasks by urgency score. This is the primary "what should I do now
 **Usage**
 
 ```
-next next [N] [filters...]
+next next [options] [N] [filters...]
 ```
 
 **Arguments**
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
-| `[N]` | positive integer | 10 | Number of tasks to show. |
+| `[N]` | positive integer | 10 | Number of tasks to show. Defaults to `next_count` in config. |
 
 **Options**
 
-Same filter flags as `next list`.
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--future` | flag | false | Include tasks with a future `start` date. |
+| `--all` | flag | false | Disable all implicit filtering: contexts, resources, blocked tasks, and future `start` dates. |
+| `--all-users` | flag | false | Bypass the user filter; show tasks for all assignees. |
+| `--json` | flag | false | Emit the tasks as JSON. Alias for `--format json`. |
+| `--format <fmt>` | `table` \| `json` | `table` | Output format. |
+| `--fields <list>` | comma-separated names | everything | Project the JSON output, exactly as on `next list`. JSON output only. |
+
+The same filter expression as `next list`, and the same rule that every flag
+precedes it. There is no `--count` and no pagination: `[N]` already caps the
+output, and a command whose whole job is the top of the list has nothing useful
+to say about how many tasks matched in total — `next list --count` is the place
+to ask that.
 
 **Examples**
 
@@ -294,6 +335,7 @@ Same filter flags as `next list`.
 next next
 next next 5 context:@work
 next next --json
+next next --json --fields id,title,score
 ```
 
 ---
@@ -305,7 +347,7 @@ Display the full details of a single task, including its description, URL, data,
 **Usage**
 
 ```
-next show <id>
+next show <id> [--json] [--fields <list>]
 ```
 
 **Arguments**
@@ -318,7 +360,17 @@ next show <id>
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--json` | flag | false | Emit full task details as JSON. |
+| `--json` | flag | false | Emit full task details as JSON: `{ "task": …, "score": …, "score_breakdown": …, "children": [ … ] }`. |
+| `--fields <list>` | comma-separated names | everything | Return only these fields, e.g. `--fields id,title,status`. Applies to the task and its children alike — a caller asking for `id,title` wants that shape throughout, not one trimmed task beside a set of full ones. JSON output only. |
+
+There is no `--format` here: `next show` renders one task, and its text form is a
+labelled block rather than a table, so there is no second layout to pick between.
+
+Under `--fields`, the computed `score` and `score_breakdown` come back only when
+you name them — they sit *beside* the task rather than inside it, and a projection
+that kept them regardless would contradict itself. `next list` has always behaved
+this way; `next show` and the MCP `get_task` now match it. Without `--fields` the
+response is unchanged and carries everything.
 
 ---
 
@@ -330,7 +382,7 @@ child tasks are indented under their parent.
 **Usage**
 
 ```
-next tree [options]
+next tree [options] [filters...]
 ```
 
 **Options**
@@ -338,7 +390,21 @@ next tree [options]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--all` | flag | false | Include done and cancelled tasks. Default shows open tasks only. |
-| `--json` | flag | false | Emit a flat task list as JSON (with `parent_id` fields). |
+| `--closed` | flag | false | Show only done and cancelled tasks, still respecting the active context and the filter. |
+| `--json` | flag | false | Emit a flat task list as JSON, each entry carrying `parent_id` — JSON has no indentation to carry the shape, so the edges are named instead. Alias for `--format json`. |
+| `--format <fmt>` | `table` \| `json` | `table` | Output format. |
+| `--count` | flag | false | Print only how many tasks matched. Honoured with `--json` as well as without. |
+| `--fields <list>` | comma-separated names | everything | Project the JSON output, exactly as on `next list`. JSON output only. |
+
+`next tree` takes the same filter expression as `next list`, with the same rule
+that every flag precedes it. A task is shown when it matches — and so are its
+ancestors, because a tree with the branches removed would leave matching subtasks
+floating with no visible parent.
+
+Those ancestors are scaffolding rather than results, so `--count` does not count
+them: it reports how many tasks the filter matched, which is the number you would
+get from `next list --count` over the same query and not the number of lines the
+tree happens to draw.
 
 **Examples**
 
@@ -348,6 +414,12 @@ next tree
 
 # Full tree including completed work
 next tree --all
+
+# Only the tasks mentioning "printer", with their parents kept for shape
+next tree printer
+
+# How many tasks match, without drawing anything
+next tree --count +@work
 ```
 
 ---
@@ -872,17 +944,26 @@ Show upcoming recurrence due dates for all matching recurring tasks, projected o
 **Usage**
 
 ```
-next forecast [filters...] [--days <N>]
+next forecast [options] [filters...]
 ```
 
 **Options**
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--days <N>` | positive integer | 90 | Forecast horizon in days. |
+| `--days <N>` | positive integer | 90 | Forecast horizon in days. Defaults to `forecast_horizon_days` in config. |
 | `--all` | flag | false | Disable all implicit filtering. |
 | `--all-users` | flag | false | Bypass the user filter. |
-| `--json` | flag | false | Emit forecast as JSON. |
+| `--json` | flag | false | Emit forecast as JSON. Alias for `--format json`. |
+| `--format <fmt>` | `table` \| `json` | `table` | Output format. |
+| `--count` | flag | false | Print only how many entries the forecast contains. An entry is one occurrence on one date, so a weekly task inside the horizon contributes several. |
+
+Flags precede the filter here too. There is no `--fields`: `--fields` projects a
+task object, and a forecast entry is a date, an id and a title rather than a
+task — there is nothing to project it down to.
+
+`--future` is implied and not offered: a forecast that hid future-start tasks
+would have nothing to show.
 
 ---
 
@@ -1054,14 +1135,23 @@ next config set list_limit none
 
 ## Filter Syntax
 
-All list commands (`list`, `next`, `forecast`) accept a filter expression. The
-trailing arguments are joined with a space and parsed as one query, so
-`next list +@work -bug` and `next list '+@work -bug'` mean the same thing —
-only phrases, parentheses and `#resource` tags need shell quoting.
+All list commands (`list`, `next`, `tree`, `forecast`) accept a filter
+expression. The trailing arguments are joined with a space and parsed as one
+query, so `next list +@work -bug` and `next list '+@work -bug'` mean the same
+thing — only phrases, parentheses and `#resource` tags need shell quoting.
 
 > **A bare word searches; it is not a tag.** `next list bug` looks for "bug" in
 > the title, description, notes and url. To select tasks *tagged* `bug`, write
 > `next list +bug`. Every sigil form is unchanged.
+
+The expression is the **trailing** part of the command line, and every flag goes
+before it: `next list --all +@work`, never `next list +@work --all`. A flag
+written after the expression is rejected with a message saying so. The trailing
+arguments have to be taken verbatim — that is what keeps `-bug` and `-#printer`
+usable as exclusions instead of being read as unknown short flags — and taking
+them verbatim leaves no way to tell a trailing `--all` from a term. Refusing is
+the only honest answer. Exclusions themselves need no change: they were always
+part of the expression, and they stay where they are.
 
 ### Token reference
 
@@ -1077,12 +1167,19 @@ only phrases, parentheses and `#resource` tags need shell quoting.
 | `has:<field>` / `no:<field>` | `has:due`, `no:assignee`, `has:context` | Whether the field is set. `has:context` asks whether the task carries any `@` tag. |
 | `is:<name>` | `is:overdue`, `is:blocked`, `is:project`, `is:recurring`, `is:closed`, `is:assigned` | Named predicates. See the note below on `is:project` and `is:blocked`. |
 | `and` `or` `not` `( )` | `+@work and (due<+7d or is:overdue)` | Booleans, also spelled `&`, `|`, `!`. Adjacency means `and`, and precedence runs `not` > `and` > `or`. Quote an operator word (`"or"`) to search for it literally. |
-| `parent:<slug>` | `parent:work`, `parent:launch-blog` | Task is a descendant (direct or transitive child) of the task with this slug. |
+| `parent:<slug>` | `parent:work`, `parent:launch-blog` | Task is a descendant (direct or transitive child) of the task with this slug. Exactly one slug — not a set. |
 | `context:<@tag>` | `context:@home` | Include exactly this tag for this query only, ignoring whatever the stored state includes. Exclusions still apply. |
-| `user:<name>` | `user:alice` | Override the global user filter for this query only. |
-| `--future` | | Include tasks with a future `start` date. |
-| `--all` | | Disable all implicit filtering. |
-| `--all-users` | | Bypass the user filter only. |
+| `user:<name>` | `user:alice` | Override the global user filter for this query only. Survives `--all`. |
+
+The three flags below are not tokens — they widen the pool of candidate tasks
+rather than describing one — so they go before the expression like every other
+flag:
+
+| Flag | Meaning |
+|------|---------|
+| `--future` | Include tasks with a future `start` date. |
+| `--all` | Disable all implicit filtering. |
+| `--all-users` | Bypass the user filter only. |
 
 ### Implicit filtering (default behaviour)
 
@@ -1097,6 +1194,14 @@ The **tag state** is applied separately and is *not* disabled by `--all`, which 
 the statuses shown rather than the tags: a tag excluded on purpose stays excluded until
 it is un-excluded. Tasks carrying an excluded tag are hidden, and while any tag is
 required, tasks that carry no required tag are hidden too.
+
+`--all` drops the *stored* user filter along with the rest of the gate, but it does
+not drop a `user:` term you wrote yourself. `--all` means "stop applying the
+defaults", not "ignore what I asked for", and a query that named alice and came
+back with bob's tasks would be the tool overruling its user. So
+`next list --all user:alice` is alice's work in every status; `--all-users` is the
+way to ask for every assignee, and it still wins over a `user:` term when both are
+given.
 
 ### How search matches
 
@@ -1123,6 +1228,31 @@ fast.
 
 Searching reaches archived tasks too, including segments pruned out of the
 working tree that `grep` cannot see.
+
+### A status predicate can contradict the gate
+
+The implicit gate runs *before* the expression and keeps only open and started
+tasks. A query that asks for a closed one is therefore asking for something that
+is already gone:
+
+```sh
+next list status:done            # empty: the gate dropped the done tasks first
+next list is:closed              # empty, for the same reason
+next list --closed status:open   # empty from the other side: --closed keeps only closed tasks
+```
+
+These are the first queries most people try after reading the grammar table, and
+none of them is wrong — the predicates mean exactly what they say. They are simply
+evaluated over a pool the gate has already emptied of the tasks in question. A
+listing that spots the contradiction prints a hint naming `--all`; **which tasks
+match is unchanged**, the hint is only there to shorten the confusion.
+
+The spellings that work:
+
+```sh
+next list --all status:done      # every status is a candidate; the query picks done
+next list --closed               # the closed listing, most recently completed first
+```
 
 ### `is:project` and `is:blocked` interact with the implicit gate
 
@@ -1180,13 +1310,28 @@ listing has neither a view of other tasks nor git history to consult:
 | `title`, `description`, `notes`, `url` | scope a search to one field | no |
 | `data.<key>` | a task-data value; compares by its stored JSON type | yes, when numeric |
 
-Ordered fields take `<`, `<=`, `>`, `>=` and `low..high`; every field takes `:`
+Ordered fields take `<`, `<=`, `>`, `>=` and `low..high`; most fields take `:`
 and a comma-separated set (`status:open,started`). A field that is unset on a
 task never compares true — a task with no deadline matches neither `due<+7d`
 nor `due>+7d`.
 
-An unknown field name is an error rather than a fallback to search, so a pasted
-URL needs quoting: `next list '"http://example.com/x"'`.
+`parent:` is the exception: it takes exactly one slug. It does not describe a
+task, it scopes the whole view to one subtree, and two subtrees are not a view —
+so `parent:a,b` is refused with that explanation rather than quietly using the
+first slug and dropping the second.
+
+An unknown field name is an error rather than a fallback to search, and the error
+names the way out: quote the token to search for it literally. A pasted URL is
+the common case, since `https://example.com/x` reads as the field `https` —
+
+```sh
+next list '"https://example.com/x"'
+```
+
+The same applies to any accidental `foo:bar`. Falling back to a search would be
+friendlier in the moment and wrong in the long run: a mistyped `stauts:open`
+would silently become a full-text search for that string and return nothing,
+which looks exactly like "no tasks match".
 
 ### Precedence, quoting and reserved words
 
@@ -1205,17 +1350,24 @@ the tool could report.
 
 ### Choosing which fields come back
 
-`--fields` trims the JSON output to the fields you name. It applies to
-`next list --json` and `next show --json`:
+`--fields` trims the JSON output to the fields you name. Every command that
+emits tasks takes it — `next list`, `next next`, `next tree` and `next show` —
+and so do the MCP `list_tasks` and `get_task` tools:
 
 ```sh
 next list --json --fields id,title,due
 next show rebuild-cache --json --fields id,title,status
 ```
 
+The driver is payload size, not tidiness. A listing serialises every field of
+every task, notes and descriptions included, and the cost is per row — so
+pagination does not help and projection does.
+
 The names are the same ones the filter grammar uses, so `due` means the same
-thing in `--fields due` as in `due<+7d`, plus `id` and `score`. `data.<key>`
-picks one entry out of the task data; `data` takes the whole map.
+thing in `--fields due` as in `due<+7d`, plus `id`, `score` and
+`score_breakdown`. `data.<key>` picks one entry out of the task data; `data`
+takes the whole map. Two spellings for one concept is how a tool becomes hard to
+learn, so those three are the only additions.
 
 A field you did not ask for is **absent** from the object, not `null` — `null`
 already means "this task has no due date", and a consumer could not tell the
@@ -1225,8 +1377,24 @@ Projection does not change which tasks match: `--fields id` with a filter on
 `notes:x` still filters on notes. The default returns every field, so this
 changes nothing until you ask for it.
 
-The table output is unaffected for now — it already shows a fixed set of
-columns.
+**It applies to JSON only.** `--fields` without `--json` (or `--format json`) is
+a usage error — *"--fields applies to JSON output; add --json"* — not a silent
+no-op. The table has a fixed set of columns and cannot honour the request, and a
+flag that appears to work while doing nothing is the worse of the two failures.
+
+**`created` and `updated` cannot be projected.** They can be *filtered*
+(`created>2026-08-01`), because the listing reads them out of git history for
+exactly that purpose, but they are not part of the task object — there is
+nothing for a projection to keep. Naming one is refused with that explanation
+rather than returning an object quietly missing a field you believe you asked
+for.
+
+**`score` is not a task field either**, but for the opposite reason: it is
+computed, and it sits *beside* the task in the response rather than inside it.
+So `--fields score` on its own gives you the score next to an empty task object,
+which is almost never the intent — `--fields id,score` is what you want, and
+`--fields id,title,score` is the usual shape. `score_breakdown` works the same
+way, and on `next show --json` both come back only when named.
 
 ### Explaining a query
 
@@ -1234,20 +1402,21 @@ columns.
 when a query returns something unexpected:
 
 ```sh
-next list --explain printer
+next list --explain bug
 ```
 
 ```
-Query:    printer
-Parsed:   printer
+Query:    bug
+Parsed:   bug
 
 Read as SEARCHES (text, not tags):
-  printer
+  bug
   A bare word searches the title, description, notes and url.
-  For the TAG of that name, write +printer.
+  For the TAG of that name, write +bug.
 
 Execution:
-  pushed into SQL:  nothing (no cache for this query)
+  pushed into SQL:   the status gate only
+  the filter itself: evaluated in memory
   candidates loaded: 12
   matched:           0
 
@@ -1256,13 +1425,36 @@ start dates, blocked tasks and parents with open subtasks —
 try --all to see past it.
 ```
 
+The search warning is deliberately quiet, because a diagnostic that cries wolf
+is one people stop reading. It appears only when the search was **unscoped** —
+`title:bug` already says out loud that it is a text search, so there is nothing
+to point out — and it offers the `+bug` spelling only when `bug` is a tag that
+actually exists in this repository. Suggesting a tag nobody has ever created
+would send the reader off to debug a query that was never going to work.
+
 It also reports the terms that scope the whole view (`parent:`, `context:`,
 `user:`), and says so plainly when no filter arrived at all — usually a sign
 the shell consumed it.
 
+Over the archive (`next list --archived --explain`) the execution block reports
+the compiled SQL `WHERE` clause instead, and whether SQL owned the answer or
+merely narrowed the rows for a re-check in memory. When it merely narrowed them
+the candidate line reads:
+
+```
+  candidates loaded: not counted (SQL paginated)
+```
+
+The rows were never all loaded, so there is no number to report, and inventing
+one is the single thing an explanation must not do. The closing hint drops its
+`--all` suggestion there too: `--archived` and `--all` cannot be combined, and
+advice that the argument parser would reject is worse than no advice.
+
 ### Not yet supported
 
-- `score` cannot be filtered on: a task's score is computed after filtering.
+- `score` cannot be filtered on: a task's score is computed after filtering. It
+  *can* be projected — see [Choosing which fields come back](#choosing-which-fields-come-back) —
+  because projection happens after scoring, not before.
 
 ---
 
