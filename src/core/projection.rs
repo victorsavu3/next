@@ -10,7 +10,10 @@
 //! - **One vocabulary.** Field names are the ones the filter grammar already
 //!   uses ([`Field::name`]), so `due` means the same thing in `--fields due` as
 //!   in `due<+7d`. Two spellings for one concept is how a tool becomes hard to
-//!   learn, so the few extras (`id`, `score`) are the only additions.
+//!   learn, so the few extras (`id`, `score`, `score_breakdown`) are the only
+//!   additions. The vocabularies are not identical, though: `created` and
+//!   `updated` are filterable but come from git history rather than the task
+//!   object, so they are refused — with an explanation, not a "typo?" message.
 //! - **Omit, do not null.** A field that was not asked for is ABSENT from the
 //!   JSON object rather than present as `null`. `null` already means "this task
 //!   has no due date", and a consumer cannot tell the two apart otherwise.
@@ -24,6 +27,15 @@ use serde_json::Value;
 use crate::core::error::{Result, TaskError};
 
 /// The set of fields a caller asked for.
+///
+/// Two of the projectable names are not task fields at all. `score` and
+/// `score_breakdown` are computed per query and live in the envelope *beside*
+/// the task, never inside it, so naming one on its own is legal and leaves the
+/// task with nothing: `--fields score` returns `{"score":4.0,"task":{}}`, and
+/// under `--archived`, where a page carries bare tasks and no envelope to hold
+/// a score, every item comes back as `{}`. That is "omit, do not null" working
+/// as specified rather than a bug — but it surprises everyone once, so it is
+/// written down here. `--fields id,score` is what is almost always meant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Projection {
     /// JSON keys of the task object to keep.
@@ -36,6 +48,9 @@ pub struct Projection {
     /// Whether the caller wants the computed score, which lives outside the
     /// task object.
     score: bool,
+    /// Whether the caller wants the score breakdown — the per-factor object
+    /// `get_task` and `show --json` return beside the score.
+    score_breakdown: bool,
 }
 
 /// Every projectable name, paired with the JSON key it selects.
@@ -66,6 +81,15 @@ const FIELDS: &[(&str, &str)] = &[
     ("data", "data"),
 ];
 
+/// Filter-grammar fields that no task object carries.
+///
+/// `created:` and `updated:` are read from the file's git history when a query
+/// runs, so `created>2026-01-01` works while `--fields created` cannot: there
+/// is no key to keep. Refusing them is right; refusing them as "unknown field"
+/// is not, because it sends the reader looking for a typo in a name the filter
+/// grammar accepts three lines further up the same command.
+const GIT_DERIVED: &[&str] = &["created", "updated"];
+
 /// The fields returned when a caller asks for none.
 ///
 /// Everything, so that adding projection changes no existing response. Making
@@ -78,12 +102,15 @@ impl Projection {
     ///
     /// An unknown name is an error listing what is available — silently
     /// dropping it would return a response missing a field the caller believes
-    /// they asked for, which is worse than failing.
+    /// they asked for, which is worse than failing. A name the *filter* knows
+    /// but the task object does not ([`GIT_DERIVED`]) gets its own message, so
+    /// the reader is told why rather than left to hunt for a typo.
     pub fn parse(names: &[String]) -> Result<Self> {
         let mut keys = Vec::new();
         let mut data_keys = Vec::new();
         let mut all_data = false;
         let mut score = false;
+        let mut score_breakdown = false;
 
         for name in names {
             let name = name.trim();
@@ -93,6 +120,17 @@ impl Projection {
             if name == "score" {
                 score = true;
                 continue;
+            }
+            if name == "score_breakdown" {
+                score_breakdown = true;
+                continue;
+            }
+            if GIT_DERIVED.contains(&name) {
+                return Err(TaskError::Other(format!(
+                    "{name:?} comes from git history, not the task object — you \
+                     can filter on it ({name}>2026-01-01) but there is no field \
+                     to return"
+                )));
             }
             if let Some(key) = name.strip_prefix("data.") {
                 if key.is_empty() {
@@ -114,6 +152,7 @@ impl Projection {
                 None => {
                     let mut known: Vec<&str> = FIELDS.iter().map(|(n, _)| *n).collect();
                     known.push("score");
+                    known.push("score_breakdown");
                     known.push("data.<key>");
                     return Err(TaskError::Other(format!(
                         "unknown field {name:?} — expected one of {}",
@@ -128,13 +167,14 @@ impl Projection {
             data_keys,
             all_data,
             score,
+            score_breakdown,
         })
     }
 
     /// Whether the caller asked for anything. An empty projection means "give
     /// me everything", so callers can skip the work entirely.
     pub fn is_empty(&self) -> bool {
-        self.keys.is_empty() && !self.score
+        self.keys.is_empty() && !self.score && !self.score_breakdown
     }
 
     /// Trims a serialised task in place.
@@ -168,6 +208,40 @@ impl Projection {
             self.apply_to_task(task);
         }
         map.retain(|k, _| k == "task" || (k == "score" && self.score));
+    }
+
+    /// Trims a single-task detail envelope — `{ task, score, score_breakdown,
+    /// children }`, what `get_task` and `show --json` return.
+    ///
+    /// `score` and `score_breakdown` follow the rule a listing already applies
+    /// to `score`: present by default, dropped as soon as the caller names
+    /// anything and does not name them. The breakdown is the largest
+    /// non-prose object in the response and the one a caller asking for
+    /// `id,title` has least use for, so surviving every projection made the
+    /// stated driver — payload size — untrue on the two surfaces that return
+    /// it. `children` are tasks, so they take the task projection rather than
+    /// disappearing.
+    pub fn apply_to_detail(&self, detail: &mut Value) {
+        if self.is_empty() {
+            return;
+        }
+        let Some(map) = detail.as_object_mut() else {
+            return;
+        };
+        if let Some(task) = map.get_mut("task") {
+            self.apply_to_task(task);
+        }
+        if let Some(children) = map.get_mut("children").and_then(|v| v.as_array_mut()) {
+            for child in children {
+                self.apply_to_task(child);
+            }
+        }
+        if !self.score {
+            map.remove("score");
+        }
+        if !self.score_breakdown {
+            map.remove("score_breakdown");
+        }
     }
 
     /// Trims every item of a `Page` of scored tasks, leaving the pagination
@@ -281,6 +355,49 @@ mod tests {
         assert!(scored.get("score").is_none());
     }
 
+    fn detail() -> Value {
+        serde_json::json!({
+            "task": sample(),
+            "score": 4.5,
+            "score_breakdown": { "total": 4.5, "age": 1.0, "priority": 2.0 },
+            "children": [sample()],
+        })
+    }
+
+    #[test]
+    fn a_detail_keeps_the_breakdown_only_when_asked() {
+        // No projection: the response is untouched, breakdown included.
+        let mut d = detail();
+        let before = d.clone();
+        proj(&[]).apply_to_detail(&mut d);
+        assert_eq!(d, before);
+
+        // A projection that does not name them drops both — the same rule a
+        // listing applies to `score`.
+        let mut d = detail();
+        proj(&["id", "title"]).apply_to_detail(&mut d);
+        assert!(d.get("score").is_none(), "{d}");
+        assert!(d.get("score_breakdown").is_none(), "{d}");
+        assert_eq!(d["task"].as_object().unwrap().len(), 2);
+        assert_eq!(
+            d["children"][0].as_object().unwrap().len(),
+            2,
+            "children take the same shape as the task: {d}"
+        );
+
+        // Naming one keeps that one only.
+        let mut d = detail();
+        proj(&["id", "score_breakdown"]).apply_to_detail(&mut d);
+        assert!(d.get("score_breakdown").is_some(), "{d}");
+        assert!(d.get("score").is_none(), "{d}");
+
+        // …and `score_breakdown` alone is enough to make the projection
+        // non-empty, so the task is trimmed to nothing rather than ignored.
+        let mut d = detail();
+        proj(&["score_breakdown"]).apply_to_detail(&mut d);
+        assert!(d["task"].as_object().unwrap().is_empty(), "{d}");
+    }
+
     #[test]
     fn a_page_keeps_its_envelope() {
         let mut page = serde_json::json!({
@@ -301,5 +418,25 @@ mod tests {
         assert!(msg.contains("data.<key>"), "{msg}");
 
         assert!(Projection::parse(&["data.".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn a_git_derived_field_says_so_instead_of_unknown() {
+        for name in GIT_DERIVED {
+            let msg = Projection::parse(&[(*name).to_owned()])
+                .unwrap_err()
+                .to_string();
+            let lower = msg.to_lowercase();
+            assert!(lower.contains("git"), "{name}: {msg}");
+            assert!(
+                lower.contains("filter"),
+                "{name}: the filter still takes it, and the message must say \
+                 so: {msg}"
+            );
+            assert!(
+                !msg.contains("unknown field"),
+                "{name} is not a typo: {msg}"
+            );
+        }
     }
 }

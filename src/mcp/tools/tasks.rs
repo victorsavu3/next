@@ -214,16 +214,10 @@ pub fn get_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
         "score_breakdown": breakdown,
         "children": children,
     });
-    if !projection.is_empty() {
-        projection.apply_to_task(&mut out["task"]);
-        // Children get the same shape — a caller asking for `id,title` wants
-        // that throughout, not one trimmed task beside a set of full ones.
-        if let Some(kids) = out["children"].as_array_mut() {
-            for child in kids {
-                projection.apply_to_task(child);
-            }
-        }
-    }
+    // Children get the same shape as the task — a caller asking for `id,title`
+    // wants that throughout, not one trimmed task beside a set of full ones —
+    // and `score`/`score_breakdown` go unless named, as they do in a listing.
+    projection.apply_to_detail(&mut out);
     Ok(out)
 }
 

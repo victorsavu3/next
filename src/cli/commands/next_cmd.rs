@@ -34,12 +34,29 @@ pub struct Args {
     #[arg(long, value_enum, conflicts_with = "json")]
     pub format: Option<crate::cli::commands::OutputFormat>,
 
+    /// Return only these fields, e.g. `--fields id,title,due`. JSON output
+    /// only. A field that was not asked for is absent from the object rather
+    /// than null.
+    #[arg(long, value_delimiter = ',')]
+    pub fields: Vec<String>,
+
     /// Filter expression, e.g. `+@work -bug due<+7d` or a bare word to search.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub tokens: Vec<String>,
 }
 
 pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
+    run_with_writer(args, ctx, &mut std::io::stdout())
+}
+
+/// The body, with output injectable so a test can read the JSON rather than
+/// only assert that the command did not error — `--fields` is a claim about
+/// what is printed, and printing to stdout leaves nothing to assert.
+pub fn run_with_writer(
+    args: Args,
+    ctx: &AppContext,
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
     let count = args.count.unwrap_or(ctx.config.next_count);
 
@@ -50,6 +67,15 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     filter_args.all_users = args.all_users;
     filter_args.json =
         crate::cli::commands::OutputFormat::resolve(args.format, args.json).is_json();
+
+    // Refused rather than ignored: the table has fixed columns, so honouring
+    // `--fields` there is impossible and dropping it silently returns output
+    // the caller did not ask for without saying so.
+    if !args.fields.is_empty() && !filter_args.json {
+        anyhow::bail!("--fields applies to JSON output; add --json");
+    }
+    // Parsed up front so an unknown field name fails before any work.
+    let projection = crate::core::projection::Projection::parse(&args.fields)?;
 
     let filter_set = filter_args.to_filter_set()?;
     let state = ctx.repo.store().get_state()?;
@@ -72,7 +98,13 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     scored.truncate(count);
 
     if filter_args.json {
-        println!("{}", serde_json::to_string_pretty(&scored)?);
+        let mut json = serde_json::to_value(&scored)?;
+        if let Some(items) = json.as_array_mut() {
+            for item in items {
+                projection.apply_to_scored(item);
+            }
+        }
+        writeln!(out, "{}", serde_json::to_string_pretty(&json)?)?;
     } else {
         render::render_task_list(&scored);
     }
