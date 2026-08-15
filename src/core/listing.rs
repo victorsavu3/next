@@ -19,6 +19,7 @@
 use std::collections::HashSet;
 
 use crate::core::domain::filter::FilterSet;
+use crate::core::domain::filter_expr::{Atom, Expr, Field, Named};
 use crate::core::domain::task::{Status, Task};
 use crate::core::error::Result;
 use crate::core::store::{Store, TaskQuery};
@@ -45,6 +46,116 @@ pub fn load_candidates(store: &dyn Store, filter: &FilterSet) -> Result<Vec<Task
             ..TaskQuery::unpaginated()
         })?
         .items)
+}
+
+/// The implicit status gate a query's own status predicate contradicts.
+///
+/// Nothing here changes what matches — the caller uses it to explain an empty
+/// result. See [`contradicted_status_gate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContradictedGate {
+    /// The default listing, which shows only open and started tasks.
+    Active,
+    /// `--closed`, which shows only done and cancelled ones.
+    Closed,
+}
+
+/// Whether `filter`'s status gate can only ever contradict the status
+/// predicate in its own query.
+///
+/// `next list status:done` is unconditionally empty: the gate admits open and
+/// started tasks, the query asks for done ones, and no task can be both. That
+/// is correct — the gate is what `--all` exists to lift — but on its own it
+/// reads as "there are no such tasks", which is a different statement. The
+/// answer is a hint, not a widened query: auto-lifting the gate from a query
+/// term would change which tasks a command returns, and that is a decision of
+/// its own.
+///
+/// `None` means the query and the gate can agree on at least one status, which
+/// includes every query that says nothing about status at all. A `--all`
+/// listing has no gate to contradict, so it is always `None`.
+///
+/// The caller should also check that the result really was empty: a query can
+/// contradict the gate on one branch and still match on another.
+pub fn contradicted_status_gate(filter: &FilterSet) -> Option<ContradictedGate> {
+    if filter.disable_implicit && !filter.closed_only {
+        return None;
+    }
+    let (gate, admitted) = if filter.closed_only {
+        (ContradictedGate::Closed, CLOSED)
+    } else {
+        (ContradictedGate::Active, ACTIVE)
+    };
+    (satisfiable_statuses(&filter.expr, false) & admitted == 0).then_some(gate)
+}
+
+// A set of statuses, one bit each, in `Status` declaration order.
+const OPEN: u8 = 1;
+const STARTED: u8 = 1 << 1;
+const DONE: u8 = 1 << 2;
+const CANCELLED: u8 = 1 << 3;
+const ACTIVE: u8 = OPEN | STARTED;
+const CLOSED: u8 = DONE | CANCELLED;
+const ANY: u8 = ACTIVE | CLOSED;
+
+/// The statuses a task could have and still satisfy `expr` (or fail it, when
+/// `negated`).
+///
+/// An over-approximation, deliberately: every non-status atom is treated as
+/// freely satisfiable at any status, so the result is never smaller than the
+/// true set. An empty result therefore proves the expression is unsatisfiable
+/// at those statuses, which is what the hint claims. Status atoms are pure
+/// functions of the status, so negating one is exact — that is what makes
+/// `not status:done` come out as the other three rather than as "anything".
+fn satisfiable_statuses(expr: &Expr, negated: bool) -> u8 {
+    match expr {
+        // De Morgan: a negated conjunction fails as soon as one part does.
+        Expr::And(parts) | Expr::Or(parts) => {
+            let disjunction = matches!(expr, Expr::Or(_)) != negated;
+            if disjunction {
+                parts
+                    .iter()
+                    .fold(0, |acc, p| acc | satisfiable_statuses(p, negated))
+            } else {
+                parts
+                    .iter()
+                    .fold(ANY, |acc, p| acc & satisfiable_statuses(p, negated))
+            }
+        }
+        Expr::Not(inner) => satisfiable_statuses(inner, !negated),
+        Expr::Atom(atom) => {
+            let matched = match atom {
+                Atom::Equals {
+                    field: Field::Status,
+                    values,
+                } => {
+                    let mut set = 0;
+                    for value in values {
+                        match crate::core::domain::filter_eval::status_from(&value.raw) {
+                            Some(Status::Open) => set |= OPEN,
+                            Some(Status::Started) => set |= STARTED,
+                            Some(Status::Done) => set |= DONE,
+                            Some(Status::Cancelled) => set |= CANCELLED,
+                            // An unspellable status matches nothing at any
+                            // status, so the gate is not why the result is
+                            // empty. Bow out rather than blame it.
+                            None => return ANY,
+                        }
+                    }
+                    set
+                }
+                Atom::Is(Named::Closed) => CLOSED,
+                // Everything else — including `status<x`, which the evaluator
+                // does not answer — says nothing about status.
+                _ => return ANY,
+            };
+            if negated {
+                ANY & !matched
+            } else {
+                matched
+            }
+        }
+    }
 }
 
 /// Extends `tasks` with any referenced parents that are not in the list, so
@@ -158,6 +269,64 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(load_candidates(&store, &filter).unwrap().len(), 1);
+    }
+
+    fn gate(query: &str, closed: bool, all: bool) -> Option<ContradictedGate> {
+        contradicted_status_gate(&FilterSet {
+            expr: crate::core::domain::filter_expr::parse(query).unwrap(),
+            closed_only: closed,
+            disable_implicit: all,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn a_status_the_gate_excludes_is_reported() {
+        for query in ["status:done", "status:cancelled", "is:closed"] {
+            assert_eq!(
+                gate(query, false, false),
+                Some(ContradictedGate::Active),
+                "{query} cannot match an open-only listing"
+            );
+        }
+        for query in ["status:open", "status:started", "not is:closed"] {
+            assert_eq!(
+                gate(query, true, false),
+                Some(ContradictedGate::Closed),
+                "{query} cannot match a --closed listing"
+            );
+        }
+    }
+
+    #[test]
+    fn a_query_the_gate_agrees_with_is_not_reported() {
+        // Nothing about status at all, and status terms the gate admits.
+        for query in ["", "+@work", "status:open", "is:closed or status:open"] {
+            assert_eq!(gate(query, false, false), None, "{query}");
+        }
+        // `--all` has no gate left to contradict.
+        assert_eq!(gate("status:done", false, true), None);
+        // An unknown status name matches nothing on its own merits; the gate
+        // is not the reason, so it must not be blamed.
+        assert_eq!(gate("status:nonesuch", false, false), None);
+    }
+
+    #[test]
+    fn a_contradiction_needs_every_branch_to_contradict() {
+        // One satisfiable branch is enough to keep quiet …
+        assert_eq!(gate("status:done or +@work", false, false), None);
+        // … but an `and` has to satisfy both.
+        assert_eq!(
+            gate("status:done and +@work", false, false),
+            Some(ContradictedGate::Active)
+        );
+        // Negation is exact for a status atom, so `-status:done` still leaves
+        // the open ones — and negating the whole disjunction removes them.
+        assert_eq!(gate("not status:done", false, false), None);
+        assert_eq!(
+            gate("not (status:open or status:started)", false, false),
+            Some(ContradictedGate::Active)
+        );
     }
 
     #[test]

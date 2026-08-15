@@ -73,6 +73,25 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     run_with_writer(args, ctx, &mut std::io::stdout())
 }
 
+/// What to say when the status gate was always going to swallow the query.
+///
+/// It names the flag that lifts the gate rather than lifting it: which tasks
+/// `next list` returns is not something a query term gets to change.
+fn gate_hint(gate: listing::ContradictedGate) -> &'static str {
+    match gate {
+        listing::ContradictedGate::Active => {
+            "No matches: this listing shows only open tasks, and the query asks \
+             for a status it excludes. Repeat it with `--all` to search every \
+             status."
+        }
+        listing::ContradictedGate::Closed => {
+            "No matches: `--closed` shows only closed tasks, and the query asks \
+             for a status it excludes. Drop `--closed`, or use `--all`, to \
+             search every status."
+        }
+    }
+}
+
 /// The body, with output injectable so a test can read what was printed —
 /// `--explain` in particular exists to be read, so its text is worth
 /// asserting rather than eyeballing.
@@ -215,6 +234,7 @@ pub fn run_with_writer(
         .or(args.limit.map(|n| n as u32))
         .or(ctx.config.list_limit.map(|n| n as u32))
         .unwrap_or(crate::core::store::DEFAULT_PAGE_SIZE);
+    let nothing_matched = scored.is_empty();
     let page = crate::core::store::paginate(scored, args.page, page_size);
 
     if filter_args.json {
@@ -226,6 +246,14 @@ pub fn run_with_writer(
         // nothing to do here yet.
         render::render_task_list(&page.items);
         render::render_page_footer(&page);
+        // An empty result the implicit gate was always going to produce says
+        // "no such tasks" when it means "not in this view". Naming the flag
+        // that widens it is the whole fix — what matched does not change.
+        if nothing_matched {
+            if let Some(gate) = listing::contradicted_status_gate(&filter_set) {
+                writeln!(out, "{}", gate_hint(gate))?;
+            }
+        }
     }
 
     Ok(())
