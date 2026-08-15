@@ -45,9 +45,9 @@ pub struct Args {
     #[arg(long)]
     pub explain: bool,
 
-    /// Return only these fields, e.g. `--fields id,title,due`. JSON output
-    /// only for now; the table already projects. A field that was not asked
-    /// for is absent from the object rather than null.
+    /// Return only these fields, e.g. `--fields id,title,due`. Requires
+    /// `--json`; the table prints a fixed set of columns. A field that was not
+    /// asked for is absent from the object rather than null.
     #[arg(long, value_delimiter = ',')]
     pub fields: Vec<String>,
 
@@ -69,6 +69,22 @@ pub struct Args {
     pub tokens: Vec<String>,
 }
 
+impl Args {
+    /// How many tasks fit on one page: `--page-size`, then the `-n`/`--limit`
+    /// spelling of the same thing, then `list_limit` from config, then the
+    /// built-in default.
+    ///
+    /// One function because there is one answer. The archived path used to
+    /// stop at `--limit` and fall through to the default, so the same config
+    /// gave `next list` and `next list --archived` different page sizes.
+    fn page_size(&self, list_limit: Option<usize>) -> u32 {
+        self.page_size
+            .or(self.limit.map(|n| n as u32))
+            .or(list_limit.map(|n| n as u32))
+            .unwrap_or(crate::core::store::DEFAULT_PAGE_SIZE)
+    }
+}
+
 pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     run_with_writer(args, ctx, &mut std::io::stdout())
 }
@@ -83,8 +99,12 @@ pub fn run_with_writer(
 ) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
 
-    crate::core::reject_flag_like_tokens(&args.tokens, "next list --help")?;
+    crate::cli::commands::reject_misplaced_flags::<Args>(&args.tokens, "next list")?;
     let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
+    crate::cli::commands::reject_fields_without_json(&args.fields, format.is_json())?;
+    // Resolved before the tokens are moved out of `args`, and once for both
+    // the archived and the active path.
+    let page_size = args.page_size(ctx.config.list_limit);
     // Kept for `--explain`, which shows the query as the user typed it —
     // after argv joining, which is where a shell-eaten filter goes missing.
     let raw_query = args.tokens.join(" ");
@@ -129,10 +149,7 @@ pub fn run_with_writer(
             archived: true,
             filter: Some(filter_set.to_store_filter(today)?),
             page: args.page,
-            page_size: args
-                .page_size
-                .or(args.limit.map(|n| n as u32))
-                .unwrap_or(crate::core::store::DEFAULT_PAGE_SIZE),
+            page_size,
             ..Default::default()
         })?;
         if args.count {
@@ -209,12 +226,6 @@ pub fn run_with_writer(
         return Ok(());
     }
 
-    // Precedence: --page-size, then the legacy --limit / list_limit caps.
-    let page_size = args
-        .page_size
-        .or(args.limit.map(|n| n as u32))
-        .or(ctx.config.list_limit.map(|n| n as u32))
-        .unwrap_or(crate::core::store::DEFAULT_PAGE_SIZE);
     let page = crate::core::store::paginate(scored, args.page, page_size);
 
     if filter_args.json {
@@ -222,11 +233,53 @@ pub fn run_with_writer(
         projection.apply_to_page(&mut json);
         writeln!(out, "{}", serde_json::to_string_pretty(&json)?)?;
     } else {
-        // The table already shows a fixed set of columns, so `--fields` has
-        // nothing to do here yet.
+        // `--fields` cannot reach here: it is refused without `--json` above,
+        // rather than parsed and quietly ignored.
         render::render_task_list(&page.items);
         render::render_page_footer(&page);
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The defaults clap would produce, with only the paging fields set.
+    fn paging(page_size: Option<u32>, limit: Option<usize>) -> Args {
+        Args {
+            future: false,
+            all: false,
+            closed: false,
+            archived: false,
+            all_users: false,
+            json: false,
+            format: None,
+            count: false,
+            explain: false,
+            fields: vec![],
+            limit,
+            page_size,
+            page: 1,
+            tokens: vec![],
+        }
+    }
+
+    #[test]
+    fn the_page_size_precedence_is_one_ladder() {
+        let default = crate::core::store::DEFAULT_PAGE_SIZE;
+        assert_eq!(
+            paging(Some(7), Some(5)).page_size(Some(3)),
+            7,
+            "--page-size"
+        );
+        assert_eq!(paging(None, Some(5)).page_size(Some(3)), 5, "then --limit");
+        assert_eq!(paging(None, None).page_size(Some(3)), 3, "then list_limit");
+        assert_eq!(
+            paging(None, None).page_size(None),
+            default,
+            "then the default"
+        );
+    }
 }
