@@ -14,7 +14,8 @@
 use std::fmt::Write as _;
 
 use crate::core::domain::filter::FilterSet;
-use crate::core::domain::filter_expr::{Atom, Expr};
+use crate::core::domain::filter_expr::{Atom, Expr, TextField};
+use crate::core::domain::tag::validate_tag;
 
 /// Where a query's work actually happened.
 ///
@@ -62,22 +63,26 @@ pub fn render(
     // The bare-token break, made visible. This is the single most common
     // reason a query surprises someone, so it is called out by name rather
     // than left to be inferred from the AST above.
-    let searches = search_terms(&filter.expr);
-    if !searches.is_empty() {
+    //
+    // Only bare words qualify: someone who wrote `title:foo` named the field on
+    // purpose and knows it searched, so warning them would be noise.
+    let bare: Vec<SearchTerm> = search_terms(&filter.expr)
+        .into_iter()
+        .filter(|s| s.field.is_none())
+        .collect();
+    if !bare.is_empty() {
         out.push_str("Read as SEARCHES (text, not tags):\n");
-        for term in &searches {
-            let _ = writeln!(out, "  {term}");
+        for term in &bare {
+            let _ = writeln!(out, "  {}", term.rendered());
         }
-        let _ = writeln!(
-            out,
-            "  A bare word searches the title, description, notes and url.\n\
-             \x20 For the TAG of that name, write +{}.\n",
-            searches[0]
-                .trim_matches('"')
-                .split(' ')
-                .next()
-                .unwrap_or("tag")
-        );
+        out.push_str("  A bare word searches the title, description, notes and url.\n");
+        // Only offered when it is a query the user can actually run: a tag
+        // named `cold tier` or `arch*` cannot exist, and suggesting one is
+        // worse than saying nothing.
+        if let Some(tag) = bare.iter().find_map(SearchTerm::as_tag) {
+            let _ = writeln!(out, "  For the TAG of that name, write +{tag}.");
+        }
+        out.push('\n');
     }
 
     // The view terms, which are not per-task predicates and are easy to forget
@@ -144,15 +149,59 @@ pub fn render(
     out
 }
 
-/// Every search term in the expression, in source order, rendered the way the
-/// user would have to type it.
-fn search_terms(expr: &Expr) -> Vec<String> {
+/// One search atom, kept whole rather than pre-rendered because two different
+/// questions are asked of it: what to print, and whether the user could have
+/// meant a tag by it.
+struct SearchTerm {
+    /// `None` for a bare word — the only shape the "you meant a tag" block is
+    /// about, since naming a field is never the bare-token mistake.
+    field: Option<TextField>,
+    term: String,
+    prefix: bool,
+}
+
+impl SearchTerm {
+    /// The term the way the user would have to type it.
+    fn rendered(&self) -> String {
+        let mut out = String::new();
+        if let Some(f) = &self.field {
+            out.push_str(f.name());
+            out.push(':');
+        }
+        if self.term.contains(' ') {
+            let _ = write!(out, "\"{}\"", self.term);
+        } else {
+            out.push_str(&self.term);
+        }
+        if self.prefix {
+            out.push('*');
+        }
+        out
+    }
+
+    /// The tag this term could have been, or `None` when no tag may carry that
+    /// name — so that `+X` is never suggested unless `+X` parses.
+    ///
+    /// A prefix search is excluded outright: `arch*` asked to match by prefix
+    /// and `+arch` is an exact tag lookup, so offering it would answer a
+    /// question that was not asked.
+    fn as_tag(&self) -> Option<&str> {
+        if self.prefix || self.field.is_some() {
+            return None;
+        }
+        validate_tag(&self.term).ok()?;
+        Some(&self.term)
+    }
+}
+
+/// Every search term in the expression, in source order.
+fn search_terms(expr: &Expr) -> Vec<SearchTerm> {
     let mut found = Vec::new();
     collect_searches(expr, &mut found);
     found
 }
 
-fn collect_searches(expr: &Expr, out: &mut Vec<String>) {
+fn collect_searches(expr: &Expr, out: &mut Vec<SearchTerm>) {
     match expr {
         Expr::And(parts) | Expr::Or(parts) => {
             for p in parts {
@@ -164,22 +213,11 @@ fn collect_searches(expr: &Expr, out: &mut Vec<String>) {
             field,
             term,
             prefix,
-        }) => {
-            let mut rendered = String::new();
-            if let Some(f) = field {
-                rendered.push_str(f.name());
-                rendered.push(':');
-            }
-            if term.contains(' ') {
-                let _ = write!(rendered, "\"{term}\"");
-            } else {
-                rendered.push_str(term);
-            }
-            if *prefix {
-                rendered.push('*');
-            }
-            out.push(rendered);
-        }
+        }) => out.push(SearchTerm {
+            field: *field,
+            term: term.clone(),
+            prefix: *prefix,
+        }),
         Expr::Atom(_) => {}
     }
 }
@@ -291,7 +329,60 @@ mod tests {
     #[test]
     fn a_scoped_search_and_a_prefix_render_the_way_they_were_typed() {
         let expr = parse("title:arch* notes:\"cold tier\"").unwrap();
-        let terms = search_terms(&expr);
-        assert_eq!(terms, vec!["title:arch*", "notes:\"cold tier\""]);
+        let rendered: Vec<String> = search_terms(&expr)
+            .iter()
+            .map(SearchTerm::rendered)
+            .collect();
+        assert_eq!(rendered, vec!["title:arch*", "notes:\"cold tier\""]);
+    }
+
+    /// Naming the field is not the bare-token mistake, so the block that warns
+    /// about it has nothing to say — and `+title:foo` is not even a query.
+    #[test]
+    fn a_scoped_search_is_not_reported_as_the_bare_token_mistake() {
+        let out = render("title:foo", &set("title:foo"), 10, 0, &Execution::InMemory);
+        assert!(!out.contains("Read as SEARCHES"), "{out}");
+        assert!(!out.contains("write +"), "{out}");
+    }
+
+    /// The block still names what searched — that part is useful — but a term
+    /// no tag could be named after gets no suggestion.
+    #[test]
+    fn a_term_that_cannot_be_a_tag_gets_the_block_without_a_suggestion() {
+        for query in ["\"cold tier\"", "arch*", "café"] {
+            let out = render(query, &set(query), 10, 0, &Execution::InMemory);
+            assert!(out.contains("Read as SEARCHES"), "{query}: {out}");
+            assert!(!out.contains("write +"), "{query}: {out}");
+        }
+    }
+
+    /// Everything this module suggests has to parse as the tag it claims to be.
+    #[test]
+    fn every_suggested_tag_parses_as_a_tag() {
+        for query in ["bug", "wifi-router", "arch*", "\"cold tier\"", "café"] {
+            let out = render(query, &set(query), 10, 0, &Execution::InMemory);
+            let Some(rest) = out.split("write +").nth(1) else {
+                continue;
+            };
+            let suggested: String = rest
+                .chars()
+                .take_while(|c| !c.is_whitespace() && *c != '.')
+                .collect();
+            parse(&format!("+{suggested}"))
+                .unwrap_or_else(|e| panic!("{query}: `+{suggested}` does not parse: {e}"));
+            validate_tag(&suggested)
+                .unwrap_or_else(|e| panic!("{query}: `+{suggested}` is not a tag: {e}"));
+        }
+    }
+
+    /// A bare word beside a scoped one still earns the suggestion: the bare
+    /// one is the mistake, and it is the one that gets named.
+    #[test]
+    fn the_suggestion_names_the_bare_word_not_the_scoped_one() {
+        let query = "title:arch bug";
+        let out = render(query, &set(query), 10, 0, &Execution::InMemory);
+        assert!(out.contains("Read as SEARCHES"), "{out}");
+        assert!(out.contains("write +bug"), "{out}");
+        assert!(!out.contains("  title:arch\n"), "{out}");
     }
 }
