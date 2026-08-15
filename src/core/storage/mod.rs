@@ -269,7 +269,7 @@ pub fn load_scoring(root: &Path) -> crate::core::scoring::ScoringConfig {
 
 /// Returns the path where the state file for `root` is stored.
 ///
-/// Uses `$XDG_STATE_HOME/task-manager/<hash>/state.toml` where `<hash>` is an
+/// Uses `$XDG_STATE_HOME/next/<hash>/state.toml` where `<hash>` is an
 /// FNV-1a hash of the canonical repository root path.  Each repository gets its
 /// own isolated state directory, so multiple repos can coexist without conflict.
 pub fn state_path_for_repo(root: &Path) -> PathBuf {
@@ -289,7 +289,7 @@ pub(crate) fn state_dir_for_repo(root: &Path) -> PathBuf {
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
                 .join(".local/state")
         })
-        .join("task-manager");
+        .join(crate::core::APP_DIR);
     base.join(hash)
 }
 
@@ -301,4 +301,39 @@ fn fnv1a_hash(s: &str) -> String {
         hash = hash.wrapping_mul(1099511628211);
     }
     format!("{hash:016x}")
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    /// The XDG directory is part of the user's filesystem, so its name is an
+    /// interface: changing it silently orphans everyone's state. It was left
+    /// as `task-manager` for weeks after the rename to `next` precisely
+    /// because nothing asserted it.
+    #[test]
+    fn the_state_path_lives_under_the_app_directory() {
+        let path = state_path_for_repo(Path::new("/home/u/tasks"));
+        let s = path.to_string_lossy();
+        assert!(
+            s.contains(&format!("/{}/", crate::core::APP_DIR)),
+            "state path should sit under {}: {s}",
+            crate::core::APP_DIR
+        );
+        assert!(
+            !s.contains("task-manager"),
+            "the pre-rename directory name must be gone: {s}"
+        );
+        assert!(s.ends_with("state.toml"), "{s}");
+    }
+
+    /// Two repositories must not share a state directory — the hash is what
+    /// keeps them apart.
+    #[test]
+    fn each_repository_gets_its_own_directory() {
+        let a = state_path_for_repo(Path::new("/home/u/tasks"));
+        let b = state_path_for_repo(Path::new("/home/u/other"));
+        assert_ne!(a, b);
+        assert_eq!(a, state_path_for_repo(Path::new("/home/u/tasks")));
+    }
 }

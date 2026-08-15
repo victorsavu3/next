@@ -59,7 +59,7 @@ Available on every subcommand:
 
 | Flag | Description |
 |------|-------------|
-| `--config <path>` | Config file to use (default: `$XDG_CONFIG_HOME/task-manager/config.toml`). |
+| `--config <path>` | Config file to use (default: `$XDG_CONFIG_HOME/next/config.toml`). |
 | `--repo <path>` | Task repository root. Overrides `repository` in the config and the upward `.git` search. |
 | `--autopull` / `--no-autopull` | Force the pre-command staleness pull on or off for this invocation. Overrides `sync.autopull` in config. |
 | `--autopush` / `--no-autopush` | Force the post-mutation push on or off for this invocation. Overrides `sync.autopush` in config. |

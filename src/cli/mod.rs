@@ -181,7 +181,7 @@ impl LogLevel {
 #[derive(Parser, Debug)]
 #[command(name = "next", version, about)]
 pub struct Cli {
-    /// Path to the configuration file (default: $XDG_CONFIG_HOME/task-manager/config.toml).
+    /// Path to the configuration file (default: $XDG_CONFIG_HOME/next/config.toml).
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
 

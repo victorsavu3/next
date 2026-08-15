@@ -105,7 +105,7 @@ impl Default for SyncConfig {
 
 /// Application-wide configuration.
 ///
-/// Loaded from `$XDG_CONFIG_HOME/task-manager/config.toml`.
+/// Loaded from `$XDG_CONFIG_HOME/next/config.toml`.
 /// All fields are optional; missing fields use the values shown in
 /// [`Config::default`].
 ///

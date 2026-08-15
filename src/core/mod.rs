@@ -1,6 +1,16 @@
 //! Core library — everything that is not a feature-gated binary
 //! (`cli` / `mcp` / `forgejo`). Built with no features, the crate is just this.
 
+/// The directory this application owns under `$XDG_CONFIG_HOME` and
+/// `$XDG_STATE_HOME`.
+///
+/// One constant rather than a literal at each of the four sites that build
+/// such a path. It was `task-manager` until the crate, the CLI and the
+/// repository were all renamed to `next` and this was left behind — four
+/// copies is exactly how that happens, and how a future rename would half-land
+/// again.
+pub const APP_DIR: &str = "next";
+
 pub mod archiver;
 pub mod bootstrap;
 pub mod config;

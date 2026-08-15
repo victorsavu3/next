@@ -77,7 +77,7 @@ before writing the TOML file.
 ### 1.3 Global state
 
 Machine-local state (the per-tag state and the active users) MUST be stored
-at `$XDG_STATE_HOME/task-manager/<fnv1a-hash-of-repo-path>/state.toml`.  This path is
+at `$XDG_STATE_HOME/next/<fnv1a-hash-of-repo-path>/state.toml`.  This path is
 never inside the repository and MUST NOT be committed to git.
 
 ```toml
@@ -126,7 +126,7 @@ share the same descriptions. The `next tag describe` command writes these files.
   .gitignore                     # MUST contain ".next.db" (and the other generated files, §8.0)
   .next.db                       # SQLite read cache; MUST NOT be committed to git
 
-$XDG_STATE_HOME/task-manager/<repo-hash>/
+$XDG_STATE_HOME/next/<repo-hash>/
   state.toml                     # machine-local state; MUST NOT be committed to git
 ```
 
@@ -723,7 +723,7 @@ everyday command list stays small (room for future integrity/cleanup operations)
 ## 9. Storage and sync configuration
 
 Tasks are stored as TOML files in a git repository. The repository root is determined by the
-`--repo` flag, then `repository` in `$XDG_CONFIG_HOME/task-manager/config.toml`, and otherwise
+`--repo` flag, then `repository` in `$XDG_CONFIG_HOME/next/config.toml`, and otherwise
 by walking up from the current working directory until a `.git` directory is found. There is
 no pluggable-backend selection — the local git store is the only backend.
 
@@ -800,7 +800,7 @@ default, like `mcp`) and link the `next` library directly.
   `set-interval <name> <secs>|--clear` (user override of the sync interval),
   `enable`/`disable <name>` (toggle the periodic sync), and `list`.
 - The registry MUST be machine-local — stored in the `[[plugin]]` section of the combined
-  `state.toml` in the per-repo state directory (`$XDG_STATE_HOME/task-manager/<hash>/`),
+  `state.toml` in the per-repo state directory (`$XDG_STATE_HOME/next/<hash>/`),
   never committed to git, guarded by the single machine-local state lock
   (`.state.toml.lock`) shared with the global and sync state, independent of the repo lock.
   Plugin commands are stored as argv (never shell-parsed).

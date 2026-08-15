@@ -1,7 +1,7 @@
 //! The single machine-local state file, `state.toml`.
 //!
 //! Three machine-local subsystems share one file under
-//! `$XDG_STATE_HOME/task-manager/<hash>/state.toml`, guarded by one re-entrant
+//! `$XDG_STATE_HOME/next/<hash>/state.toml`, guarded by one re-entrant
 //! lock (`.state.toml.lock`):
 //!
 //! * the global runtime [`GlobalState`] (contexts, resources, users) at the top

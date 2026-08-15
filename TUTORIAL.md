@@ -14,7 +14,7 @@ next init
 Point `next` at your repository from any directory:
 
 ```toml
-# $XDG_CONFIG_HOME/task-manager/config.toml
+# $XDG_CONFIG_HOME/next/config.toml
 repository = "/home/you/tasks"
 ```
 

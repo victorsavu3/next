@@ -40,8 +40,8 @@ redirect stderr to a file to capture them.
 The TUI reuses the same [`Config`] schema as the CLI but loads its **own** file,
 `tui.toml`, with this precedence:
 
-1. `$XDG_CONFIG_HOME/task-manager/tui.toml` — the TUI's own config (source: `tui.toml`)
-2. `$XDG_CONFIG_HOME/task-manager/config.toml` — the CLI's config, used when `tui.toml` is absent (source: `config.toml`)
+1. `$XDG_CONFIG_HOME/next/tui.toml` — the TUI's own config (source: `tui.toml`)
+2. `$XDG_CONFIG_HOME/next/config.toml` — the CLI's config, used when `tui.toml` is absent (source: `config.toml`)
 3. Built-in defaults (source: `defaults`)
 
 `--config <path>` overrides the search entirely and is reported as the `tui.toml` source.

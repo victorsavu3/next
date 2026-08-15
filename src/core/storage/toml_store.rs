@@ -30,7 +30,7 @@ impl TomlStore {
     /// Opens (or initialises) a store rooted at `root`.
     ///
     /// `state_path` is the external path where `state.toml` will be kept
-    /// (typically `$XDG_STATE_HOME/task-manager/<hash>/state.toml`).
+    /// (typically `$XDG_STATE_HOME/next/<hash>/state.toml`).
     ///
     /// Creates `tasks/`, `tags/`, and the state directory if they do not exist.
     /// Migrates old `<root>/state.toml` to `state_path` on first open.

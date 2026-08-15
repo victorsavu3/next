@@ -392,7 +392,7 @@ for all kinds; `next tag require|exclude|accept|clear-state` manage the machine-
 state in `state.toml` and do not touch metadata.
 
 All machine-local state lives in a single `state.toml` at
-`$XDG_STATE_HOME/task-manager/<fnv1a-hash-of-canonical-repo-path>/state.toml`, computed by
+`$XDG_STATE_HOME/next/<fnv1a-hash-of-canonical-repo-path>/state.toml`, computed by
 `next::storage::state_path_for_repo(root)` and never committed to git.  It holds three
 sections (see `storage/machine_state.rs`, `MachineState`):
 
@@ -925,7 +925,7 @@ Accepted by `--due` and `--start` in `next add` and `next edit`.
 
 Two layers: machine-local CLI settings, and repo-stored scoring weights.
 
-### 11.1 Machine-local — `$XDG_CONFIG_HOME/task-manager/config.toml`
+### 11.1 Machine-local — `$XDG_CONFIG_HOME/next/config.toml`
 
 CLI-only (the MCP server and plugins do not read it); loaded once at startup, falls
 back to defaults when absent. Editable in place with `next config get/set`.

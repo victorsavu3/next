@@ -53,7 +53,7 @@ one brings it back automatically. Thresholds live in the committed
 off). See REQUIREMENTS.md §2.3 for the full lifecycle.
 
 Machine-local state (the per-tag state and the active users) is stored
-outside the repository in `$XDG_STATE_HOME/task-manager/<repo-hash>/state.toml` so it
+outside the repository in `$XDG_STATE_HOME/next/<repo-hash>/state.toml` so it
 is never committed or synced.
 
 ```
@@ -75,7 +75,7 @@ my-tasks/
     archive.toml               # committed archive policy (optional; absent = defaults)
   .next.db                     # SQLite read cache — not committed
 
-~/.local/state/task-manager/<repo-hash>/
+~/.local/state/next/<repo-hash>/
   state.toml                   # machine-local: per-tag state, active users
 ```
 
@@ -308,7 +308,7 @@ so you can raise the floor with `--log-level debug` while silencing a noisy modu
 
 `next` stores tasks locally as TOML files in a git repository.
 
-**Machine-local settings** live at `$XDG_CONFIG_HOME/task-manager/config.toml` (CLI only):
+**Machine-local settings** live at `$XDG_CONFIG_HOME/next/config.toml` (CLI only):
 
 ```toml
 repository            = "/home/alice/tasks"  # use next from any directory
@@ -550,7 +550,7 @@ next plugin list
 A plugin typically registers itself: after importing an external item as a task, it runs
 `next plugin watch <name> <task-id>` so it learns about later changes. Registrations are
 **machine-local** — stored in the `[[plugin]]` section of `state.toml` under
-`$XDG_STATE_HOME/task-manager/<hash>/`, never committed to git (plugin binaries are
+`$XDG_STATE_HOME/next/<hash>/`, never committed to git (plugin binaries are
 per-machine).
 
 ### Notification contract

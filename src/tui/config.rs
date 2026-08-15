@@ -31,9 +31,9 @@ impl ConfigSource {
     }
 }
 
-/// The directory holding the config files: `$XDG_CONFIG_HOME/task-manager`.
+/// The directory holding the config files: `$XDG_CONFIG_HOME/next`.
 fn config_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("task-manager"))
+    dirs::config_dir().map(|d| d.join(crate::core::APP_DIR))
 }
 
 /// Loads the TUI config, applying the `tui.toml` → `config.toml` → defaults

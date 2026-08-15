@@ -31,13 +31,13 @@ impl AppContext {
 }
 
 /// The CLI's default config-file location:
-/// `$XDG_CONFIG_HOME/task-manager/config.toml`.
+/// `$XDG_CONFIG_HOME/next/config.toml`.
 fn default_config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("task-manager").join("config.toml"))
+    dirs::config_dir().map(|d| d.join(crate::core::APP_DIR).join("config.toml"))
 }
 
 /// Loads configuration from the given path, or from
-/// `$XDG_CONFIG_HOME/task-manager/config.toml` when `override_path` is `None`.
+/// `$XDG_CONFIG_HOME/next/config.toml` when `override_path` is `None`.
 /// Returns `Config::default()` when the file is absent or unreadable.
 fn load_config(override_path: Option<&Path>) -> Config {
     let path = match override_path {

@@ -45,7 +45,7 @@ fn resolve_config_path(override_path: Option<&Path>) -> anyhow::Result<PathBuf> 
         return Ok(p.to_path_buf());
     }
     dirs::config_dir()
-        .map(|d| d.join("task-manager").join("config.toml"))
+        .map(|d| d.join(crate::core::APP_DIR).join("config.toml"))
         .context("cannot determine XDG config directory")
 }
 
@@ -53,7 +53,7 @@ fn load_config(config_path: Option<&Path>) -> Config {
     match config_path {
         Some(p) => crate::core::bootstrap::parse_config_file(p),
         None => {
-            let path = dirs::config_dir().map(|d| d.join("task-manager").join("config.toml"));
+            let path = dirs::config_dir().map(|d| d.join(crate::core::APP_DIR).join("config.toml"));
             match path {
                 Some(p) => crate::core::bootstrap::parse_config_file(&p),
                 None => Config::default(),
