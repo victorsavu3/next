@@ -45,9 +45,9 @@ pub struct Args {
     #[arg(long)]
     pub explain: bool,
 
-    /// Return only these fields, e.g. `--fields id,title,due`. JSON output
-    /// only for now; the table already projects. A field that was not asked
-    /// for is absent from the object rather than null.
+    /// Return only these fields, e.g. `--fields id,title,due`. Requires
+    /// `--json`; the table prints a fixed set of columns. A field that was not
+    /// asked for is absent from the object rather than null.
     #[arg(long, value_delimiter = ',')]
     pub fields: Vec<String>,
 
@@ -85,6 +85,7 @@ pub fn run_with_writer(
 
     crate::cli::commands::reject_misplaced_flags::<Args>(&args.tokens, "next list")?;
     let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
+    crate::cli::commands::reject_fields_without_json(&args.fields, format.is_json())?;
     // Kept for `--explain`, which shows the query as the user typed it —
     // after argv joining, which is where a shell-eaten filter goes missing.
     let raw_query = args.tokens.join(" ");
@@ -222,8 +223,8 @@ pub fn run_with_writer(
         projection.apply_to_page(&mut json);
         writeln!(out, "{}", serde_json::to_string_pretty(&json)?)?;
     } else {
-        // The table already shows a fixed set of columns, so `--fields` has
-        // nothing to do here yet.
+        // `--fields` cannot reach here: it is refused without `--json` above,
+        // rather than parsed and quietly ignored.
         render::render_task_list(&page.items);
         render::render_page_footer(&page);
     }

@@ -12,13 +12,14 @@ pub struct Args {
     #[arg(long)]
     pub json: bool,
 
-    /// Return only these fields, e.g. `--fields id,title,due`. JSON output
-    /// only. Applies to the task and its children alike.
+    /// Return only these fields, e.g. `--fields id,title,due`. Requires
+    /// `--json`. Applies to the task and its children alike.
     #[arg(long, value_delimiter = ',')]
     pub fields: Vec<String>,
 }
 
 pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
+    crate::cli::commands::reject_fields_without_json(&args.fields, args.json)?;
     let today = Local::now().date_naive();
     let id = resolve_task_id(ctx.repo.store(), &args.id)?;
     let task = ctx.repo.store().get_task(id)?;
