@@ -32,6 +32,7 @@ fn tree_args(all: bool) -> tree::Args {
         json: false,
         format: None,
         count: false,
+        fields: vec![],
         tokens: vec![],
     }
 }
@@ -239,6 +240,7 @@ fn capture_tree_closed(env: &common::TestEnv) -> String {
             json: false,
             format: None,
             count: false,
+            fields: vec![],
             tokens: vec![],
         },
         &env.ctx,
@@ -377,11 +379,89 @@ fn tree_json_output() {
             json: true,
             format: None,
             count: false,
+            fields: vec![],
             tokens: vec![],
         },
         &env.ctx,
     )
     .unwrap();
+}
+
+/// `--fields` trims every task in the array. The tree's JSON is the largest
+/// payload the tool emits, so projection matters most here.
+#[test]
+fn tree_json_projects_the_requested_fields() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            slug: Some("proj".into()),
+            description: Some("A long description nobody asked for".into()),
+            ..add_args("Parent project")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(
+        add::Args {
+            parent: Some("proj".into()),
+            ..add_args("Subtask")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let out = capture_tree_args(
+        &env,
+        tree::Args {
+            json: true,
+            fields: vec!["id".into(), "title".into()],
+            ..tree_args(false)
+        },
+    );
+    let items: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+    assert_eq!(items.len(), 2, "{out}");
+    for item in &items {
+        let keys: Vec<&str> = item.as_object().unwrap().keys().map(|k| &**k).collect();
+        assert_eq!(keys, ["id", "title"], "{item}");
+    }
+}
+
+/// An unknown field name is refused before the repository is read, not after.
+#[test]
+fn tree_rejects_an_unknown_field_name() {
+    let env = common::setup();
+    let err = tree::run_with_writer(
+        tree::Args {
+            json: true,
+            fields: vec!["nosuchfield".into()],
+            ..tree_args(false)
+        },
+        &env.ctx,
+        &mut Vec::new(),
+    )
+    .expect_err("an unknown field must be refused")
+    .to_string();
+    assert!(err.contains("unknown field"), "{err}");
+}
+
+/// The tree is a fixed rendering, so `--fields` has nothing to do there.
+/// Silently ignoring a flag the user typed is worse than refusing it.
+#[test]
+fn tree_fields_without_json_is_a_usage_error() {
+    let mut env = common::setup();
+    add::run(add_args("A task"), &mut env.ctx).unwrap();
+
+    let err = tree::run_with_writer(
+        tree::Args {
+            fields: vec!["id".into()],
+            ..tree_args(false)
+        },
+        &env.ctx,
+        &mut Vec::new(),
+    )
+    .expect_err("`tree --fields` without --json must be refused")
+    .to_string();
+    assert!(err.contains("--json"), "the message names the fix: {err}");
 }
 
 // ---------------------------------------------------------------------------

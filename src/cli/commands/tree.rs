@@ -36,6 +36,12 @@ pub struct Args {
     #[arg(long)]
     pub count: bool,
 
+    /// Return only these fields, e.g. `--fields id,title,due`. JSON output
+    /// only for now; the table already projects. A field that was not asked
+    /// for is absent from the object rather than null.
+    #[arg(long, value_delimiter = ',')]
+    pub fields: Vec<String>,
+
     /// Filter expression, e.g. `+@work -bug due<+7d` or a bare word to search.
     ///
     /// A task is shown when it matches, and so are its ancestors — a tree with
@@ -75,6 +81,15 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
 
 pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> anyhow::Result<()> {
     let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
+    // Parsed up front so an unknown field name fails before any work, rather
+    // than after a full scan. A projection the chosen format cannot honour is
+    // refused for the same reason: a flag that was typed and then ignored is
+    // worse than one that was refused.
+    let projection = crate::core::projection::Projection::parse(&args.fields)?;
+    if !args.fields.is_empty() && !format.is_json() {
+        anyhow::bail!("--fields applies to JSON output; add --json");
+    }
+
     let all_tasks = ctx.repo.store().list_tasks()?;
     let today = Local::now().date_naive();
 
@@ -161,10 +176,15 @@ pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> any
     }
 
     if format.is_json() {
-        let tasks: Vec<&Task> = all_tasks
+        let tasks: Vec<serde_json::Value> = all_tasks
             .iter()
             .filter(|t| visible_ids.contains(&t.id))
-            .collect();
+            .map(|t| {
+                let mut value = serde_json::to_value(t)?;
+                projection.apply_to_task(&mut value);
+                Ok(value)
+            })
+            .collect::<anyhow::Result<_>>()?;
         writeln!(out, "{}", serde_json::to_string_pretty(&tasks)?)?;
         return Ok(());
     }
