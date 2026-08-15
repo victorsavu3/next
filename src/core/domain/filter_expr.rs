@@ -391,7 +391,13 @@ fn lift_one(part: &Expr, overrides: &mut Overrides) -> Result<bool> {
     let raw = || values.iter().map(|v| v.raw.clone()).collect::<Vec<_>>();
     match field {
         Field::Parent => {
-            if values.len() != 1 || overrides.parent_slug.is_some() {
+            if values.len() != 1 {
+                return Err(TaskError::Other(
+                    "parent: selects one project scope, so it takes one slug rather than a set"
+                        .to_owned(),
+                ));
+            }
+            if overrides.parent_slug.is_some() {
                 return Err(TaskError::Other(
                     "parent: selects one project scope, so it may only be given once".to_owned(),
                 ));
@@ -833,12 +839,17 @@ fn has_atom(input: &str) -> PResult<'_, Expr> {
 ///
 /// A token only reaches the search branch if it has no operator at all, so an
 /// unrecognised field name in an obviously-a-predicate token is an error rather
-/// than a silent full-text search for `foo:bar`.
+/// than a silent full-text search for `foo:bar`. Pasting a URL into a query is
+/// the common way to land here, so the error names the escape hatch — quoting
+/// — rather than leaving the reader hunting for a field called `https`.
 fn field_atom(input: &str) -> PResult<'_, Expr> {
     let (rest, name) = field_name(input)?;
     let (rest, op) = field_op(rest)?;
     let Some(field) = resolve_field(name) else {
-        return Err(fail(input, format!("unknown field {name:?}")));
+        return Err(fail(
+            input,
+            format!("unknown field {name:?} — quote the token to search for it literally"),
+        ));
     };
     match op {
         None => colon_predicate(input, rest, field),
@@ -1640,6 +1651,17 @@ mod tests {
         assert!(message.contains("unknown field \"colour\""), "{message}");
         assert!(err("is:sideways").contains("unknown is: predicate"));
         assert!(err("has:colour").contains("expects a field name"));
+
+        // A pasted URL lands here too, and the message has to say how to get
+        // the search the user meant — the advice being quoting, which parses.
+        let url = err("https://example.com/x");
+        assert!(url.contains("unknown field \"https\""), "{url}");
+        assert!(url.contains("quote the token"), "{url}");
+        assert!(message.contains("quote the token"), "{message}");
+        assert_eq!(
+            ok("\"https://example.com/x\""),
+            search("https://example.com/x")
+        );
     }
 
     #[test]
