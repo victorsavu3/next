@@ -10,7 +10,10 @@
 //! - **One vocabulary.** Field names are the ones the filter grammar already
 //!   uses ([`Field::name`]), so `due` means the same thing in `--fields due` as
 //!   in `due<+7d`. Two spellings for one concept is how a tool becomes hard to
-//!   learn, so the few extras (`id`, `score`) are the only additions.
+//!   learn, so the few extras (`id`, `score`) are the only additions. The
+//!   vocabularies are not identical, though: `created` and
+//!   `updated` are filterable but come from git history rather than the task
+//!   object, so they are refused — with an explanation, not a "typo?" message.
 //! - **Omit, do not null.** A field that was not asked for is ABSENT from the
 //!   JSON object rather than present as `null`. `null` already means "this task
 //!   has no due date", and a consumer cannot tell the two apart otherwise.
@@ -66,6 +69,15 @@ const FIELDS: &[(&str, &str)] = &[
     ("data", "data"),
 ];
 
+/// Filter-grammar fields that no task object carries.
+///
+/// `created:` and `updated:` are read from the file's git history when a query
+/// runs, so `created>2026-01-01` works while `--fields created` cannot: there
+/// is no key to keep. Refusing them is right; refusing them as "unknown field"
+/// is not, because it sends the reader looking for a typo in a name the filter
+/// grammar accepts three lines further up the same command.
+const GIT_DERIVED: &[&str] = &["created", "updated"];
+
 /// The fields returned when a caller asks for none.
 ///
 /// Everything, so that adding projection changes no existing response. Making
@@ -78,7 +90,9 @@ impl Projection {
     ///
     /// An unknown name is an error listing what is available — silently
     /// dropping it would return a response missing a field the caller believes
-    /// they asked for, which is worse than failing.
+    /// they asked for, which is worse than failing. A name the *filter* knows
+    /// but the task object does not ([`GIT_DERIVED`]) gets its own message, so
+    /// the reader is told why rather than left to hunt for a typo.
     pub fn parse(names: &[String]) -> Result<Self> {
         let mut keys = Vec::new();
         let mut data_keys = Vec::new();
@@ -93,6 +107,13 @@ impl Projection {
             if name == "score" {
                 score = true;
                 continue;
+            }
+            if GIT_DERIVED.contains(&name) {
+                return Err(TaskError::Other(format!(
+                    "{name:?} comes from git history, not the task object — you \
+                     can filter on it ({name}>2026-01-01) but there is no field \
+                     to return"
+                )));
             }
             if let Some(key) = name.strip_prefix("data.") {
                 if key.is_empty() {
@@ -301,5 +322,25 @@ mod tests {
         assert!(msg.contains("data.<key>"), "{msg}");
 
         assert!(Projection::parse(&["data.".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn a_git_derived_field_says_so_instead_of_unknown() {
+        for name in GIT_DERIVED {
+            let msg = Projection::parse(&[(*name).to_owned()])
+                .unwrap_err()
+                .to_string();
+            let lower = msg.to_lowercase();
+            assert!(lower.contains("git"), "{name}: {msg}");
+            assert!(
+                lower.contains("filter"),
+                "{name}: the filter still takes it, and the message must say \
+                 so: {msg}"
+            );
+            assert!(
+                !msg.contains("unknown field"),
+                "{name} is not a typo: {msg}"
+            );
+        }
     }
 }
