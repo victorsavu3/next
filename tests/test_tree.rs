@@ -32,6 +32,7 @@ fn tree_args(all: bool) -> tree::Args {
         json: false,
         format: None,
         count: false,
+        fields: vec![],
         tokens: vec![],
     }
 }
@@ -102,6 +103,134 @@ fn tree_count_prints_only_a_number() {
     assert_eq!(String::from_utf8(buf).unwrap().trim(), "2");
 }
 
+/// Runs `tree` with the given args and returns the trimmed output.
+fn capture_tree_args(env: &common::TestEnv, args: tree::Args) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    tree::run_with_writer(args, &env.ctx, &mut buf).unwrap();
+    String::from_utf8(buf).unwrap().trim().to_owned()
+}
+
+/// A parent with one tagged subtask and one unrelated task alongside.
+fn count_env() -> common::TestEnv {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            slug: Some("proj".into()),
+            ..add_args("Parent project")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(
+        add::Args {
+            parent: Some("proj".into()),
+            tags: vec!["#rust".into()],
+            ..add_args("Tagged subtask")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(add_args("Unrelated task"), &mut env.ctx).unwrap();
+    env
+}
+
+/// `--count` asks a question no output format has an opinion about, so it is
+/// answered before the format is chosen — `--json --count` is still a number.
+#[test]
+fn tree_count_wins_over_the_json_format() {
+    let env = count_env();
+
+    for args in [
+        tree::Args {
+            count: true,
+            json: true,
+            ..tree_args(false)
+        },
+        tree::Args {
+            count: true,
+            format: Some(next::cli::commands::OutputFormat::Json),
+            ..tree_args(false)
+        },
+    ] {
+        assert_eq!(capture_tree_args(&env, args), "3");
+    }
+}
+
+/// The ancestors a filtered tree keeps for shape did not match the query, so
+/// they are not counted — otherwise `tree --count` and `list --count` would
+/// disagree about the same query.
+#[test]
+fn tree_count_excludes_the_ancestors_kept_for_shape() {
+    let env = count_env();
+
+    // The parent is printed to keep the subtree connected...
+    let rendered = capture_tree_args(
+        &env,
+        tree::Args {
+            tokens: vec!["+#rust".into()],
+            ..tree_args(false)
+        },
+    );
+    assert!(rendered.contains("Parent project"), "{rendered}");
+    assert!(rendered.contains("Tagged subtask"), "{rendered}");
+
+    // ...but only the subtask matched.
+    for args in [
+        tree::Args {
+            count: true,
+            tokens: vec!["+#rust".into()],
+            ..tree_args(false)
+        },
+        tree::Args {
+            count: true,
+            json: true,
+            tokens: vec!["+#rust".into()],
+            ..tree_args(false)
+        },
+    ] {
+        assert_eq!(capture_tree_args(&env, args), "1");
+    }
+}
+
+/// With no query there is nothing to distinguish a match from a bystander, so
+/// the count is simply the visible set — including tasks `--all` reveals.
+#[test]
+fn tree_count_without_a_query_is_the_visible_set() {
+    let mut env = count_env();
+    done::run(
+        done::Args {
+            id: "proj".into(),
+            completed_at: None,
+            json: false,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    assert_eq!(
+        capture_tree_args(
+            &env,
+            tree::Args {
+                count: true,
+                ..tree_args(false)
+            }
+        ),
+        "2",
+        "the closed parent drops out of the active set"
+    );
+    assert_eq!(
+        capture_tree_args(
+            &env,
+            tree::Args {
+                count: true,
+                ..tree_args(true)
+            }
+        ),
+        "3",
+        "--all counts everything it would print"
+    );
+}
+
 fn capture_tree_closed(env: &common::TestEnv) -> String {
     let mut buf: Vec<u8> = Vec::new();
     tree::run_with_writer(
@@ -111,6 +240,7 @@ fn capture_tree_closed(env: &common::TestEnv) -> String {
             json: false,
             format: None,
             count: false,
+            fields: vec![],
             tokens: vec![],
         },
         &env.ctx,
@@ -249,11 +379,89 @@ fn tree_json_output() {
             json: true,
             format: None,
             count: false,
+            fields: vec![],
             tokens: vec![],
         },
         &env.ctx,
     )
     .unwrap();
+}
+
+/// `--fields` trims every task in the array. The tree's JSON is the largest
+/// payload the tool emits, so projection matters most here.
+#[test]
+fn tree_json_projects_the_requested_fields() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            slug: Some("proj".into()),
+            description: Some("A long description nobody asked for".into()),
+            ..add_args("Parent project")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(
+        add::Args {
+            parent: Some("proj".into()),
+            ..add_args("Subtask")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let out = capture_tree_args(
+        &env,
+        tree::Args {
+            json: true,
+            fields: vec!["id".into(), "title".into()],
+            ..tree_args(false)
+        },
+    );
+    let items: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+    assert_eq!(items.len(), 2, "{out}");
+    for item in &items {
+        let keys: Vec<&str> = item.as_object().unwrap().keys().map(|k| &**k).collect();
+        assert_eq!(keys, ["id", "title"], "{item}");
+    }
+}
+
+/// An unknown field name is refused before the repository is read, not after.
+#[test]
+fn tree_rejects_an_unknown_field_name() {
+    let env = common::setup();
+    let err = tree::run_with_writer(
+        tree::Args {
+            json: true,
+            fields: vec!["nosuchfield".into()],
+            ..tree_args(false)
+        },
+        &env.ctx,
+        &mut Vec::new(),
+    )
+    .expect_err("an unknown field must be refused")
+    .to_string();
+    assert!(err.contains("unknown field"), "{err}");
+}
+
+/// The tree is a fixed rendering, so `--fields` has nothing to do there.
+/// Silently ignoring a flag the user typed is worse than refusing it.
+#[test]
+fn tree_fields_without_json_is_a_usage_error() {
+    let mut env = common::setup();
+    add::run(add_args("A task"), &mut env.ctx).unwrap();
+
+    let err = tree::run_with_writer(
+        tree::Args {
+            fields: vec!["id".into()],
+            ..tree_args(false)
+        },
+        &env.ctx,
+        &mut Vec::new(),
+    )
+    .expect_err("`tree --fields` without --json must be refused")
+    .to_string();
+    assert!(err.contains("--json"), "the message names the fix: {err}");
 }
 
 // ---------------------------------------------------------------------------
