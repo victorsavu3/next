@@ -10,8 +10,8 @@
 //! - **One vocabulary.** Field names are the ones the filter grammar already
 //!   uses ([`Field::name`]), so `due` means the same thing in `--fields due` as
 //!   in `due<+7d`. Two spellings for one concept is how a tool becomes hard to
-//!   learn, so the few extras (`id`, `score`) are the only additions. The
-//!   vocabularies are not identical, though: `created` and
+//!   learn, so the few extras (`id`, `score`, `score_breakdown`) are the only
+//!   additions. The vocabularies are not identical, though: `created` and
 //!   `updated` are filterable but come from git history rather than the task
 //!   object, so they are refused — with an explanation, not a "typo?" message.
 //! - **Omit, do not null.** A field that was not asked for is ABSENT from the
@@ -27,6 +27,15 @@ use serde_json::Value;
 use crate::core::error::{Result, TaskError};
 
 /// The set of fields a caller asked for.
+///
+/// Two of the projectable names are not task fields at all. `score` and
+/// `score_breakdown` are computed per query and live in the envelope *beside*
+/// the task, never inside it, so naming one on its own is legal and leaves the
+/// task with nothing: `--fields score` returns `{"score":4.0,"task":{}}`, and
+/// under `--archived`, where a page carries bare tasks and no envelope to hold
+/// a score, every item comes back as `{}`. That is "omit, do not null" working
+/// as specified rather than a bug — but it surprises everyone once, so it is
+/// written down here. `--fields id,score` is what is almost always meant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Projection {
     /// JSON keys of the task object to keep.
