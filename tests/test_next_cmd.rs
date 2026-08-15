@@ -46,6 +46,61 @@ fn run_next(env: &common::TestEnv, args: next_cmd::Args) -> anyhow::Result<Strin
     Ok(String::from_utf8(buf).expect("utf-8 output"))
 }
 
+/// Where a flag may sit on `next next`, pinned against the real parser so the
+/// usage line in CLI.md is a fact rather than a guess.
+///
+/// `[N]` is a positional and the filter is `trailing_var_arg`, so the moment a
+/// bare token is seen everything after it belongs to the filter — a flag
+/// included. Flags therefore go before `[N]`, and `next next 5 --json` is the
+/// misplaced-flag error, not a JSON listing.
+#[test]
+fn the_flags_of_next_go_before_the_count() {
+    use clap::Parser as _;
+
+    let parse = |argv: &[&str]| -> Result<next_cmd::Args, clap::Error> {
+        // argv[0] is the binary, argv[1] the subcommand — both are `next`.
+        let mut full = vec!["next", "next"];
+        full.extend_from_slice(argv);
+        match next::cli::Cli::try_parse_from(full)?.command {
+            Some(next::cli::Command::Next(args)) => Ok(args),
+            other => panic!("expected `next`, got {other:?}"),
+        }
+    };
+
+    // Before the count.
+    let args = parse(&["--json", "5", "+@work"]).expect("flags may precede the count");
+    assert!(args.json);
+    assert_eq!(args.count, Some(5));
+    assert_eq!(args.tokens, vec!["+@work".to_string()]);
+
+    // Between the count and the filter: `5` satisfies the `[N]` positional, so
+    // the trailing filter has not started collecting yet and `--json` is still
+    // read as a flag.
+    let args = parse(&["5", "--json", "+@work"]).expect("flags may follow the count");
+    assert!(args.json, "the flag applies here too");
+    assert_eq!(args.count, Some(5));
+    assert_eq!(args.tokens, vec!["+@work".to_string()]);
+
+    // After the first filter token is where it stops working: the filter is
+    // taken verbatim from there on, so the flag becomes a term and the guard
+    // refuses it rather than letting it silently do nothing.
+    let args = parse(&["5", "+@work", "--json"]).expect("clap takes it as a trailing token");
+    assert!(!args.json, "the flag was not applied");
+    assert_eq!(
+        args.tokens,
+        vec!["+@work".to_string(), "--json".to_string()]
+    );
+    let mut env = common::setup();
+    add::run(add_args("A task"), &mut env.ctx).unwrap();
+    let err = run_next(&env, args)
+        .expect_err("a flag after the filter must be refused, not ignored")
+        .to_string();
+    assert!(
+        err.contains("before the filter expression"),
+        "it says where the flag belongs: {err}"
+    );
+}
+
 #[test]
 fn next_shows_open_tasks() {
     let mut env = common::setup();

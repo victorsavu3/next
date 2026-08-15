@@ -34,6 +34,10 @@ const VALUE_FLAGS: &[&str] = &[
     "--format",
     "-n",
     "--limit",
+    // Without this the field list of `--fields id,title,due` fell through into
+    // the filter and parsed as a bare-word search, so the example "passed" as
+    // a query nobody wrote.
+    "--fields",
 ];
 
 /// Pulls the filter expression out of one `next …` command line.
@@ -174,6 +178,16 @@ fn the_extractor_picks_out_the_filter_and_nothing_else() {
     assert_eq!(
         filter_from_command("next list bug   # a trailing comment"),
         Some("bug".to_owned())
+    );
+    assert_eq!(
+        filter_from_command("next list --json --fields id,title,due +@work"),
+        Some("+@work".to_owned()),
+        "a field list is a flag value, not a bare-word search"
+    );
+    assert_eq!(
+        filter_from_command("next list --json --fields id,title,due"),
+        None,
+        "the field list alone leaves no filter behind"
     );
     assert_eq!(filter_from_command("next list --all"), None, "no filter");
     assert_eq!(

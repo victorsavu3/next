@@ -305,8 +305,8 @@ age_per_day    = 0.02
 
 ```
 next add <title> [--priority low|medium|high] [--due DATE] [--tag TAG]...
-next list [FILTERS] [--archived] [--page N]
-next next [N]
+next list [--archived] [--page N] [FILTERS]
+next next [N] [FILTERS]
 next show <id>
 next start <id>
 next stop <id>

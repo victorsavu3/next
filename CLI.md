@@ -324,7 +324,13 @@ next next [options] [N] [filters...]
 | `--fields <list>` | comma-separated names | everything | Project the JSON output, exactly as on `next list`. JSON output only. |
 
 The same filter expression as `next list`, and the same rule that every flag
-precedes it. There is no `--count` and no pagination: `[N]` already caps the
+precedes **the filter**. `[N]` is not the boundary — `next next --json 5 +@work`
+and `next next 5 --json +@work` both work, because the trailing filter only
+starts collecting at the first token that is not the count. It is
+`next next 5 +@work --json` that is refused: from `+@work` onward the line is
+taken verbatim, so a flag there would be read as a filter term.
+
+There is no `--count` and no pagination: `[N]` already caps the
 output, and a command whose whole job is the top of the list has nothing useful
 to say about how many tasks matched in total — `next list --count` is the place
 to ask that.
@@ -402,9 +408,16 @@ ancestors, because a tree with the branches removed would leave matching subtask
 floating with no visible parent.
 
 Those ancestors are scaffolding rather than results, so `--count` does not count
-them: it reports how many tasks the filter matched, which is the number you would
-get from `next list --count` over the same query and not the number of lines the
+them: it reports how many tasks the filter matched, not the number of lines the
 tree happens to draw.
+
+That is **not** always the number `next list --count` gives for the same query.
+The two commands gate differently, and deliberately: `next list` applies the
+implicit gate, which hides blocked tasks and parents with open subtasks, while
+`next tree` cannot — a tree that dropped them would have no shape left to show.
+So `next tree --count is:blocked` reports the blocked tasks and
+`next list --count is:blocked` reports none. Where the gate does not bite, the
+two agree; that is a coincidence of the query, not a guarantee.
 
 **Examples**
 
@@ -1378,9 +1391,11 @@ Projection does not change which tasks match: `--fields id` with a filter on
 changes nothing until you ask for it.
 
 **It applies to JSON only.** `--fields` without `--json` (or `--format json`) is
-a usage error — *"--fields applies to JSON output; add --json"* — not a silent
-no-op. The table has a fixed set of columns and cannot honour the request, and a
-flag that appears to work while doing nothing is the worse of the two failures.
+a usage error — *"`--fields` applies to JSON output; add `--json` (the table
+prints a fixed set of columns)"* — not a silent no-op. The table has a fixed set
+of columns and cannot honour the request, and a flag that appears to work while
+doing nothing is the worse of the two failures. `list`, `show`, `tree` and
+`next` all refuse it in the same words.
 
 **`created` and `updated` cannot be projected.** They can be *filtered*
 (`created>2026-08-01`), because the listing reads them out of git history for
@@ -1442,11 +1457,23 @@ merely narrowed the rows for a re-check in memory. When it merely narrowed them
 the candidate line reads:
 
 ```
-  candidates loaded: not counted (SQL paginated)
+  candidates loaded: not counted (the store re-checks the rows and reports only the matches)
 ```
 
-The rows were never all loaded, so there is no number to report, and inventing
-one is the single thing an explanation must not do. The closing hint drops its
+The rows *are* all read — an inexact pushdown fetches every candidate, re-checks
+each one in memory and paginates the survivors — but the store hands back only
+the survivors and their total. The number of rows it looked at on the way is not
+part of that answer, so the explanation cannot report it, and inventing one is
+the single thing an explanation must not do. That number is exactly the one
+worth having, too: the gap between it and `matched` is how far the pushdown
+over-selected. Reporting the match count under both labels would have hidden
+that gap behind a figure that always agreed with itself.
+
+When the pushdown *is* exact, SQL answered the query outright, every candidate
+is a match, and the two lines genuinely are one number — so `candidates loaded`
+prints it.
+
+The closing hint drops its
 `--all` suggestion there too: `--archived` and `--all` cannot be combined, and
 advice that the argument parser would reject is worse than no advice.
 

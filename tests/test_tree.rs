@@ -1,6 +1,27 @@
 mod common;
 
-use next::cli::commands::{add, done, tag, tree};
+use next::cli::commands::{add, done, list, tag, tree};
+
+/// `list::Args` as clap would build it with nothing but the defaults, for the
+/// one test that compares a listing against a tree.
+fn list_args() -> list::Args {
+    list::Args {
+        future: false,
+        all: false,
+        closed: false,
+        archived: false,
+        all_users: false,
+        json: false,
+        format: None,
+        count: false,
+        explain: false,
+        fields: vec![],
+        limit: None,
+        page_size: None,
+        page: 1,
+        tokens: vec![],
+    }
+}
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -830,4 +851,66 @@ fn named_sections_are_sorted_alphabetically() {
         home_pos < work_pos,
         "@home must appear before @work:\n{out}"
     );
+}
+
+/// `tree --count` and `list --count` do not agree in general — the two commands
+/// gate on different things, and the docs now say so.
+///
+/// `tree` counts matches among the tasks it would draw, and what it draws is
+/// every non-closed task: a tree has to be able to show a blocked task and a
+/// parent with open subtasks, or the shape it exists to display falls apart.
+/// `list` runs the implicit gate, which removes exactly those. So a blocked
+/// task is one match to `tree` and none to `list` for the very same query.
+///
+/// The equality holds only where the gate is a no-op, which is not a promise
+/// worth writing down.
+#[test]
+fn tree_count_and_list_count_differ_where_the_implicit_gate_bites() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            slug: Some("blocker".into()),
+            ..add_args("The blocker")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(
+        add::Args {
+            blocked_by: vec!["blocker".into()],
+            tags: vec!["rust".into()],
+            ..add_args("Blocked by the blocker")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let mut buf: Vec<u8> = Vec::new();
+    tree::run_with_writer(
+        tree::Args {
+            count: true,
+            tokens: vec!["+rust".into()],
+            ..tree_args(false)
+        },
+        &env.ctx,
+        &mut buf,
+    )
+    .unwrap();
+    let tree_count = String::from_utf8(buf).unwrap().trim().to_string();
+
+    let mut buf: Vec<u8> = Vec::new();
+    list::run_with_writer(
+        list::Args {
+            count: true,
+            tokens: vec!["+rust".into()],
+            ..list_args()
+        },
+        &env.ctx,
+        &mut buf,
+    )
+    .unwrap();
+    let list_count = String::from_utf8(buf).unwrap().trim().to_string();
+
+    assert_eq!(tree_count, "1", "the tree draws and counts the blocked task");
+    assert_eq!(list_count, "0", "the implicit gate hides it from the listing");
 }
