@@ -226,6 +226,11 @@ need no quoting — and the MCP `filter` parameter takes the identical string.
 > the title, description, notes and url. For tasks *tagged* `bug`, write
 > `next list +bug`.
 
+The expression is the trailing part of the command line and every flag comes
+before it — `next list --all +@work`, not `next list +@work --all`, which is
+rejected. Trailing arguments are taken verbatim so `-bug` keeps working as an
+exclusion, which leaves no way to recognise a flag among them.
+
 | Form | Example | Meaning |
 |------|---------|---------|
 | `<word>` | `bug`, `"cold tier"`, `arch*` | Search the text. Whole words; a phrase is ordered; `*` matches by prefix |
@@ -236,6 +241,11 @@ need no quoting — and the MCP `filter` parameter takes the identical string.
 | `parent:<slug>` | `parent:launch-blog` | Scope to a project subtree |
 | `--future` / `--all` | | Include future-start tasks / disable implicit filtering |
 | `--count` / `--format` | | Print the match count / choose `table` or `json` |
+| `--explain` / `--fields` | | Show what the query parsed to / project the JSON output (JSON only) |
+
+The implicit gate runs before the expression, so a query for something it
+already hides comes back empty: `next list status:done` and `next list is:closed`
+match nothing until you add `--all`. The listing prints a hint saying so.
 
 See [CLI.md](CLI.md#filter-syntax) for the full reference.
 
@@ -247,10 +257,10 @@ See [CLI.md](CLI.md#filter-syntax) for the full reference.
 |---------|-------------|
 | `next init` | Initialise a task repository in the current directory |
 | `next add` | Add a task |
-| `next list [-n N] [--page N] [--archived]` | List tasks sorted by urgency score; paginated (`--page`/`--page-size`, `-n`/`--limit` caps output); `--closed` shows done/cancelled, `--archived` lists the archive |
+| `next list [-n N] [--page N] [--archived]` | List tasks sorted by urgency score; paginated (`--page`/`--page-size`, `-n`/`--limit` caps output, `list_limit` applies to the archive too); `--closed` shows done/cancelled, `--archived` lists the archive; `--count` prints the total, `--explain` shows how the query parsed |
 | `next next [N]` | Show top N highest-scored tasks (default 10) |
 | `next show <id>` | Full details of a single task |
-| `next tree` | Show all tasks in a parent-child tree |
+| `next tree` | Show all tasks in a parent-child tree; takes the same filter, keeping the ancestors of a match so the tree still has branches |
 | `next start <id>` | Mark as started (in-progress); logs a time entry |
 | `next stop <id>` | Stop a started task (returns to open); logs a time entry |
 | `next done <id> [--completed-at <date>]` | Mark done; triggers recurrence if applicable |
@@ -270,7 +280,9 @@ See [CLI.md](CLI.md#filter-syntax) for the full reference.
 | `next maintenance rebuild-cache` | Drop and rebuild the local `.next.db` read cache |
 | `next config [get/set]` | Read or write a value in the machine-local `config.toml` |
 Task IDs accept a full UUID, a slug, or any unambiguous 4+ character hex prefix.
-All commands support `--json` for pipe-friendly output. Running `next` with no
+All commands support `--json` for pipe-friendly output, and the task-listing ones
+take `--fields id,title,due` to project it down to what you actually read — the
+default returns every field of every task, notes included. Running `next` with no
 subcommand is the same as `next list`.
 
 Sync has two orthogonal capabilities, each with a config key and a paired override flag
@@ -313,7 +325,7 @@ so you can raise the floor with `--log-level debug` while silencing a noisy modu
 ```toml
 repository            = "/home/alice/tasks"  # use next from any directory
 
-list_limit            = 20                   # cap `next list` output (same as -n 20)
+list_limit            = 20                   # cap `next list` output, archive included (same as -n 20)
 forecast_horizon_days = 90                   # days ahead shown by `next forecast`
 next_count            = 10                   # tasks shown by `next next`
 
@@ -474,8 +486,8 @@ systemctl --user start next-mcp
 
 | Tool | R/M | Description |
 |------|-----|-------------|
-| `list_tasks` | R | List scored tasks; accepts one `filter` expression string (same syntax as the CLI), `page`/`page_size` pagination, and `archived: true` for the archive |
-| `get_task` | R | Full details of one task + direct children + score breakdown |
+| `list_tasks` | R | List scored tasks; accepts one `filter` expression string (same syntax as the CLI), `page`/`page_size` pagination, `fields` projection, and `archived: true` for the archive |
+| `get_task` | R | Full details of one task + direct children + score breakdown; `fields` projects the response, and the score and its breakdown then come back only when named |
 | `add_task` | M | Create a task (inherits the required `@context` tags if the task has none) |
 | `update_task` | M | Edit fields or transition state (start/stop/done/cancel/move); `done` accepts `completed_at` |
 | `delete_task` | M | Permanently remove a task |
