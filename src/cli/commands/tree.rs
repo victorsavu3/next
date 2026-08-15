@@ -80,20 +80,17 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
 }
 
 pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> anyhow::Result<()> {
+    crate::cli::commands::reject_misplaced_flags::<Args>(&args.tokens, "next tree")?;
     let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
+    crate::cli::commands::reject_fields_without_json(&args.fields, format.is_json())?;
     // Parsed up front so an unknown field name fails before any work, rather
-    // than after a full scan. A projection the chosen format cannot honour is
-    // refused for the same reason: a flag that was typed and then ignored is
-    // worse than one that was refused.
+    // than after a full scan.
     let projection = crate::core::projection::Projection::parse(&args.fields)?;
-    if !args.fields.is_empty() && !format.is_json() {
-        anyhow::bail!("--fields applies to JSON output; add --json");
-    }
 
     let all_tasks = ctx.repo.store().list_tasks()?;
     let today = Local::now().date_naive();
 
-    crate::cli::commands::reject_misplaced_flags::<Args>(&args.tokens, "next tree")?;
+
     let mut filter_args = crate::core::FilterArgs::parse(args.tokens.clone())?;
     filter_args.all = args.all;
     filter_args.closed = args.closed;

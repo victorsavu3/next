@@ -68,12 +68,7 @@ pub fn run_with_writer(
     filter_args.json =
         crate::cli::commands::OutputFormat::resolve(args.format, args.json).is_json();
 
-    // Refused rather than ignored: the table has fixed columns, so honouring
-    // `--fields` there is impossible and dropping it silently returns output
-    // the caller did not ask for without saying so.
-    if !args.fields.is_empty() && !filter_args.json {
-        anyhow::bail!("--fields applies to JSON output; add --json");
-    }
+    crate::cli::commands::reject_fields_without_json(&args.fields, filter_args.json)?;
     // Parsed up front so an unknown field name fails before any work.
     let projection = crate::core::projection::Projection::parse(&args.fields)?;
 
