@@ -102,6 +102,134 @@ fn tree_count_prints_only_a_number() {
     assert_eq!(String::from_utf8(buf).unwrap().trim(), "2");
 }
 
+/// Runs `tree` with the given args and returns the trimmed output.
+fn capture_tree_args(env: &common::TestEnv, args: tree::Args) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    tree::run_with_writer(args, &env.ctx, &mut buf).unwrap();
+    String::from_utf8(buf).unwrap().trim().to_owned()
+}
+
+/// A parent with one tagged subtask and one unrelated task alongside.
+fn count_env() -> common::TestEnv {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            slug: Some("proj".into()),
+            ..add_args("Parent project")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(
+        add::Args {
+            parent: Some("proj".into()),
+            tags: vec!["#rust".into()],
+            ..add_args("Tagged subtask")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(add_args("Unrelated task"), &mut env.ctx).unwrap();
+    env
+}
+
+/// `--count` asks a question no output format has an opinion about, so it is
+/// answered before the format is chosen — `--json --count` is still a number.
+#[test]
+fn tree_count_wins_over_the_json_format() {
+    let env = count_env();
+
+    for args in [
+        tree::Args {
+            count: true,
+            json: true,
+            ..tree_args(false)
+        },
+        tree::Args {
+            count: true,
+            format: Some(next::cli::commands::OutputFormat::Json),
+            ..tree_args(false)
+        },
+    ] {
+        assert_eq!(capture_tree_args(&env, args), "3");
+    }
+}
+
+/// The ancestors a filtered tree keeps for shape did not match the query, so
+/// they are not counted — otherwise `tree --count` and `list --count` would
+/// disagree about the same query.
+#[test]
+fn tree_count_excludes_the_ancestors_kept_for_shape() {
+    let env = count_env();
+
+    // The parent is printed to keep the subtree connected...
+    let rendered = capture_tree_args(
+        &env,
+        tree::Args {
+            tokens: vec!["+#rust".into()],
+            ..tree_args(false)
+        },
+    );
+    assert!(rendered.contains("Parent project"), "{rendered}");
+    assert!(rendered.contains("Tagged subtask"), "{rendered}");
+
+    // ...but only the subtask matched.
+    for args in [
+        tree::Args {
+            count: true,
+            tokens: vec!["+#rust".into()],
+            ..tree_args(false)
+        },
+        tree::Args {
+            count: true,
+            json: true,
+            tokens: vec!["+#rust".into()],
+            ..tree_args(false)
+        },
+    ] {
+        assert_eq!(capture_tree_args(&env, args), "1");
+    }
+}
+
+/// With no query there is nothing to distinguish a match from a bystander, so
+/// the count is simply the visible set — including tasks `--all` reveals.
+#[test]
+fn tree_count_without_a_query_is_the_visible_set() {
+    let mut env = count_env();
+    done::run(
+        done::Args {
+            id: "proj".into(),
+            completed_at: None,
+            json: false,
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    assert_eq!(
+        capture_tree_args(
+            &env,
+            tree::Args {
+                count: true,
+                ..tree_args(false)
+            }
+        ),
+        "2",
+        "the closed parent drops out of the active set"
+    );
+    assert_eq!(
+        capture_tree_args(
+            &env,
+            tree::Args {
+                count: true,
+                ..tree_args(true)
+            }
+        ),
+        "3",
+        "--all counts everything it would print"
+    );
+}
+
 fn capture_tree_closed(env: &common::TestEnv) -> String {
     let mut buf: Vec<u8> = Vec::new();
     tree::run_with_writer(

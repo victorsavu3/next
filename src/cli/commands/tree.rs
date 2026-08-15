@@ -30,7 +30,9 @@ pub struct Args {
     #[arg(long, value_enum)]
     pub format: Option<crate::cli::commands::OutputFormat>,
 
-    /// Print only how many tasks match.
+    /// Print only how many tasks match. Counts the matches themselves: the
+    /// ancestors the tree keeps for shape did not match and are not counted,
+    /// so the answer agrees with `next list --count` on the same query.
     #[arg(long)]
     pub count: bool,
 
@@ -43,14 +45,38 @@ pub struct Args {
     pub tokens: Vec<String>,
 }
 
+/// What a query selected, split by why each task is in the tree.
+///
+/// The two sets exist because the tree and the count want different answers:
+/// the tree needs the ancestors to stay connected, while a count of "how many
+/// tasks match" that included them would disagree with `next list --count` on
+/// the same query.
+struct Matched {
+    /// The tasks the query actually matched.
+    hits: HashSet<Uuid>,
+    /// `hits` plus the ancestors kept so no match is left dangling.
+    keep: HashSet<Uuid>,
+}
+
+/// How many of the visible tasks matched the query.
+///
+/// With no query every visible task is its own reason for being there, so the
+/// visible set *is* the answer.
+fn count_matches(visible_ids: &HashSet<Uuid>, matched: Option<&Matched>) -> usize {
+    match matched {
+        Some(m) => visible_ids.iter().filter(|id| m.hits.contains(id)).count(),
+        None => visible_ids.len(),
+    }
+}
+
 pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
     run_with_writer(args, ctx, &mut io::stdout())
 }
 
 pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> anyhow::Result<()> {
+    let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
     let all_tasks = ctx.repo.store().list_tasks()?;
     let today = Local::now().date_naive();
-    let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
 
     crate::core::reject_flag_like_tokens(&args.tokens, "next tree --help")?;
     let mut filter_args = crate::core::FilterArgs::parse(args.tokens.clone())?;
@@ -81,7 +107,7 @@ pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> any
     // The query narrows whichever set the status flags selected. Ancestors of
     // a match come along: a tree that dropped them would leave matching
     // subtasks dangling with no visible parent, which is not a tree.
-    let matched: Option<HashSet<Uuid>> = if has_query {
+    let matched: Option<Matched> = if has_query {
         let state = ctx.repo.store().get_state()?;
         let filter_set = FilterSet {
             disable_implicit: true,
@@ -90,7 +116,8 @@ pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> any
         };
         let task_dates = ctx.repo.task_git_dates_for(&all_tasks);
         let hits = filter::apply(all_tasks.clone(), &filter_set, &state, today, &task_dates);
-        let mut keep: HashSet<Uuid> = hits.iter().map(|t| t.id).collect();
+        let hit_ids: HashSet<Uuid> = hits.iter().map(|t| t.id).collect();
+        let mut keep = hit_ids.clone();
         let by_id: HashMap<Uuid, &Task> = all_tasks.iter().map(|t| (t.id, t)).collect();
         for hit in &hits {
             let mut parent = hit.parent_id;
@@ -103,26 +130,13 @@ pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> any
                 parent = by_id.get(&pid).and_then(|t| t.parent_id);
             }
         }
-        Some(keep)
+        Some(Matched {
+            hits: hit_ids,
+            keep,
+        })
     } else {
         None
     };
-
-    if format.is_json() {
-        let tasks: Vec<&Task> = if args.all {
-            all_tasks.iter().collect()
-        } else if let Some(ref closed) = closed_tasks {
-            closed.iter().collect()
-        } else {
-            all_tasks.iter().filter(|t| t.is_active()).collect()
-        };
-        let tasks: Vec<&Task> = match &matched {
-            Some(keep) => tasks.into_iter().filter(|t| keep.contains(&t.id)).collect(),
-            None => tasks,
-        };
-        writeln!(out, "{}", serde_json::to_string_pretty(&tasks)?)?;
-        return Ok(());
-    }
 
     let mut visible_ids: HashSet<Uuid> = if args.all {
         all_tasks.iter().map(|t| t.id).collect()
@@ -135,11 +149,23 @@ pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> any
             .map(|t| t.id)
             .collect()
     };
-    if let Some(keep) = &matched {
-        visible_ids.retain(|id| keep.contains(id));
+    if let Some(m) = &matched {
+        visible_ids.retain(|id| m.keep.contains(id));
     }
+
+    // `--count` answers a question neither output format has an opinion about,
+    // so it is settled before the format is, exactly as `next list` does.
     if args.count {
-        writeln!(out, "{}", visible_ids.len())?;
+        writeln!(out, "{}", count_matches(&visible_ids, matched.as_ref()))?;
+        return Ok(());
+    }
+
+    if format.is_json() {
+        let tasks: Vec<&Task> = all_tasks
+            .iter()
+            .filter(|t| visible_ids.contains(&t.id))
+            .collect();
+        writeln!(out, "{}", serde_json::to_string_pretty(&tasks)?)?;
         return Ok(());
     }
 
