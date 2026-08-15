@@ -391,7 +391,13 @@ fn lift_one(part: &Expr, overrides: &mut Overrides) -> Result<bool> {
     let raw = || values.iter().map(|v| v.raw.clone()).collect::<Vec<_>>();
     match field {
         Field::Parent => {
-            if values.len() != 1 || overrides.parent_slug.is_some() {
+            if values.len() != 1 {
+                return Err(TaskError::Other(
+                    "parent: selects one project scope, so it takes one slug rather than a set"
+                        .to_owned(),
+                ));
+            }
+            if overrides.parent_slug.is_some() {
                 return Err(TaskError::Other(
                     "parent: selects one project scope, so it may only be given once".to_owned(),
                 ));

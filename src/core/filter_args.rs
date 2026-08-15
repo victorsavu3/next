@@ -188,7 +188,10 @@ mod tests {
     #[test]
     fn parent_may_only_scope_once() {
         assert!(err(&["parent:a", "parent:b"]).contains("only be given once"));
-        assert!(err(&["parent:a,b"]).contains("only be given once"));
+        // A set is a different mistake from a repeat, and says so.
+        let set = err(&["parent:a,b"]);
+        assert!(set.contains("one slug rather than a set"), "{set}");
+        assert!(!set.contains("only be given once"), "{set}");
     }
 
     #[test]
