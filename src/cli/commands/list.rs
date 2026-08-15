@@ -157,7 +157,13 @@ pub fn run_with_writer(
                 crate::cli::explain::render(
                     &raw_query,
                     &filter_set,
-                    page.total as usize,
+                    // An exact pushdown answered the query outright, so every
+                    // candidate is a match and the two counts really are one
+                    // number. An inexact one only narrowed the rows, and how
+                    // many it read is never reported back — printing the match
+                    // count under both labels would invent the one figure that
+                    // would have shown how far the pushdown widened.
+                    exact.then_some(page.total as usize),
                     page.total as usize,
                     &crate::cli::explain::Execution::Sql { sql, exact },
                 )
@@ -228,7 +234,7 @@ pub fn run_with_writer(
             crate::cli::explain::render(
                 &raw_query,
                 &filter_set,
-                candidate_count,
+                Some(candidate_count),
                 scored.len(),
                 // The active list pushes only the status gate; the expression
                 // itself is evaluated in memory by `filter::apply`.
