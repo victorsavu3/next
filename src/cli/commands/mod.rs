@@ -83,6 +83,23 @@ pub fn reject_fields_without_json(fields: &[String], json: bool) -> anyhow::Resu
     Ok(())
 }
 
+/// Refuses `--fields` alongside `--count`, which prints no tasks to project.
+///
+/// `--json --count --fields id` passed the JSON guard above and then printed a
+/// bare number, dropping the projection — the same silent no-op
+/// [`reject_fields_without_json`] exists to prevent, reached by the one route
+/// that guard does not cover. The two flags ask for different answers, so the
+/// honest response is to say which one was meant.
+pub fn reject_fields_with_count(fields: &[String], count: bool) -> anyhow::Result<()> {
+    if !fields.is_empty() && count {
+        anyhow::bail!(
+            "`--fields` and `--count` ask for different things; `--count` prints only a \
+             number, with no task to project"
+        );
+    }
+    Ok(())
+}
+
 pub mod add;
 pub mod archive;
 pub mod cancel;

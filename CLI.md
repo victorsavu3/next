@@ -1397,6 +1397,11 @@ of columns and cannot honour the request, and a flag that appears to work while
 doing nothing is the worse of the two failures. `list`, `show`, `tree` and
 `next` all refuse it in the same words.
 
+**It does not combine with `--count`.** `--count` prints a number and no task,
+so there is nothing left to project; `next list --json --count --fields id`
+satisfies the JSON rule and would still have printed a bare count with the
+projection dropped. It is refused for the same reason as the case above.
+
 **`created` and `updated` cannot be projected.** They can be *filtered*
 (`created>2026-08-01`), because the listing reads them out of git history for
 exactly that purpose, but they are not part of the task object — there is

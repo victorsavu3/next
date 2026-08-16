@@ -86,7 +86,12 @@ pub fn contradicted_status_gate(filter: &FilterSet) -> Option<ContradictedGate> 
     } else {
         (ContradictedGate::Active, ACTIVE)
     };
-    (satisfiable_statuses(&filter.expr, false) & admitted == 0).then_some(gate)
+    let satisfiable = satisfiable_statuses(&filter.expr, false);
+    // A query satisfiable at *no* status — `status:done and status:open` —
+    // matches nothing on its own merits, exactly as `status:nonesuch` does.
+    // The gate is not why it came back empty and `--all` would not help, so
+    // blaming the gate would be a promise the hint cannot keep.
+    (satisfiable != 0 && satisfiable & admitted == 0).then_some(gate)
 }
 
 // A set of statuses, one bit each, in `Status` declaration order.
@@ -309,6 +314,21 @@ mod tests {
         // An unknown status name matches nothing on its own merits; the gate
         // is not the reason, so it must not be blamed.
         assert_eq!(gate("status:nonesuch", false, false), None);
+    }
+
+    /// A query no task can satisfy at any status is empty on its own merits,
+    /// so the gate must not take the blame — `--all` would return nothing
+    /// either, and the hint promises that it helps.
+    #[test]
+    fn a_self_contradictory_query_does_not_blame_the_gate() {
+        for query in [
+            "status:done and status:open",
+            "is:closed and status:started",
+            "status:open and not status:open",
+        ] {
+            assert_eq!(gate(query, false, false), None, "{query}");
+            assert_eq!(gate(query, true, false), None, "{query} under --closed");
+        }
     }
 
     #[test]

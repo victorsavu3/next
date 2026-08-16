@@ -414,6 +414,45 @@ fn fields_without_json_is_a_usage_error() {
     .expect("--json --fields is the usage");
 }
 
+/// `--count` prints a number and no task, so there is nothing for `--fields`
+/// to project — the same silent no-op as `--fields` without `--json`, reached
+/// by the one route that guard does not cover. `--json` makes it worse, not
+/// better: it satisfies the JSON check and still prints a bare count.
+#[test]
+fn fields_with_count_is_a_usage_error() {
+    let mut env = common::setup();
+    save(&mut env, &Task::new("A task"));
+
+    for argv in [
+        vec!["--count", "--fields", "id"],
+        vec!["--json", "--count", "--fields", "id"],
+    ] {
+        let err = run_list(&env, &argv)
+            .expect_err("`--count` with `--fields` must be refused, not silently counted")
+            .to_string();
+        assert!(
+            err.contains("--count") && err.contains("--fields"),
+            "the message must name both flags: {err}"
+        );
+    }
+
+    // `tree` reaches the count by a different path and needs its own guard.
+    for argv in [
+        vec!["--count", "--fields", "id"],
+        vec!["--json", "--count", "--fields", "id"],
+    ] {
+        let args = try_tree_args(&argv).unwrap_or_else(|e| panic!("next tree {argv:?}: {e}"));
+        let err = run_tree(&env, args)
+            .expect_err("`tree --count --fields` must be refused too")
+            .to_string();
+        assert!(err.contains("--count") && err.contains("--fields"), "{err}");
+    }
+
+    // Each flag on its own is still fine.
+    run_list(&env, &["--count"]).expect("--count alone");
+    run_list(&env, &["--json", "--fields", "id"]).expect("--fields with --json alone");
+}
+
 /// `created` and `updated` are filterable but are not fields of a task — they
 /// come from git. "unknown field" sends the reader looking for a typo.
 #[test]
@@ -500,8 +539,8 @@ fn tree_and_next_accept_fields_on_the_command_line() {
     // that the flags reached the command at all.
     try_tree_args(&["--json", "--count"]).expect("`tree` must accept --count beside --json");
 
-    let args = try_tree_args(&["--json", "--fields", "id,title"])
-        .expect("`tree` must accept --fields");
+    let args =
+        try_tree_args(&["--json", "--fields", "id,title"]).expect("`tree` must accept --fields");
     let out = run_tree(&env, args).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
     let items = parsed.as_array().expect("tree --json is an array");
