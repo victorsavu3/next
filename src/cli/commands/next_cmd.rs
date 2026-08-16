@@ -60,7 +60,11 @@ pub fn run_with_writer(
     let today = Local::now().date_naive();
     let count = args.count.unwrap_or(ctx.config.next_count);
 
-    crate::cli::commands::reject_misplaced_flags::<Args>(&args.tokens, "next next")?;
+    crate::cli::commands::reject_misplaced_flags::<Args>(
+        &args.tokens,
+        "next next",
+        crate::core::Trailing::Filter,
+    )?;
     let mut filter_args = FilterArgs::parse(args.tokens)?;
     filter_args.future = args.future;
     filter_args.all = args.all;

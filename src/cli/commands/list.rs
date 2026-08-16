@@ -118,7 +118,11 @@ pub fn run_with_writer(
 ) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
 
-    crate::cli::commands::reject_misplaced_flags::<Args>(&args.tokens, "next list")?;
+    crate::cli::commands::reject_misplaced_flags::<Args>(
+        &args.tokens,
+        "next list",
+        crate::core::Trailing::Filter,
+    )?;
     crate::cli::commands::reject_fields_with_count(&args.fields, args.count)?;
     let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
     crate::cli::commands::reject_fields_without_json(&args.fields, format.is_json())?;

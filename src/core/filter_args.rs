@@ -70,6 +70,46 @@ impl KnownFlags {
     }
 }
 
+/// What a command's trailing tokens are, for the message that refuses a flag
+/// among them.
+///
+/// `next list` ends in a filter expression and `next edit` ends in a list of
+/// `+tag` / `-tag` edits. Both capture their tail with `allow_hyphen_values`
+/// and both need the same refusal, but telling someone editing tags that their
+/// flag belongs "before the filter expression" sends them looking for a filter
+/// they never wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trailing {
+    /// A filter expression: `next list`, `next next`, `next tree`,
+    /// `next forecast`.
+    Filter,
+    /// `+tag` / `-tag` edits: `next edit`.
+    TagEdits,
+}
+
+impl Trailing {
+    fn a_token(self) -> &'static str {
+        match self {
+            Trailing::Filter => "a filter token",
+            Trailing::TagEdits => "a tag",
+        }
+    }
+
+    fn the_part(self) -> &'static str {
+        match self {
+            Trailing::Filter => "the filter expression",
+            Trailing::TagEdits => "the tags",
+        }
+    }
+
+    fn placeholder(self) -> &'static str {
+        match self {
+            Trailing::Filter => "<filter>",
+            Trailing::TagEdits => "+tag -tag",
+        }
+    }
+}
+
 /// Reject trailing tokens that are really flags.
 ///
 /// Commands that capture trailing tokens use `trailing_var_arg` +
@@ -90,13 +130,17 @@ pub fn reject_flag_like_tokens(
     tokens: &[String],
     flags: &KnownFlags,
     command: &str,
+    trailing: Trailing,
 ) -> anyhow::Result<()> {
     for token in tokens {
         if flags.matches(token) {
             let name = token.split('=').next().unwrap_or(token);
             anyhow::bail!(
-                "`{name}` is a flag of `{command}`, not a filter token — flags must come \
-                 before the filter expression, as in `{command} {name} … <filter>`"
+                "`{name}` is a flag of `{command}`, not {} — flags must come before {}, \
+                 as in `{command} {name} … {}`",
+                trailing.a_token(),
+                trailing.the_part(),
+                trailing.placeholder(),
             );
         }
         if token.starts_with("--") {
@@ -297,9 +341,35 @@ mod tests {
     }
 
     fn reject(token: &str) -> Option<String> {
-        reject_flag_like_tokens(&[token.to_string()], &list_flags(), "next list")
-            .err()
-            .map(|e| e.to_string())
+        reject_flag_like_tokens(
+            &[token.to_string()],
+            &list_flags(),
+            "next list",
+            Trailing::Filter,
+        )
+        .err()
+        .map(|e| e.to_string())
+    }
+
+    /// `next edit` ends in `+tag` / `-tag`, not in a filter, so the refusal
+    /// must not send the reader looking for a filter they never wrote.
+    #[test]
+    fn a_tag_editing_command_talks_about_tags() {
+        let flags = KnownFlags::new(["title".to_owned()], ['h']);
+        let message = reject_flag_like_tokens(
+            &["--title".to_string()],
+            &flags,
+            "next edit",
+            Trailing::TagEdits,
+        )
+        .expect_err("--title is a flag of `next edit`")
+        .to_string();
+        assert!(message.contains("not a tag"), "{message}");
+        assert!(message.contains("before the tags"), "{message}");
+        assert!(
+            !message.contains("filter"),
+            "a tag edit has no filter: {message}"
+        );
     }
 
     #[test]

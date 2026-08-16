@@ -81,7 +81,11 @@ pub fn run(args: Args, ctx: &AppContext) -> anyhow::Result<()> {
 }
 
 pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> anyhow::Result<()> {
-    crate::cli::commands::reject_misplaced_flags::<Args>(&args.tokens, "next tree")?;
+    crate::cli::commands::reject_misplaced_flags::<Args>(
+        &args.tokens,
+        "next tree",
+        crate::core::Trailing::Filter,
+    )?;
     crate::cli::commands::reject_fields_with_count(&args.fields, args.count)?;
     let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
     crate::cli::commands::reject_fields_without_json(&args.fields, format.is_json())?;

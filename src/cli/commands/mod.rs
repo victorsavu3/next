@@ -38,6 +38,7 @@ impl OutputFormat {
 pub fn reject_misplaced_flags<T: clap::Args>(
     tokens: &[String],
     command: &str,
+    trailing: crate::core::Trailing,
 ) -> anyhow::Result<()> {
     if tokens.is_empty() {
         return Ok(());
@@ -63,6 +64,7 @@ pub fn reject_misplaced_flags<T: clap::Args>(
         tokens,
         &crate::core::KnownFlags::new(long, short),
         command,
+        trailing,
     )
 }
 
@@ -135,16 +137,25 @@ mod tests {
         // flag renamed there is caught here without anyone remembering to.
         for token in ["--fields", "--page-size", "--json", "-n", "--help"] {
             let tokens = vec![token.to_string()];
-            let message = reject_misplaced_flags::<list::Args>(&tokens, "next list")
-                .expect_err(&format!("{token} is a flag of `next list`"))
-                .to_string();
+            let message = reject_misplaced_flags::<list::Args>(
+                &tokens,
+                "next list",
+                crate::core::Trailing::Filter,
+            )
+            .expect_err(&format!("{token} is a flag of `next list`"))
+            .to_string();
             assert!(
                 message.contains("before the filter expression"),
                 "{token}: {message}"
             );
         }
         // …and a tag exclusion still is not a flag.
-        assert!(reject_misplaced_flags::<list::Args>(&["-bug".to_string()], "next list").is_ok());
+        assert!(reject_misplaced_flags::<list::Args>(
+            &["-bug".to_string()],
+            "next list",
+            crate::core::Trailing::Filter
+        )
+        .is_ok());
     }
 
     #[test]
