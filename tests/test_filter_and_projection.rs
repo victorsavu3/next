@@ -1,20 +1,18 @@
-//! The filter-language and field-projection review findings, pinned as tests.
+//! What the filter language and field projection promise, across commands.
 //!
-//! Every test here fails against the code as reviewed; each one encodes the
-//! agreed contract for one finding, named `fr_NN_…` so a single fix can be
-//! driven by `cargo test --test test_review_findings fr_07`.
+//! These are the contracts that are not the property of any one command:
+//! how `--all` interacts with a `user:` term, where a flag may sit relative to
+//! the filter, what a refusal is obliged to tell you, and which fields a
+//! projection may name. Each is asserted end-to-end — through clap and
+//! `run_with_writer` — because the flag surface and the printed message *are*
+//! the contract. A test that built the `Args` struct by hand would not notice
+//! a flag that had stopped existing; the per-command test files do that where
+//! the behaviour really is local to one command, and this file deliberately
+//! does not.
 //!
-//! Two of the fifteen findings are not represented: fr-10 and fr-15 are
-//! documentation-only and change no behaviour.
-//!
-//! `fr_11` needs the MCP surface, which is behind a non-default feature — run
-//! it as `cargo test --all-features --test test_review_findings fr_11`.
-//!
-//! Where a contract is about what a *command* prints rather than what a
-//! function returns, the test goes through clap and `run_with_writer` on
-//! purpose: the flag surface and the message are the thing under review, and a
-//! test that constructed the `Args` struct by hand would not notice a flag that
-//! does not exist.
+//! `score_breakdown_is_projectable_and_dropped_unless_named` needs the MCP
+//! surface, which is behind a non-default feature: run the file with
+//! `cargo test --all-features --test test_filter_and_projection`.
 
 mod common;
 
@@ -141,13 +139,12 @@ fn archived_env() -> common::TestEnv {
     env
 }
 
-// ── fr-01 ───────────────────────────────────────────────────────────────────
-
 /// `--all` widens the *implicit gate*; it does not delete a `user:` term the
-/// user typed. Today `apply` forces `active_users` to `&[]` whenever
-/// `disable_implicit` is set, which silently drops the scope.
+/// user typed. `apply` used to force `active_users` to `&[]` whenever
+/// `disable_implicit` was set, which silently dropped the scope — so
+/// `--all user:bob` listed alice's finished work too.
 #[test]
-fn fr_01_all_keeps_a_lifted_user_term() {
+fn all_keeps_a_user_term_the_caller_typed() {
     let mut alice = Task::new("Alice's task");
     alice.assignee = Some("alice".into());
     let mut bob = Task::new("Bob's task");
@@ -205,13 +202,11 @@ fn fr_01_all_keeps_a_lifted_user_term() {
     );
 }
 
-// ── fr-02 ───────────────────────────────────────────────────────────────────
-
 /// A flag typed after the filter expression is swallowed by
 /// `trailing_var_arg`. Rejecting it as "unrecognised" contradicts `--help`,
 /// which lists it; the message has to say the flag must come first.
 #[test]
-fn fr_02_a_flag_after_the_filter_says_where_it_belongs() {
+fn a_flag_after_the_filter_says_where_it_belongs() {
     let env = common::setup();
 
     for argv in [
@@ -260,13 +255,11 @@ fn fr_02_a_flag_after_the_filter_says_where_it_belongs() {
     }
 }
 
-// ── fr-03 ───────────────────────────────────────────────────────────────────
-
 /// The "you meant a tag" block only makes sense for an UNSCOPED bare word, and
 /// the `+X` it suggests has to be a tag that parses. `title:foo` is not a
 /// mistyped tag, and `+arch*` is not a tag at all.
 #[test]
-fn fr_03_the_search_hint_is_scoped_and_only_suggests_real_tags() {
+fn the_search_hint_is_scoped_and_only_suggests_real_tags() {
     let env = common::setup();
     let explain = |query: &str| run_list(&env, &["--explain", query]).unwrap();
 
@@ -315,13 +308,11 @@ fn fr_03_the_search_hint_is_scoped_and_only_suggests_real_tags() {
     }
 }
 
-// ── fr-04 ───────────────────────────────────────────────────────────────────
-
 /// The archived `--explain` reported the matched count twice, once labelled
 /// "candidates loaded" — a number it cannot know, because SQL paginated. And
 /// it offered `--all`, which `--archived` refuses to be combined with.
 #[test]
-fn fr_04_the_archived_explain_does_not_invent_a_candidate_count() {
+fn the_archived_explain_does_not_invent_a_candidate_count() {
     let env = archived_env();
 
     for query in ["data.estimate>1", "data.estimate>99"] {
@@ -352,46 +343,11 @@ fn fr_04_the_archived_explain_does_not_invent_a_candidate_count() {
     assert!(out.contains("implicit gate"), "{out}");
 }
 
-// ── fr-05 ───────────────────────────────────────────────────────────────────
-
-/// `tree --count` is answered before the output format is chosen, as `list`
-/// does — and it counts matches, not the ancestors dragged in to keep the tree
-/// connected.
-#[test]
-fn fr_05_tree_count_precedes_json_and_counts_only_matches() {
-    let mut env = common::setup();
-    let parent = Task::new("Roof project");
-    let mut child = Task::new("Fix the gutter");
-    child.parent_id = Some(parent.id);
-    save(&mut env, &parent);
-    save(&mut env, &child);
-
-    let count = |argv: &[&str]| -> String {
-        let args = try_tree_args(argv).unwrap_or_else(|e| panic!("next tree {argv:?}: {e}"));
-        run_tree(&env, args).unwrap().trim().to_owned()
-    };
-
-    assert_eq!(
-        count(&["--json", "--count"]),
-        "2",
-        "--count answers a question JSON has no opinion about, so it wins"
-    );
-
-    // The parent is printed to keep the subtree connected; it did not match.
-    assert_eq!(
-        count(&["--count", "gutter"]),
-        "1",
-        "an ancestor pulled in for the tree's shape is not a match"
-    );
-}
-
-// ── fr-06 ───────────────────────────────────────────────────────────────────
-
 /// `parent:a,b` and `parent:a parent:b` are different mistakes and deserve
 /// different messages: one is a set where a single slug belongs, the other is
 /// a repeated scope.
 #[test]
-fn fr_06_a_parent_set_reads_differently_from_a_repeated_parent() {
+fn a_parent_set_reads_differently_from_a_repeated_parent() {
     let set = query_error("parent:a,b");
     let repeated = query_error("parent:a parent:b");
 
@@ -409,12 +365,10 @@ fn fr_06_a_parent_set_reads_differently_from_a_repeated_parent() {
     );
 }
 
-// ── fr-07 ───────────────────────────────────────────────────────────────────
-
 /// A URL or an unknown `field:value` is refused, correctly — but the way to
 /// search for it literally (quote it) is the missing half of the message.
 #[test]
-fn fr_07_an_unknown_field_says_how_to_search_for_it_literally() {
+fn an_unknown_field_says_how_to_search_for_it_literally() {
     for query in ["https://example.com/x", "foo:bar"] {
         let message = query_error(query);
         assert!(message.contains("unknown field"), "{query}: {message}");
@@ -431,12 +385,10 @@ fn fr_07_an_unknown_field_says_how_to_search_for_it_literally() {
     }
 }
 
-// ── fr-08 ───────────────────────────────────────────────────────────────────
-
 /// `--fields` with table output did nothing at all. Silently ignoring a flag
 /// the user typed is worse than refusing it.
 #[test]
-fn fr_08_fields_without_json_is_a_usage_error() {
+fn fields_without_json_is_a_usage_error() {
     let mut env = common::setup();
     let mut task = Task::new("A task to show");
     task.slug = Some("showme".into());
@@ -462,12 +414,10 @@ fn fr_08_fields_without_json_is_a_usage_error() {
     .expect("--json --fields is the usage");
 }
 
-// ── fr-09 ───────────────────────────────────────────────────────────────────
-
 /// `created` and `updated` are filterable but are not fields of a task — they
 /// come from git. "unknown field" sends the reader looking for a typo.
 #[test]
-fn fr_09_the_git_derived_fields_explain_themselves() {
+fn the_git_derived_fields_explain_themselves() {
     for name in ["created", "updated"] {
         let message = Projection::parse(&[name.to_owned()])
             .err()
@@ -491,14 +441,12 @@ fn fr_09_the_git_derived_fields_explain_themselves() {
     assert!(message.contains("unknown field"), "{message}");
 }
 
-// ── fr-11 ───────────────────────────────────────────────────────────────────
-
 /// `score_breakdown` is a big object that a projecting caller never asked for.
 /// It becomes projectable, and — like `score` in `list` — is dropped unless
 /// named. With no projection, nothing changes.
 #[cfg(feature = "mcp")]
 #[test]
-fn fr_11_score_breakdown_is_projectable_and_dropped_unless_named() {
+fn score_breakdown_is_projectable_and_dropped_unless_named() {
     let mut env = common::setup();
     let mut task = Task::new("A task to fetch");
     task.slug = Some("fetchme".into());
@@ -539,17 +487,21 @@ fn fr_11_score_breakdown_is_projectable_and_dropped_unless_named() {
     assert!(asked.get("score").is_none(), "{asked}");
 }
 
-// ── fr-12 ───────────────────────────────────────────────────────────────────
-
 /// Projection is a property of the JSON output, not of one command: `tree` and
 /// `next` emit tasks as JSON too, and pay the same payload cost.
 #[test]
-fn fr_12_tree_and_next_take_fields_too() {
+fn tree_and_next_accept_fields_on_the_command_line() {
     let mut env = common::setup();
     save(&mut env, &Task::new("A task in the tree"));
 
+    // `tree --count` behaves as `list --count` does — answered before the
+    // format, counting matches rather than the ancestors kept for shape — and
+    // test_tree.rs asserts that. What only a parsed command line can show is
+    // that the flags reached the command at all.
+    try_tree_args(&["--json", "--count"]).expect("`tree` must accept --count beside --json");
+
     let args = try_tree_args(&["--json", "--fields", "id,title"])
-        .expect("fr-12: `tree` must accept --fields");
+        .expect("`tree` must accept --fields");
     let out = run_tree(&env, args).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
     let items = parsed.as_array().expect("tree --json is an array");
@@ -570,16 +522,13 @@ fn fr_12_tree_and_next_take_fields_too() {
 
     // `next` writes its JSON to stdout rather than to an injectable writer, so
     // what is pinned here is the surface: the flag exists and parses.
-    command(&["next", "--json", "--fields", "id,title"])
-        .expect("fr-12: `next` must accept --fields");
+    command(&["next", "--json", "--fields", "id,title"]).expect("`next` must accept --fields");
 }
-
-// ── fr-13 ───────────────────────────────────────────────────────────────────
 
 /// The active list honours `list_limit`; the archived one ignored it and used
 /// the built-in default, so the same config gave two different page sizes.
 #[test]
-fn fr_13_the_archived_page_size_honours_list_limit() {
+fn the_archived_page_size_honours_list_limit() {
     let mut env = archived_env();
     env.ctx.config.list_limit = Some(1);
 
@@ -598,8 +547,6 @@ fn fr_13_the_archived_page_size_honours_list_limit() {
     assert_eq!(page["items"].as_array().unwrap().len(), 2);
 }
 
-// ── fr-14 ───────────────────────────────────────────────────────────────────
-
 /// A query whose status predicate the implicit gate contradicts returns
 /// nothing, correctly, and says nothing about why. Which tasks match must NOT
 /// change — only the hint is new.
@@ -607,7 +554,7 @@ fn fr_13_the_archived_page_size_honours_list_limit() {
 /// The hint is asserted on `run_with_writer`'s writer, which is what that
 /// entry point exists for.
 #[test]
-fn fr_14_a_contradicted_status_query_hints_at_all() {
+fn a_contradicted_status_query_hints_at_all() {
     let mut env = common::setup();
     save(&mut env, &Task::new("An open task"));
 

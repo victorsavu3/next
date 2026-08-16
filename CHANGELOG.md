@@ -69,8 +69,54 @@ Agent configurations need updating.
 - **`next list --explain`** shows what a query parsed to, which terms were read
   as searches, and how many tasks survived each step.
 
+### Refined after review
+
+A pass over the filtering and projection surface, mostly about what the
+commands *say*. A wrong answer gets reported; a confusing message gets lived
+with, so these were the defects least likely to arrive as bug reports.
+
+- **A flag typed after the filter is refused, and told where to go.** The
+  trailing filter takes its tokens verbatim, so `next list +@work --all` fed
+  `--all` to the query as a term. It used to be reported as an unrecognised
+  argument, contradicting a `--help` that lists it. The message now says the
+  flag belongs before the expression. Applies to `list`, `next`, `tree`,
+  `forecast` and `edit`.
+- **`--fields` without `--json` is an error, not a no-op.** The table has fixed
+  columns and never honoured it. `list`, `show`, `tree` and `next` now refuse
+  it in the same words.
+- **`--fields` on `next tree` and `next next`.** Projection belongs to JSON
+  output rather than to one command, and those two pay the same payload cost.
+- **`--all` no longer discards a `user:` term you typed.** `--all` widens the
+  implicit gate, which includes the *stored* user scope; it never meant "and
+  also ignore the scope in the query". `next list --all user:bob` was listing
+  alice's finished work.
+- **A query the gate contradicts explains itself.** `next list status:done`
+  matches nothing because the gate removes closed tasks before the expression
+  runs. The listing now says so and names `--all`. Which tasks match is
+  unchanged.
+- **`next list --archived` honours `list_limit`.** It used the built-in default,
+  so one config gave two page sizes depending on the tier.
+- **`next tree --count` is answered before the output format**, as `list` does,
+  and counts matches rather than the ancestors kept to keep the tree connected.
+- **Messages that were pointing the wrong way.** An unknown `field:value` now
+  says to quote the token to search for it literally (a pasted URL is the usual
+  cause). `parent:a,b` is reported as a set where one slug belongs, distinctly
+  from a repeated `parent:`. `created` and `updated` say they come from git
+  history rather than "unknown field". The `--explain` search hint fires only
+  for an unscoped bare word and only suggests a tag that exists.
+- **The archived `--explain` stopped inventing a candidate count.** It printed
+  the match count under "candidates loaded" too. An inexact pushdown reads rows
+  the store never reports back, so that number is not knowable — it says so
+  instead. It also stopped suggesting `--all`, which `--archived` refuses to be
+  combined with.
+- **`score_breakdown` is projectable, and dropped unless named**, matching
+  `score` in `list`. An unprojected response is unchanged.
+
 ### Notes
 
+- `next tree --count` and `next list --count` can differ for the same query, on
+  purpose: `list` applies the implicit gate and `tree` cannot, because a tree
+  without its blocked tasks and open parents has no shape left to draw.
 - `is:blocked` and `is:project` return little by default: the implicit gate
   already hides blocked tasks and parents with open subtasks. Pass `--all`.
 - `score` cannot be filtered on — a task's score is computed after filtering.
