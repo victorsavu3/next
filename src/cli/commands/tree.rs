@@ -31,14 +31,15 @@ pub struct Args {
     pub format: Option<crate::cli::commands::OutputFormat>,
 
     /// Print only how many tasks match. Counts the matches themselves: the
-    /// ancestors the tree keeps for shape did not match and are not counted,
-    /// so the answer agrees with `next list --count` on the same query.
+    /// ancestors the tree keeps for shape did not match and are not counted.
+    /// This need not equal `next list --count` for the same query — a tree
+    /// cannot apply the implicit gate and still have a shape to draw.
     #[arg(long)]
     pub count: bool,
 
-    /// Return only these fields, e.g. `--fields id,title,due`. JSON output
-    /// only for now; the table already projects. A field that was not asked
-    /// for is absent from the object rather than null.
+    /// Return only these fields, e.g. `--fields id,title,due`. Requires
+    /// `--json`; the table prints a fixed set of columns. A field that was not
+    /// asked for is absent from the object rather than null.
     #[arg(long, value_delimiter = ',')]
     pub fields: Vec<String>,
 

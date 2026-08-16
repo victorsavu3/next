@@ -34,9 +34,9 @@ pub struct Args {
     #[arg(long, value_enum, conflicts_with = "json")]
     pub format: Option<crate::cli::commands::OutputFormat>,
 
-    /// Return only these fields, e.g. `--fields id,title,due`. JSON output
-    /// only. A field that was not asked for is absent from the object rather
-    /// than null.
+    /// Return only these fields, e.g. `--fields id,title,due`. Requires
+    /// `--json`; the table prints a fixed set of columns. A field that was not
+    /// asked for is absent from the object rather than null.
     #[arg(long, value_delimiter = ',')]
     pub fields: Vec<String>,
 
