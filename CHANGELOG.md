@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — the filter expression language
+## 1.5.0 — the filter expression language
 
 Filtering is now an expression language rather than a fixed set of tokens.
 `next list`, `next next`, `next tree` and `next forecast` all take it, the TUI
