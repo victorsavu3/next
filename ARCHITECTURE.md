@@ -710,7 +710,7 @@ Requirements are in REQUIREMENTS.md §2.3; the machinery lives in
 A query runs through four stages, in one direction:
 
 ```
-argv / TUI filter bar / MCP filter_tokens
+argv / TUI filter bar / MCP `filter` string
   → joined into one string
   → filter_expr::parse       →  Expr AST
   → filter_expr::lift_overrides  →  Expr + Overrides (parent:/context:/user:)
@@ -719,7 +719,11 @@ argv / TUI filter bar / MCP filter_tokens
 ```
 
 Every surface parses the *same string* with the *same parser* and evaluates the
-*same tree*, which is what stops the three of them drifting into dialects.
+*same tree*, which is what stops the three of them drifting into dialects. The
+MCP tools take one `filter` string for exactly that reason; the older
+`filter_tokens` array and `context` parameter were removed in 1.5.0 and are now
+refused by name, because an ignored `filter_tokens` would read as "no filter"
+and return the whole list looking perfectly successful.
 
 ### The expression
 
@@ -740,7 +744,7 @@ computed after filtering).
 ```rust
 pub struct FilterSet {
     pub expr: Expr,                          // the user's query
-    pub required_override: Option<Vec<String>>, // context: / MCP `context`
+    pub required_override: Option<Vec<String>>, // context:
     pub user_override: Option<Vec<String>>,    // user: / --all-users
     pub include_future: bool,
     pub disable_implicit: bool,              // --all
@@ -754,23 +758,38 @@ pub struct FilterSet {
 
 `fn apply(tasks, filter, state, today, task_dates) -> Vec<Task>`:
 
-1. **Implicit gate** (skipped when `disable_implicit`):
-   - Exclude tasks where `!is_active()` — i.e. `done` and `cancelled` are hidden; `open` and `started` pass
-   - Exclude tasks whose `start` date is in the future
+1. **Status gate** (always enforced): with `closed_only` only `done`/`cancelled`
+   pass; otherwise, unless `disable_implicit`, `!is_active()` is excluded — i.e.
+   `done` and `cancelled` are hidden, `open` and `started` pass. `--closed`
+   survives `--all`, which is why it is checked before the gate rather than in it.
+2. **Implicit gate** (skipped when `disable_implicit`):
+   - Exclude tasks whose `start` date is in the future (unless `include_future`)
    - Exclude tasks that are explicitly blocked (open entry in `blocked_by`)
-   - Exclude parent tasks that have any open direct child
-   - Apply user filtering (tasks with no `assignee` always pass)
+   - Exclude parent tasks that have any open direct child (unless
+     `include_blocked_parents`, which the TUI and `next tree` set so projects stay
+     visible beside their subtasks)
 
-   The **tag state** is applied outside this gate, so `--all` widens the statuses
-   without lifting an exclusion: `GlobalState::admits` hides any task carrying an
-   excluded tag, and — while anything is required — any task carrying no required tag.
-   `FilterSet::required_override` replaces the required set for one query (`context:@x`,
-   and the MCP `context` parameter) while leaving exclusions in force. It is *not*
-   `TaskQuery::required_tags`, which is the storage layer's conjunction of tag filters.
-2. **The explicit query** (always applied): one `filter_eval::eval` call per task.
+   The last two are also skipped under `closed_only`: a finished task is not
+   waiting on anything, and hiding it because a child is still open would be a
+   view of the archive nobody asked for.
+3. **User scope and tag state**, both applied *outside* the gate, so `--all`
+   widens the statuses without lifting an exclusion:
+   - `GlobalState::admits` hides any task carrying an excluded tag, and — while
+     anything is required — any task carrying no required tag.
+     `FilterSet::required_override` replaces the required set for one query
+     (`context:@x`) while leaving exclusions in force. It is *not*
+     `TaskQuery::required_tags`, which is the storage layer's conjunction of tag
+     filters.
+   - The user check reads `user_override` when set and `state.active_users`
+     otherwise. Being outside the gate is deliberate and load-bearing: with no
+     override the list is empty under `--all` and the check is a no-op, but a
+     `user:bob` the caller *typed* still applies. Tasks with no `assignee` are
+     shared and pass every user filter.
+4. **The explicit query** (always applied): one `filter_eval::eval` call per task.
    The relational indexes it needs (open task IDs for `is:blocked`, parent IDs for
    `is:project`, the id → (parent, slug) lineage for `parent:`) are built **once per
-   query** by `EvalIndexes::build`, not per task.
+   query** by `EvalIndexes::build_for`, not per task — `build_for` reads the
+   expression first and skips the lineage map unless a `parent:` term needs it.
 
 `task_dates` carries the git-derived timestamps behind `created:` and `updated:`.
 Callers that have them (the scored listings) compute them *before* filtering, over
@@ -798,14 +817,24 @@ total that counted candidates rather than matches.
 
 Pushed: tags (via `task_tags`), status, priority (through a `CASE` rank — `'high'`
 sorts before `'low'` as text), slug, assignee, `user:` (keeping its unassigned
-branch), `due`/`start`/`completed`, `has:`/`no:` on those,
-`is:closed|archived|assigned|overdue`, and full-text search (via `task_fts`).
-Residual: `data.*`, `is:recurring`, and anything else inside the JSON blob.
-`created:`/`updated:` are deliberately not pushed — see `date_column`.
+branch), `id:`, `due`/`start`/`completed`, `has:`/`no:` (which covers tags, `id`,
+every date column and every text column), `is:closed|archived|assigned|overdue`,
+and full-text search (via `task_fts`).
 
-Every value is a bound parameter. The only literal the compiler writes into the
-SQL is the priority rank, because a bound parameter arrives as TEXT and SQLite
-orders every integer before every string.
+Residual for two different reasons. `data.*` and `is:recurring` live inside the
+JSON blob, which SQL cannot index into. `is:blocked` and `is:project` are
+questions about *other* tasks — whether some other row is open, whether any row
+names this one as parent — so they are not properties of the row being tested at
+all. `created:`/`updated:` are deliberately not pushed even though the columns
+exist: translating them would make the SQL *exact* and therefore unchecked, and
+the two paths would then be free to disagree (see `date_column`).
+
+Every value is a bound parameter. The compiler writes exactly two literals into
+the SQL, both derived rather than user text: the priority rank, because a bound
+parameter arrives as TEXT and SQLite orders every integer before every string;
+and the `id:` prefix length in `substr(replace(id, '-', ''), 1, N)`, because
+binding it would hand `substr` a TEXT third argument. `N` comes from a string
+`normalize_id` has already proved to be 4–32 hex digits.
 
 ### Full-text search (`task_fts`)
 
@@ -831,13 +860,14 @@ when every token is ASCII, and hands anything else to the scan. The rule is
 narrow enough to state and prove rather than hope for; `tests/sqlite_assumptions.rs`
 pins the engine behaviours it rests on.
 
-The compiled predicate is `tasks.id IN (SELECT task_id FROM task_fts WHERE
-task_fts MATCH ?)`. It is emphatically **not** `EXISTS (… AND task_id =
-tasks.id)`: that form is correlated, so SQLite re-runs the full-text query once
+The compiled predicate is `tasks.rowid IN (SELECT rowid FROM task_fts WHERE
+task_fts MATCH ?)`. It is emphatically **not** an `EXISTS (… AND rowid =
+tasks.rowid)`: that form is correlated, so SQLite re-runs the full-text query once
 per task row — 2.4 s versus 16 ms for a common term at 5 000 tasks.
 
 The index is keyed by `rowid`, deliberately the same rowid the matching `tasks`
-row has, and **not** by a `task_id` column. A virtual table cannot carry an
+row has, and **not** by a `task_id` column — which is why the predicate joins on
+`rowid` at both ends. A virtual table cannot carry an
 index and fts5 only accepts `MATCH`, `rowid` and `rank` constraints, so a
 `WHERE task_id = ?` delete is a full scan of the index — and a delete runs on
 every write, which made a rebuild quadratic: 50 000 tasks did not finish in an
@@ -875,6 +905,57 @@ term keeps that meaning.
 Tags have no such exemption — since tag-state unification, including a tag also
 hides untagged tasks, and `+@work` means "carries `@work` or a descendant of it"
 for every kind of tag alike.
+
+### `--explain` (`src/cli/explain.rs`)
+
+Two jobs: answering "why did that return nothing?" without reading Rust, and
+giving a bug report something concrete to paste. The first matters most right
+after 1.5.0, where a bare word became a search rather than a tag selector — a
+change whose two readings often return the *same* tasks, which is what makes it
+easy to miss.
+
+It reports what the pipeline **decided** rather than re-deriving it: the parsed
+expression, the terms `lift_overrides` pulled out, which atoms SQL could answer,
+and the candidate count at each step. Both it and the real query read the same
+values, because an explain that could disagree with the pipeline would be worse
+than no explain at all.
+
+`Execution` distinguishes the two tiers, and reporting them alike would be true
+of neither: the active list pushes only the status gate and evaluates the
+expression in memory (`Execution::InMemory`), while the archived tier compiles as
+much as SQL can answer (`Execution::Sql { sql, exact }`, fed by
+`storage::explain_filter_pushdown`, which returns the compiled `WHERE` and
+whether it was exact). `--explain` refuses the output flags it would ignore
+rather than silently overriding them.
+
+### `--fields` projection (`src/core/projection.rs`)
+
+The driver is payload size, not tidiness. A listing serialises every field of
+every task, notes and descriptions included, so on a repository with long notes a
+single call can return six figures of characters — and the cost is per row, so
+pagination does not help.
+
+Two rules shape it:
+
+- **One vocabulary.** Field names are the ones the filter grammar already uses
+  (`Field::name`), so `due` means the same thing in `--fields due` as in
+  `due<+7d`. The only additions are `score` and `score_breakdown`, neither of
+  which is a field of a task. The vocabularies are not identical, though:
+  `created` and `updated` are filterable but come from git history rather than
+  the task object, so projecting them is refused — with an explanation rather
+  than a "typo?" message.
+- **Omit, do not null.** A field that was not asked for is *absent* from the JSON
+  object rather than present as `null`, because `null` already means "this task
+  has no due date" and a consumer could not otherwise tell the two apart.
+
+`score` and `score_breakdown` live in the envelope *beside* the task, so naming
+one alone is legal and leaves the task empty: `--fields score` returns
+`{"score":4.0,"task":{}}`, and under `--archived` — where a page carries bare
+tasks and no envelope — every item comes back as `{}`. That is the two rules
+working as specified, and it surprises everyone exactly once.
+
+Projection never affects which tasks match: `--fields id,title` with a filter on
+`notes:x` still filters on notes. Selection and presentation are separate stages.
 
 ---
 
