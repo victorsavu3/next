@@ -65,6 +65,7 @@ next/                             # crate root (also git repo)
   src/
     lib.rs                        # `pub mod core` + feature-gated cli/mcp/forgejo/tui; small type prelude
     core/                         # THE CORE LIBRARY — compiled with no features
+      mod.rs                      # APP_DIR (the `next` dir under XDG); the module list below
       error.rs                    # TaskError, Result
       config.rs                   # Config + SyncConfig (config.toml schema; machine-local, no scoring)
       store.rs                    # Store + VcsBackend traits; TaskQuery, Page, paginate()
@@ -75,6 +76,7 @@ next/                             # crate root (also git repo)
       sync_state.rs               # machine-local [sync] state: last_pull, last_archive, per-plugin last_sync
       value.rs                    # parse_value(): task data value parsing
       filter_args.rs              # FilterArgs -> FilterSet (joins argv, parses the query, lifts view terms)
+      projection.rs               # Fields: which task fields a listing returns (`--fields`); see §7
       scoring.rs                  # ScoredTask, ScoringConfig, TaskDates, score_and_sort()
       service.rs                  # create_task/complete_task/apply_edits; begin/end_mutation
       recurrence.rs               # next_occurrence(), apply_snap(), spawn_next(), parse_snap()
@@ -82,7 +84,7 @@ next/                             # crate root (also git repo)
       listing.rs                  # load_candidates() (status pushdown), extend_with_parents()
       archiver.rs                 # run_archive_pass(), resurrect_if_archived(), prune phase
       tag_rename.rs               # rename_tag(): tags across both tiers + metadata files + state
-      test_git.rs                 # init_test_repo() helper for unit tests
+      test_git.rs                 # init_test_repo() helper — `#[cfg(test)] pub(crate)`, not in a release build
       domain/                     # pure domain types (no I/O)
         mod.rs  task.rs  state.rs  tag.rs  filter.rs  date_parse.rs
         filter_expr.rs            # filter expression grammar → Expr AST; lift_overrides(), validate_for_store()
@@ -98,12 +100,13 @@ next/                             # crate root (also git repo)
     cli/                          # feature = "cli" (default); the `next` binary + clap
       main.rs                     # `next` binary entry point
       app_context.rs              # AppContext: Config + TaskRepository (field `repo`); config.toml loading
+      explain.rs                  # `--explain`: what a filter became (see §7)
       mod.rs  render.rs
       commands/
-        add.rs   cancel.rs  config.rs  context.rs  data.rs   delete.rs  done.rs  edit.rs
+        add.rs   cancel.rs  config.rs  data.rs   delete.rs  done.rs  edit.rs
         archive.rs  forecast.rs  init.rs  list.rs  maintenance.rs  mod.rs  move_cmd.rs  next_cmd.rs  open.rs
-        resource.rs  show.rs  start.rs  stop.rs  sync.rs  tree.rs  tutorial.rs  user.rs
-        plugin/mod.rs   tag/{mod,meta,data}.rs
+        show.rs  start.rs  stop.rs  sync.rs  tree.rs  tutorial.rs  user.rs
+        plugin/mod.rs   tag/{mod,meta,data,state}.rs
     mcp/                          # feature = "mcp"; `next-mcp` binary
       main.rs  mod.rs  config.rs (McpConfig)  git_init.rs  protocol.rs  auth.rs
       sync_manager.rs  server.rs  tools/{mod,tasks,state,tags,data,view}.rs
@@ -131,6 +134,8 @@ next/                             # crate root (also git repo)
     test_plugin.rs                # export hook + periodic plugin sync
     test_mcp.rs                   # in-process MCP HTTP integration tests (requires --features mcp)
     test_container.rs             # container integration tests (requires CONTAINER_TESTS=1)
+    test_docs.rs                  # every filter example in the docs must parse
+    sqlite_assumptions.rs         # the engine behaviours the FTS pushdown rests on
 ```
 
 ### 2.1 Cargo features
@@ -153,15 +158,25 @@ tick). It reuses the shared refactors lifted into core for both CLI and TUI:
 projection), `core::scoring::nonzero_factors` (score-breakdown rows), and `core::bootstrap`
 (repo/config resolution + opening).
 
-With **no features** (`--no-default-features`) the crate is just the core library —
-`domain`, `storage`, `store`, `plugin`, `config`, `resolve`, `error`, `scoring`, `service`,
-`task_repository` — with no `clap`/CLI dependencies, so other crates can link it.
+With **no features** (`--no-default-features`) the crate is just the core library — the
+twenty-one modules `core/mod.rs` exports unconditionally: `archiver`, `bootstrap`,
+`config`, `domain`, `error`, `filter_args`, `forecast`, `listing`, `plugin`, `projection`,
+`recurrence`, `resolve`, `scoring`, `service`, `storage`, `store`, `sync`, `sync_state`,
+`tag_rename`, `task_repository`, `value` — with no `clap`/CLI dependencies, so other
+crates can link it. (`test_git` is `#[cfg(test)]` and is not one of them.)
 `AppContext` (the CLI's `Config` + `TaskRepository` wrapper) is **not** part of core; it
 lives at `src/cli/app_context.rs`, compiled only with the `cli` feature. The four feature
 modules depend only on this core (the cross-cutting helpers they share — filter-token
 parsing, data-value parsing, repo sync — live in `core`, never in `cli`). The presubmit
-(`prek.toml`) runs clippy+test with `--all-features` and a `--no-default-features` clippy to
-keep the core build clean.
+(`prek.toml`) has four hooks: `cargo fmt --all --check`, clippy `--all-targets
+--all-features`, a `--no-default-features` clippy (deliberately without `--all-targets`)
+to keep the core build clean, and `cargo test --all-features`.
+
+The hooks are a *subset* of `just check`, and the difference matters: `just build` and
+`just test` run **both** the default and `--all-features` sets, because a test that
+compiles under one can fail under the other — which is how a test file calling the
+feature-gated MCP API once broke `cargo test` for a week (see the justfile header).
+Run `just check` before calling a change done, not the hooks alone.
 
 Every **non-optional** dependency is required by `core`, so it is present even in the
 featureless build; there are no CLI-exclusive always-on dependencies. The CLI-only crate
