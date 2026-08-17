@@ -453,6 +453,36 @@ fn fields_with_count_is_a_usage_error() {
     run_list(&env, &["--json", "--fields", "id"]).expect("--fields with --json alone");
 }
 
+/// `--explain` answers a question about the query, in prose, for a person.
+/// There is deliberately no JSON form of it, so `--json`, `--fields` and
+/// `--count` have nothing to act on — and `--explain` used to win over all
+/// three in silence.
+#[test]
+fn explain_refuses_the_output_flags_it_would_ignore() {
+    let mut env = common::setup();
+    save(&mut env, &Task::new("A task"));
+
+    for argv in [
+        vec!["--explain", "--json"],
+        vec!["--explain", "--format", "json"],
+        vec!["--explain", "--json", "--fields", "id"],
+        vec!["--explain", "--count"],
+    ] {
+        let err = run_list(&env, &argv)
+            .expect_err("`--explain` with an output flag must be refused")
+            .to_string();
+        assert!(
+            err.contains("--explain"),
+            "the message must name the flag that won: {err}"
+        );
+    }
+
+    // The explanation itself is unaffected, on both tiers.
+    let out = run_list(&env, &["--explain", "+@work"]).expect("--explain alone");
+    assert!(out.contains("Parsed:"), "{out}");
+    run_list(&env, &["--archived", "--explain", "+@work"]).expect("--explain on the archive");
+}
+
 /// `created` and `updated` are filterable but are not fields of a task — they
 /// come from git. "unknown field" sends the reader looking for a typo.
 #[test]

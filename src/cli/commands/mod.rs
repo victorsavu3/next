@@ -102,6 +102,43 @@ pub fn reject_fields_with_count(fields: &[String], count: bool) -> anyhow::Resul
     Ok(())
 }
 
+/// Refuses the output flags `--explain` would ignore.
+///
+/// `--explain` answers "what did my filter become?", and the answer is prose
+/// aimed at a person: it names the terms that were read as searches, the view
+/// terms in force, and where the work happened. **There is deliberately no
+/// JSON form of it** — a machine-readable explanation would be a second
+/// contract to keep in step with the pipeline, and the module's whole premise
+/// is that an explanation which can disagree with the pipeline is worse than
+/// none.
+///
+/// So `--json`, `--format json`, `--fields` and `--count` have nothing to act
+/// on here, and `--explain` used to win silently over all four. Saying which
+/// flag was meant is the same courtesy [`reject_fields_with_count`] extends.
+pub fn reject_explain_with_output_flags(
+    fields: &[String],
+    json: bool,
+    count: bool,
+    explain: bool,
+) -> anyhow::Result<()> {
+    if !explain {
+        return Ok(());
+    }
+    let ignored = if json {
+        "`--json`"
+    } else if !fields.is_empty() {
+        "`--fields`"
+    } else if count {
+        "`--count`"
+    } else {
+        return Ok(());
+    };
+    anyhow::bail!(
+        "`--explain` prints a prose explanation, so {ignored} has nothing to act on; \
+         drop one of the two"
+    )
+}
+
 pub mod add;
 pub mod archive;
 pub mod cancel;

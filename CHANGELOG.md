@@ -116,6 +116,10 @@ with, so these were the defects least likely to arrive as bug reports.
   combined with.
 - **`score_breakdown` is projectable, and dropped unless named**, matching
   `score` in `list`. An unprojected response is unchanged.
+- **`--explain` refuses the output flags it would ignore.** It prints prose and
+  has no JSON form on purpose, so `--json`, `--fields` and `--count` had
+  nothing to act on beside it and were silently losing. Whichever was meant,
+  saying so beats picking one.
 
 ### Notes
 

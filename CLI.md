@@ -1485,6 +1485,13 @@ The closing hint drops its
 `--all` suggestion there too: `--archived` and `--all` cannot be combined, and
 advice that the argument parser would reject is worse than no advice.
 
+The explanation is prose, aimed at a person, and there is deliberately **no
+JSON form of it**: a machine-readable explanation would be a second contract to
+keep in step with the pipeline, and an explanation that can disagree with the
+pipeline is worse than none. `--json`, `--format json`, `--fields` and `--count`
+therefore have nothing to act on alongside `--explain`, and combining them is
+refused rather than silently resolved in `--explain`'s favour.
+
 ### Not yet supported
 
 - `score` cannot be filtered on: a task's score is computed after filtering. It

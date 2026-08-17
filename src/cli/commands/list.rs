@@ -125,6 +125,12 @@ pub fn run_with_writer(
     )?;
     crate::cli::commands::reject_fields_with_count(&args.fields, args.count)?;
     let format = crate::cli::commands::OutputFormat::resolve(args.format, args.json);
+    crate::cli::commands::reject_explain_with_output_flags(
+        &args.fields,
+        format.is_json(),
+        args.count,
+        args.explain,
+    )?;
     crate::cli::commands::reject_fields_without_json(&args.fields, format.is_json())?;
     // Resolved before the tokens are moved out of `args`, and once for both
     // the archived and the active path.
