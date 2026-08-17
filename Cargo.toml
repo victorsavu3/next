@@ -2,7 +2,7 @@
 name = "next"
 version = "1.5.0"
 edition = "2021"
-publish = ["forgejo"]
+publish = ["victorsavu"]
 
 [features]
 # With no features the crate is just the `core` library (domain, storage, store,
