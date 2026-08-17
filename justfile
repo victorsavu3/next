@@ -10,6 +10,36 @@
 default:
     @just --list
 
+# Compile under both feature sets, printing only diagnostics.
+#
+# `--all-targets` so a broken test or bench is a build failure here rather than
+# a surprise at `just test`, which is the slower way to find out.
+build:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    status=0
+    for features in "default" "all-features"; do
+        flag=""
+        [ "$features" = "all-features" ] && flag="--all-features"
+        out=$(cargo build --workspace --all-targets $flag 2>&1)
+        if [ $? -ne 0 ]; then
+            echo "── $features: FAILED ──"
+            grep -E "^(error|warning)(\[|:)" -A 8 <<<"$out" | head -80
+            status=1
+        else
+            # Warnings do not fail the build, but they fail `just lint`, so
+            # surfacing them here saves a round trip.
+            warnings=$(grep -cE "^warning(\[|:)" <<<"$out")
+            if [ "$warnings" -gt 0 ]; then
+                echo "$features: ok, $warnings warning(s)"
+                grep -E "^warning(\[|:)" -A 6 <<<"$out" | head -40
+            else
+                echo "$features: ok"
+            fi
+        fi
+    done
+    exit $status
+
 # Run the suite under both feature sets, printing only what failed.
 test:
     #!/usr/bin/env bash
