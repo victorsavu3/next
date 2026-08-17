@@ -71,9 +71,32 @@ test:
     done
     exit $status
 
-# Run one test (or a name filter) under all features, with output shown.
+# Run one test (or a name filter) under all features, with its output shown.
+#
+# Only the targets that actually ran something are reported: a name filter
+# matches nothing in most of the two dozen test binaries, and printing
+# `running 0 tests` for each of them buries the one result being asked for.
 test-one filter:
-    cargo test --workspace --all-features -- --nocapture {{ filter }}
+    #!/usr/bin/env bash
+    set -uo pipefail
+    out=$(cargo test --workspace --all-features -- --nocapture {{ filter }} 2>&1)
+    status=$?
+    if ! grep -q "^test result" <<<"$out"; then
+        echo "── DID NOT BUILD ──"
+        grep -E "^error(\[|:)" -A 6 <<<"$out" | head -60
+        exit 1
+    fi
+    # Keep each block from `Running <target>` through its result line, but only
+    # where a test ran; plus panics and the `---- <name> stdout ----` bodies.
+    awk '
+        /^ *Running |^ *Doc-tests /   { target = $0; next }
+        /^running 0 tests/            { next }
+        /^running [0-9]+ test/        { if (target) { print target; target = "" } }
+                                      { if (!/^$/) print }
+    ' <<<"$out" | grep -vE "^test result: ok\. 0 passed"
+    echo "── $(grep -E '^test result' <<<"$out" \
+        | awk '{p+=$4; f+=$6} END {print p" passed, "f" failed"}') ──"
+    exit $status
 
 # Everything the pre-commit hook checks, plus the default-feature test run.
 check: fmt-check lint test

@@ -3,6 +3,11 @@
 Instructions for any agent (Claude Code, Codex, Cursor, …) making changes here.
 Humans are welcome to follow them too.
 
+## Context
+
+Work on this repository is tracked in the `next` task manager under the
+`@ai/task-manager` context.
+
 ## Build, test and lint through `just` — never raw `cargo`
 
 ```sh
