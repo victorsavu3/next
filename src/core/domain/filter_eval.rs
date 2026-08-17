@@ -21,7 +21,9 @@ use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
 use crate::core::domain::date_parse;
-use crate::core::domain::filter_expr::{Atom, CompareOp, Expr, Field, Named, TextField, Value};
+use crate::core::domain::filter_expr::{
+    self, Atom, CompareOp, Expr, Field, Named, TextField, Value,
+};
 use crate::core::domain::tag;
 use crate::core::domain::task::{Priority, Status, Task};
 use crate::core::scoring::TaskDates;
@@ -293,6 +295,12 @@ fn equals(field: &Field, value: &Value, task: &Task, ctx: &EvalCtx) -> bool {
             }
         }
         Field::Assignee => task.assignee.as_deref() == Some(value.raw.as_str()),
+        // A prefix, not an equality: what a listing prints is the first eight
+        // characters, so that is what a caller has to paste back. The parser
+        // has already refused anything that could not begin a UUID, and a full
+        // 32-character value degenerates to an exact match on its own.
+        Field::Id => filter_expr::normalize_id(&value.raw)
+            .is_some_and(|want| task.id.simple().to_string().starts_with(&want)),
         Field::Slug => task.slug.as_deref() == Some(value.raw.as_str()),
         Field::Parent => ctx.indexes.in_project(task, &value.raw),
         // `tag:` and `context:` are the long spellings of a tag test; the
@@ -467,6 +475,10 @@ fn has(field: &Field, task: &Task, ctx: &EvalCtx) -> bool {
         Field::Completed => task.completed_at.is_some(),
         Field::Created | Field::Updated => ctx.task_dates.contains_key(&task.id),
         Field::Assignee | Field::User => task.assignee.is_some(),
+        // Every task has one, so `has:id` is true and `no:id` is empty. Kept
+        // explicit rather than folded into the always-present arm above so the
+        // SQL side has something to point at.
+        Field::Id => true,
         Field::Slug => task.slug.is_some(),
         Field::Parent => task.parent_id.is_some(),
         Field::Tag => !task.tags.is_empty(),
@@ -721,6 +733,41 @@ mod tests {
             !matches("slug:water", &task),
             "slug:water must not match water-plants"
         );
+    }
+
+    #[test]
+    fn id_matches_by_prefix_because_that_is_what_gets_printed() {
+        let task = sample();
+        let simple = task.id.simple().to_string();
+
+        // The three spellings the tool hands out: the 8-character short id a
+        // listing prints, the full hyphenated UUID from `--fields id`, and the
+        // dashless form between them.
+        for raw in [
+            simple[..8].to_owned(),
+            task.id.hyphenated().to_string(),
+            simple.clone(),
+            simple[..8].to_uppercase(),
+        ] {
+            assert!(matches(&format!("id:{raw}"), &task), "{raw}");
+        }
+
+        // A prefix of a DIFFERENT id must not match, and a full id is exact.
+        let other = Task::new("someone else");
+        assert!(!matches(&format!("id:{}", &simple[..8]), &other));
+        assert!(!matches(&format!("id:{}", other.id.hyphenated()), &task));
+
+        // A set is an or, and `has:id` is true of every task.
+        assert!(matches(
+            &format!(
+                "id:{},{}",
+                &simple[..8],
+                &other.id.simple().to_string()[..8]
+            ),
+            &task
+        ));
+        assert!(matches("has:id", &task));
+        assert!(!matches("no:id", &task));
     }
 
     #[test]

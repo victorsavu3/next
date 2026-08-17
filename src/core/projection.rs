@@ -10,8 +10,9 @@
 //! - **One vocabulary.** Field names are the ones the filter grammar already
 //!   uses ([`Field::name`]), so `due` means the same thing in `--fields due` as
 //!   in `due<+7d`. Two spellings for one concept is how a tool becomes hard to
-//!   learn, so the few extras (`id`, `score`, `score_breakdown`) are the only
-//!   additions. The vocabularies are not identical, though: `created` and
+//!   learn, so the few extras (`score`, `score_breakdown` — neither of them a
+//!   field of a task) are the only additions. The vocabularies are not
+//!   identical, though: `created` and
 //!   `updated` are filterable but come from git history rather than the task
 //!   object, so they are refused — with an explanation, not a "typo?" message.
 //! - **Omit, do not null.** A field that was not asked for is ABSENT from the

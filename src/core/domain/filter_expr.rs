@@ -105,6 +105,8 @@ pub enum Field {
     Created,
     Updated,
     Assignee,
+    /// `id:<uuid or prefix>` — the task's own identifier.
+    Id,
     Slug,
     Parent,
     Tag,
@@ -197,6 +199,7 @@ impl Field {
             Field::Created => "created",
             Field::Updated => "updated",
             Field::Assignee => "assignee",
+            Field::Id => "id",
             Field::Slug => "slug",
             Field::Parent => "parent",
             Field::Tag => "tag",
@@ -953,6 +956,18 @@ fn colon_predicate<'a>(whole: &'a str, input: &'a str, field: Field) -> PResult<
         return Ok((rest, combine_list(parts, Expr::Or)));
     }
 
+    // An id that cannot name a task is refused here rather than left to match
+    // nothing later: `id:` exists so a caller can paste back what a listing
+    // printed, and a typo in a 32-character string is the likeliest mistake in
+    // the whole grammar.
+    if field == Field::Id {
+        for value in &values {
+            if normalize_id(&value.raw).is_none() {
+                return Err(fail(whole, id_complaint(&value.raw)));
+            }
+        }
+    }
+
     Ok((rest, Expr::Atom(Atom::Equals { field, values })))
 }
 
@@ -995,6 +1010,7 @@ fn resolve_field(name: &str) -> Option<Field> {
         "created" => Field::Created,
         "updated" => Field::Updated,
         "assignee" => Field::Assignee,
+        "id" => Field::Id,
         "slug" => Field::Slug,
         "parent" => Field::Parent,
         "tag" => Field::Tag,
@@ -1013,6 +1029,60 @@ fn resolve_field(name: &str) -> Option<Field> {
             Field::Data(key.to_owned())
         }
     })
+}
+
+/// The shortest `id:` prefix that names a task.
+///
+/// Four hex characters, the same floor
+/// [`resolve_task_id`](crate::core::resolve::resolve_task_id) has always
+/// applied: below that a prefix selects so much of a repository that it cannot
+/// have been meant as a selection.
+pub const MIN_ID_PREFIX: usize = 4;
+
+/// The number of hex characters in a UUID once its hyphens are gone.
+const ID_LEN: usize = 32;
+
+/// Normalises an `id:` value to the one form the evaluator and the SQL
+/// compiler both compare against: lowercase hex, no hyphens.
+///
+/// The point of the field is pasting back what the tool printed, so every
+/// spelling it shows or accepts has to work — the 8-character short id from a
+/// listing (`[a1b2c3d4]`), the full hyphenated UUID from `--fields id`, and
+/// the dashless 32-character form in between. Dropping the hyphens from both
+/// sides turns those three into one comparison, which is also what keeps the
+/// two paths from growing separate opinions about which spellings count.
+///
+/// `None` for anything that cannot be the beginning of a UUID.
+pub fn normalize_id(raw: &str) -> Option<String> {
+    let stripped: String = raw.chars().filter(|c| *c != '-').collect();
+    if !(MIN_ID_PREFIX..=ID_LEN).contains(&stripped.len())
+        || !stripped.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(stripped.to_ascii_lowercase())
+}
+
+/// Names which of [`normalize_id`]'s rules a value broke, so the error points
+/// at the actual mistake rather than restating the syntax.
+fn id_complaint(raw: &str) -> String {
+    let stripped: String = raw.chars().filter(|c| *c != '-').collect();
+    if let Some(bad) = stripped.chars().find(|c| !c.is_ascii_hexdigit()) {
+        return format!(
+            "id: takes a task id, but {raw:?} contains {bad:?}, which is not a hex digit \
+             — for the human name of a task use slug:"
+        );
+    }
+    if stripped.len() < MIN_ID_PREFIX {
+        return format!(
+            "id: needs at least {MIN_ID_PREFIX} characters to name a task, got {:?}",
+            raw
+        );
+    }
+    format!(
+        "id: takes a task id of at most {ID_LEN} hex digits, got {} in {raw:?}",
+        stripped.len()
+    )
 }
 
 // ─── Terminals ──────────────────────────────────────────────────────────────
@@ -1378,6 +1448,56 @@ mod tests {
                 "{input}"
             );
         }
+    }
+
+    #[test]
+    fn id_accepts_every_spelling_the_tool_prints() {
+        // The short id from a listing, the dashless form, and the full
+        // hyphenated UUID all name the same task, so all three must parse and
+        // normalise to one thing.
+        for raw in [
+            "a1b2c3d4",
+            "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            "a1b2c3d4-e5f6-0718-293a-4b5c6d7e8f90",
+            "A1B2C3D4",
+        ] {
+            assert_eq!(
+                ok(&format!("id:{raw}")),
+                Expr::Atom(Atom::Equals {
+                    field: Field::Id,
+                    values: vec![Value::word(raw)],
+                }),
+                "{raw}"
+            );
+            assert_eq!(
+                normalize_id(raw).expect("valid"),
+                "a1b2c3d4e5f60718293a4b5c6d7e8f90"[..raw.chars().filter(|c| *c != '-').count()],
+                "{raw}"
+            );
+        }
+        assert_eq!(
+            ok("id:a1b2c3d4,ffff0000"),
+            Expr::Atom(Atom::Equals {
+                field: Field::Id,
+                values: vec![Value::word("a1b2c3d4"), Value::word("ffff0000")],
+            })
+        );
+    }
+
+    #[test]
+    fn a_value_that_cannot_name_a_task_is_refused_at_the_front_door() {
+        // Left to match nothing, a mistyped id reads as "no such task" — the
+        // one reading that is never true of a typo.
+        let message = err("id:zzzz");
+        assert!(message.contains("not a hex digit"), "{message}");
+        assert!(message.contains("slug:"), "{message}");
+
+        assert!(err("id:ab").contains("at least 4 characters"));
+        assert!(err(&format!("id:{}", "a".repeat(33))).contains("at most 32 hex digits"));
+
+        // `<`, `>` and ranges are meaningless on an identifier.
+        assert!(err("id<a1b2c3d4").contains("does not support the < operator"));
+        assert!(err("id:a1b2c3d4..ffffffff").contains("does not support ranges"));
     }
 
     #[test]

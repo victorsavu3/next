@@ -326,6 +326,40 @@ fn sql_and_in_memory_agree_on_the_archived_tier() {
 }
 
 #[test]
+fn sql_and_in_memory_agree_on_every_spelling_of_an_id() {
+    // `id:` cannot go in EXPRESSIONS — the values are only known once the
+    // corpus exists — but it is exactly the kind of atom that wants the
+    // differential treatment: the evaluator compares a dashless string while
+    // the column stores a hyphenated one, and the atom is marked exact, so a
+    // disagreement would silently drop rows rather than fail.
+    let mut env = common::setup();
+    let (active, archived) = corpus(&mut env);
+    let store = env.ctx.repo.store();
+
+    for (tasks, is_archived) in [(&active, false), (&archived, true)] {
+        let subject = tasks.first().expect("corpus is not empty");
+        let simple = subject.id.simple().to_string();
+        let queries = [
+            format!("id:{}", &simple[..8]),
+            format!("id:{}", subject.id.hyphenated()),
+            format!("id:{simple}"),
+            format!("id:{}", simple[..8].to_uppercase()),
+            // A prefix that names nothing, and one that names this task among
+            // a set.
+            "id:ffffffff".to_owned(),
+            format!("id:{},ffffffff", &simple[..8]),
+            format!("not id:{}", &simple[..8]),
+            format!("id:{} and +@work", &simple[..8]),
+            "has:id".to_owned(),
+            "no:id".to_owned(),
+        ];
+        for query in &queries {
+            assert_paths_agree(store, tasks, query, is_archived);
+        }
+    }
+}
+
+#[test]
 fn a_rebuilt_cache_answers_the_same_queries() {
     // Archived filtering leans on the cache for correctness, so the rebuild
     // path has to reproduce every row — including the cold ones, which come

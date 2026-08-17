@@ -1175,6 +1175,7 @@ part of the expression, and they stay where they are.
 | `+<tag>` | `+python`, `+@home`, `+#printer` | Task must have this tag (or one nested under it: `+@work` matches `@work/backend`). |
 | `-<tag>` | `-@work`, `-reading` | Task must not have this tag. |
 | `<field>:<value>` | `status:open`, `priority:high`, `assignee:alice`, `slug:water-plants`, `data.estimate:3` | Field equality. A comma-separated list is a set: `status:open,started`. `slug:` is exact — it does not match by prefix. |
+| `id:<id>` | `id:a1b2c3d4`, `id:a1b2c3d4-e5f6-0718-293a-4b5c6d7e8f90` | Task has this id. Matches by **prefix**, so the eight characters a listing prints are enough; four is the minimum. Hyphens are optional, case is ignored. |
 | `<field><op><value>` | `due<+7d`, `priority>=medium`, `created>2026-08-01` | Ordered comparison (`<`, `<=`, `>`, `>=`) over `priority`, the dates, and numeric `data.*`. |
 | `<field>:<low>..<high>` | `due:2026-08-01..eom` | Inclusive range. |
 | `has:<field>` / `no:<field>` | `has:due`, `no:assignee`, `has:context` | Whether the field is set. `has:context` asks whether the task carries any `@` tag. |
@@ -1377,10 +1378,12 @@ every task, notes and descriptions included, and the cost is per row — so
 pagination does not help and projection does.
 
 The names are the same ones the filter grammar uses, so `due` means the same
-thing in `--fields due` as in `due<+7d`, plus `id`, `score` and
-`score_breakdown`. `data.<key>` picks one entry out of the task data; `data`
-takes the whole map. Two spellings for one concept is how a tool becomes hard to
-learn, so those three are the only additions.
+thing in `--fields due` as in `due<+7d` — and `id` names the same thing in
+`--fields id` as in `id:a1b2c3d4`, so you can filter on what you project.
+`data.<key>` picks one entry out of the task data; `data` takes the whole map.
+Two spellings for one concept is how a tool becomes hard to learn, so the only
+additions are `score` and `score_breakdown`, neither of which is a field of a
+task.
 
 A field you did not ask for is **absent** from the object, not `null` — `null`
 already means "this task has no due date", and a consumer could not tell the
@@ -1496,6 +1499,11 @@ advice that the argument parser would reject is worse than no advice.
 
 Task IDs are UUID v4 values. On the command line, any unambiguous prefix of at least 4
 hex characters is accepted. Slugs are also accepted wherever an ID is expected.
+
+The filter grammar's `id:` follows the same four-character floor, with one
+difference that follows from what a filter is: an ambiguous prefix is not an
+error there, it simply matches every task it names. A command that acts on one
+task has to refuse to guess which; a listing has no such problem.
 
 ### Projects and subtasks
 

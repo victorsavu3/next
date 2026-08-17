@@ -236,6 +236,7 @@ exclusion, which leaves no way to recognise a flag among them.
 | `<word>` | `bug`, `"cold tier"`, `arch*` | Search the text. Whole words; a phrase is ordered; `*` matches by prefix |
 | `+<tag>` / `-<tag>` | `+@home`, `-@work` | Must / must not have the tag, nested tags included |
 | `<field>:<value>` | `status:open`, `due<+7d`, `data.k:v` | Field predicates, with `<` `<=` `>` `>=` and `a..b` ranges on ordered fields |
+| `id:<id>` | `id:a1b2c3d4` | Task has this id; matches by prefix, so the short id a listing prints is enough |
 | `has:` / `no:` / `is:` | `has:due`, `is:overdue` | Field presence and named predicates |
 | `and` `or` `not` `( )` | `+@work and not is:blocked` | Booleans; adjacency means `and` |
 | `parent:<slug>` | `parent:launch-blog` | Scope to a project subtree |

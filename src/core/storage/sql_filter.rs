@@ -293,6 +293,11 @@ fn equals_sql(field: &Field, values: &[Value], today: NaiveDate) -> Option<SqlFi
         return Some(canonical);
     }
 
+    if *field == Field::Id {
+        let parts: Vec<SqlFilter> = values.iter().map(|v| id_sql(&v.raw)).collect();
+        return Some(combine(parts, " OR "));
+    }
+
     if let Some(column) = date_column(field) {
         let parts: Vec<SqlFilter> = values
             .iter()
@@ -322,6 +327,36 @@ fn equals_sql(field: &Field, values: &[Value], today: NaiveDate) -> Option<SqlFi
         params,
         true,
     ))
+}
+
+/// `id:<uuid or prefix>`, matched the way the evaluator matches it.
+///
+/// The `id` column stores the hyphenated spelling while the evaluator compares
+/// the dashless one, so the hyphens come out of the column before the
+/// comparison. Two shapes rather than one, because the whole-UUID case is
+/// worth keeping fast: it is an equality on the PRIMARY KEY, and a
+/// `substr(replace(...))` around the column would throw that index away for
+/// the single most common way to write this predicate.
+///
+/// The prefix length is written into the SQL rather than bound. That is safe
+/// for the same reason the priority rank is: the value is not user text but a
+/// number derived from a string [`normalize_id`] has already proved to be
+/// 4 to 32 hex digits. Binding it would also be wrong — SQLite would hand
+/// `substr` a TEXT third argument.
+fn id_sql(raw: &str) -> SqlFilter {
+    // The parser refuses a malformed id, but `TaskQuery::filter` is public and
+    // this compiler does not get to assume a distant guard ran.
+    let Some(id) = crate::core::domain::filter_expr::normalize_id(raw) else {
+        return SqlFilter::nothing();
+    };
+    match uuid::Uuid::parse_str(&id) {
+        Ok(uuid) => SqlFilter::new("id = ?", vec![uuid.hyphenated().to_string()], true),
+        Err(_) => SqlFilter::new(
+            format!("substr(replace(id, '-', ''), 1, {}) = ?", id.len()),
+            vec![id],
+            true,
+        ),
+    }
 }
 
 /// `status:` / `priority:` translated through the evaluator's own parser, so
@@ -395,6 +430,14 @@ fn has_sql(field: &Field) -> Option<SqlFilter> {
             Vec::new(),
             true,
         ));
+    }
+    // Every row has one — the column is the PRIMARY KEY — so `has:id` is the
+    // whole table and `no:id` is empty, exactly as the evaluator says. Spelled
+    // out here because `id` is deliberately absent from `text_column`: sharing
+    // that lookup would let `equals_sql` fall through to `id IN (?)`, which is
+    // an equality where the evaluator does a prefix match.
+    if *field == Field::Id {
+        return Some(SqlFilter::new("1", Vec::new(), true));
     }
     let column = date_column(field).or_else(|| text_column(field))?;
     Some(SqlFilter::new(
@@ -645,6 +688,58 @@ mod tests {
         assert_eq!(f.params, vec!["alice".to_owned()]);
         // `assignee:` is the strict form and must NOT gain that branch.
         assert_eq!(sql("assignee:alice").sql, "assignee IN (?)");
+    }
+
+    #[test]
+    fn a_whole_id_is_a_primary_key_lookup_and_a_prefix_is_not() {
+        // The column stores the hyphenated spelling, so a full id binds that
+        // form and stays an equality the PRIMARY KEY index can serve.
+        let f = sql("id:a1b2c3d4-e5f6-0718-293a-4b5c6d7e8f90");
+        assert_eq!(f.sql, "id = ?");
+        assert_eq!(f.params, vec!["a1b2c3d4-e5f6-0718-293a-4b5c6d7e8f90"]);
+        assert!(f.exact);
+
+        // Written without hyphens it means the same task, so it compiles to
+        // the same lookup rather than to a 32-character prefix test.
+        assert_eq!(sql("id:a1b2c3d4e5f60718293a4b5c6d7e8f90").sql, "id = ?");
+
+        // A prefix has to strip the column's hyphens to compare against what
+        // the evaluator compares against.
+        let f = sql("id:a1b2c3d4");
+        assert_eq!(f.sql, "substr(replace(id, '-', ''), 1, 8) = ?");
+        assert_eq!(f.params, vec!["a1b2c3d4".to_owned()]);
+        assert!(f.exact);
+
+        // Case is folded into the stored spelling, not left to SQLite: `=` on
+        // TEXT is BINARY, so an uppercase paste would otherwise match nothing
+        // while the evaluator matches — and this atom is exact, so nothing
+        // would re-check it.
+        assert_eq!(sql("id:A1B2C3D4").params, vec!["a1b2c3d4".to_owned()]);
+
+        // The length is a literal, never a bound parameter: `substr` needs an
+        // INTEGER third argument and a bound one arrives as TEXT.
+        assert_eq!(sql("id:a1b2c3d4").sql.matches('?').count(), 1);
+
+        // `has:id` is the whole table — the column is the primary key.
+        assert_eq!(sql("has:id").sql, "1");
+        assert!(sql("has:id").exact);
+        assert_eq!(sql("no:id").sql, "(NOT COALESCE(1, 0))");
+    }
+
+    #[test]
+    fn an_id_that_cannot_name_a_task_matches_nothing() {
+        // The parser refuses these, but `TaskQuery::filter` is public and this
+        // compiler does not get to assume a distant guard ran.
+        use crate::core::domain::filter_expr::{Atom, Field, Value};
+        for raw in ["zzzz", "ab", &"a".repeat(33)] {
+            let expr = Expr::Atom(Atom::Equals {
+                field: Field::Id,
+                values: vec![Value::word(raw)],
+            });
+            let f = compile(&expr, today());
+            assert_eq!(f.sql, "0", "{raw}");
+            assert!(f.exact, "{raw}: matching nothing is a precise answer");
+        }
     }
 
     #[test]

@@ -55,6 +55,11 @@ Agent configurations need updating.
 - **Field predicates**: `status:open`, `priority>=medium`, `due<+7d`,
   `due:2026-08-01..eom`, `assignee:alice`, `slug:x`, `data.key:value`, plus
   `has:field` / `no:field` and `is:overdue|blocked|project|recurring|closed|assigned`.
+- **`id:`** selects by task id — `id:a1b2c3d4`, or the full UUID with or
+  without hyphens. It matches by prefix, so the eight characters a listing
+  prints are enough (four is the minimum). Case is ignored, and a value that
+  could not begin a UUID is refused at parse time rather than left to match
+  nothing.
 - **Booleans**: `and`, `or`, `not` with parentheses, also spelled `&`, `|`, `!`.
   Adjacency means `and`; precedence is `not` > `and` > `or`.
 - **Dates**: ISO, offsets (`+7d`, `-2w`, `+3m`, `-1y`), `today`/`tomorrow`/
