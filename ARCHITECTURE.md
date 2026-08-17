@@ -38,7 +38,8 @@ This document describes the internal design of `next`. Read `REQUIREMENTS.md` fo
 The domain layer is pure logic with no I/O. Storage calls into domain types but not
 vice versa. The runtime handle that ties the store, git backend, and scoring together is
 `TaskRepository` (`src/core/task_repository.rs`); the MCP server and the Forgejo plugin use
-it directly, while the CLI wraps it in `AppContext` to add `config.toml` handling (CLI-only).
+it directly, while the CLI wraps it in `AppContext` (a CLI-only type) to add `config.toml`
+handling.
 All MCP modules live in `src/mcp/` and are gated by the `mcp` Cargo feature.
 
 ---
@@ -205,7 +206,7 @@ enabled.
 
 | Module | Contents |
 |--------|----------|
-| `scoring` | `ScoredTask`, `ScoringConfig`, `fn score(task, parent, today, weights, tag_metas)`, `fn score_and_sort(tasks, all_tasks, today, weights, tag_metas)` |
+| `scoring` | `ScoredTask`, `ScoringConfig`, `TaskDates`, `fn score(task, parent, task_dates, today, weights, tag_metas)`, `fn score_with_breakdown(…)` (same arguments, returns the per-factor rows), `fn score_and_sort(tasks, all_tasks, today, weights, tag_metas, task_dates)` — note `task_dates` sits third in `score` and last in `score_and_sort` |
 | `service` | `CreateTaskParams`, `EditTaskParams`, `create_task()`, `complete_task()`, `apply_edits()`, `validate_slug()`, `validate_url()`, `begin_mutation()`/`end_mutation()` — shared business logic used by the CLI, MCP, and Forgejo handlers |
 | `recurrence` | `fn next_occurrence(rrule, anchor, after)`, `fn apply_snap(date, snap)`, `fn spawn_next(task, today)` |
 | `task_repository` | `TaskRepository` — store + vcs + repo_root + scoring + transactions + plugin events |
@@ -213,10 +214,16 @@ enabled.
 Key `Task` fields: `id`, `title`, `status`, `priority`, `due`, `start`, `long_term`,
 `slug`, `parent_id`, `assignee`, `tags`, `blocked_by`, `score_adjustment`, `description`,
 `url`, `notes`, `data` (arbitrary JSON map; `data["time_log"]` accumulates start/stop events),
-`recurrence`, `completed_at` (date set when marked done), `created_at`, `updated_at`.
+`recurrence`, `recurrence_id`, `completed_at` (date set when marked done).
 
-Key `Task` methods: `is_open()` (Open only), `is_active()` (Open or Started), `mark_started()`,
-`mark_stopped()`, `mark_done(completion_date)`, `mark_cancelled()`.
+`created_at` and `updated_at` are **not** fields of `Task`. They are derived from git
+history, carried in `scoring::TaskDates` and cached in the SQLite columns of the same
+name, and reach consumers through `Store::task_dates` — which is why they can be
+filtered on but not projected with `--fields`.
+
+Key `Task` methods: `is_active()` (Open or Started), `is_hidden(today)` (start date in
+the future), `age_scoring_disabled(today)`, `mark_started()`, `mark_stopped()`,
+`mark_done(completion_date)`, `mark_cancelled()`.
 
 **Storage traits** (`next::store`):
 
@@ -254,6 +261,7 @@ pub trait Store: Send + Sync {
     // Cache/HEAD reconciliation (after_pull is incremental; see §6)
     fn after_pull(&mut self, new_head: &str) -> Result<()>;
     fn note_head(&mut self, new_head: &str) -> Result<()>;
+    fn rebuild_cache(&self, head_hash: &str) -> Result<()>;  // &self; `next maintenance rebuild-cache`
 
     // Convenience wrappers implemented as default trait methods
     fn get_tag_description(&self, tag: &str) -> Result<Option<String>>;
@@ -272,14 +280,24 @@ pub trait VcsBackend: Send + Sync {
 }
 ```
 
+Only the plain reads and writes are *required* methods. The tier hooks
+(`task_dates`, `task_location`, `resurrect_task`, `note_archived_segment`,
+`note_cold_segment`), the batch/paginated reads (`get_tasks`, `query_tasks`), the
+reconciliation hooks (`after_pull`, `note_head`, `rebuild_cache`) and the tag-description
+wrappers all ship as default methods, so a minimal `Store` only has to implement storage.
+`VcsBackend::diff` and `force_pull` are likewise defaults that report "not supported by
+this backend".
+
 `TaskQuery` carries the cheap filter gates (statuses, archive tier, parent,
-hierarchical tags) plus 1-indexed `page` / `page_size` (default 50);
+hierarchical tags, plus `excluded_tags` and an optional full `filter` expression)
+plus 1-indexed `page` / `page_size` (default 50);
 `Page<T>` returns `items` with `page`/`page_size`/`total` so callers can tell
 a truncated result from a complete one. The trait ships an in-memory default
 implementation as the reference semantics; the SQLite cache overrides it with
 indexed SQL, and an equivalence test pins the two together.
 
-**Configuration** (`next::core::config`) — machine-local `config.toml`, CLI-only:
+**Configuration** (`next::core::config`) — machine-local `config.toml`, read by the CLI
+and the TUI (the MCP server has its own `McpConfig`; plugins read neither):
 
 ```rust
 pub struct Config {
