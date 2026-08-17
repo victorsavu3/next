@@ -362,10 +362,14 @@ pub enum TaskError {
   the `path` column so renames net out and preserve `created_at`. The full
   rebuild survives only as the fallback when the stored head is missing or
   unresolvable (fresh clone); it parses task files and archive segments and
-  backfills the date columns from one `git log` walk. A `schema_version` meta
-  key drops and rebuilds the tables on layout changes.
+  backfills the date columns from one `git log` walk.
+- **Two heals force a rebuild.** A `schema_version` meta key drops and rebuilds
+  the tables on layout changes; separately, a `build_version` key
+  (`heal_on_version_change`) rebuilds — without dropping — whenever the crate
+  version changes, so a release that alters what goes *into* a row cannot leave
+  stale contents behind.
 
-SQLite schema (v3):
+SQLite schema (v5):
 
 ```sql
 CREATE TABLE meta  (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -379,7 +383,7 @@ CREATE TABLE tasks (
     completed_at TEXT,
     parent_id    TEXT,
     assignee     TEXT,
-    archived     INTEGER NOT NULL,       -- 0 active · 1 warm segment · 2 cold (pruned)
+    archived     INTEGER NOT NULL DEFAULT 0,  -- 0 active · 1 warm segment · 2 cold (pruned)
     path         TEXT NOT NULL,          -- repo-relative file or segment path
     created_at   TEXT,                   -- git-derived; frozen once archived
     updated_at   TEXT,
@@ -391,6 +395,14 @@ CREATE INDEX idx_tasks_status  ON tasks(archived, status);
 CREATE INDEX idx_tasks_parent  ON tasks(parent_id);
 CREATE INDEX idx_tasks_path    ON tasks(path);
 CREATE INDEX idx_task_tags_tag ON task_tags(tag);
+
+-- Full-text index over the searchable prose; see §7. Keyed by rowid — the same
+-- rowid the matching `tasks` row has — and dropped alongside the tables on a
+-- schema_version bump.
+CREATE VIRTUAL TABLE task_fts USING fts5(
+    title, description, notes, url,
+    tokenize = 'unicode61 remove_diacritics 0'
+);
 ```
 
 The `created_at`/`updated_at` columns hold git-derived timestamps (scoring's
@@ -479,7 +491,7 @@ receive `&mut AppContext`; read-only commands take `&AppContext`:
 
 ```rust
 pub struct AppContext {
-    pub config: Config,         // the loaded config.toml (CLI-only)
+    pub config: Config,         // the loaded config.toml
     pub repo: TaskRepository,   // the opened repository (store + vcs + repo_root + scoring)
 }
 ```
@@ -489,13 +501,16 @@ the repository through `ctx.repo` — e.g. `ctx.repo.store`, `ctx.repo.store_mut
 `ctx.repo.transaction(…)`, `ctx.repo.state_transaction(…)`, `ctx.repo.record_task_event(…)` —
 and CLI configuration via `ctx.config`.
 
-`AppContext::new(config_path, repo)`:
+`AppContext::new(config_path: Option<&Path>, repo: Option<&Path>)` — the second argument is
+a repository-root *override*, not a built repository. It delegates the last two steps to
+`core::bootstrap`, which the TUI shares:
 
-1. Load `config.toml` (the given path, else the XDG default; falls back to `Config::default()`).
-2. Resolve the repository root: the `--repo` override, else `config.repository`, else walk up
+1. Load `config.toml` (the given path, else the XDG default; falls back to `Config::default()`)
+   — `bootstrap::parse_config_file`.
+2. `bootstrap::resolve_root`: the `--repo` override, else `config.repository`, else walk up
    from CWD for a `.git` directory; fail if none is found.
-3. Call `next::core::storage::open(root)` to get `(CachedStore, GitBackend)`, apply
-   `config.sync.git_subprocess` to the git backend, and assemble
+3. `bootstrap::open_repository`: call `storage::open(root)` for `(CachedStore, GitBackend)`,
+   apply `config.sync.git_subprocess` to the git backend, and assemble
    `TaskRepository::with_parts(store, vcs, root)` (which also loads `config/scoring.toml` into
    `repo.scoring`).
 
