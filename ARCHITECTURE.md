@@ -727,8 +727,9 @@ and return the whole list looking perfectly successful.
 
 ### The expression
 
-`filter_expr::parse` produces an `Expr` (`And` / `Or` / `Not` / `Atom`); see §11
-for the grammar's own notes. `And(vec![])` is the identity — an empty query
+`filter_expr::parse` produces an `Expr` (`And` / `Or` / `Not` / `Atom`); the
+grammar's own notes live in `src/core/domain/filter_expr.rs`, and `CLI.md`
+documents the surface syntax. `And(vec![])` is the identity — an empty query
 parses to it and matches everything, so there is no separate "no filter" case.
 Parser recursion is bounded at 32 levels, so no surface needs its own guard.
 
@@ -984,7 +985,7 @@ score(task) =
     due_factor(task.due, today)
   + priority_factor(task.priority)
   + project_factor(parent.priority)   // 0.0 when no parent
-  + age_factor(task, today)
+  + age_factor(task, created_at, today)
   + tag_factor(task.tags, tag_metas)
   + tag_factor(parent.tags, tag_metas) // 0.0 when no parent
   + started_factor(task.status)
@@ -1012,14 +1013,17 @@ bare `0.00`.
 | Due today | `12.0` |
 | Due in 1–7 days | `6.0 + (7 − days) × 0.8` |
 | Due in 8–30 days | `3.0 + (30 − days) × 0.1` |
-| Due in 31+ days | `max(0.0, 2.0 − days × 0.01)` |
+| Due in 31+ days | `max(0.0, 2.0 − days × 0.01)` — **hardcoded**; unlike every other row here it has no `ScoringConfig` field and no `scoring.toml` key |
 
 **`priority_factor`**: `low` → 0.0, `medium` → 1.0, `high` → 2.0
 
 **`project_factor`** (parent task priority): `low` → −0.5, `medium` → 0.0, `high` → +0.5
 
-**`age_factor`**: `min(age_days × 0.01, 2.0)` — returns `0.0` when `long_term = true`,
-`start > today`, or any of the task's tags has `no_time_urgency = true`.
+**`age_factor`**: `min(age_days × 0.01, 2.0)`, computed from the git-derived
+`created_at` the caller passes in. Returns `0.0` when `long_term = true`,
+`start > today`, any of the task's tags has `no_time_urgency = true`, **or there is
+no `created_at` at all** — which is the normal case for a task that has not been
+committed yet, so a brand-new task scores no age bonus rather than an arbitrary one.
 
 **`tag_factor`**: sum of the priority offset for each tag that has an explicit `priority`
 set in its `TagMeta`. Tags with no metadata or no priority set contribute `0.0`.
@@ -1052,12 +1056,14 @@ Accepted by `--due` and `--start` in `next add` and `next edit`.
 
 ## 11. Configuration
 
-Two layers: machine-local CLI settings, and repo-stored scoring weights.
+Three layers: machine-local settings, an optional TUI override of those, and
+repo-stored scoring weights.
 
 ### 11.1 Machine-local — `$XDG_CONFIG_HOME/next/config.toml`
 
-CLI-only (the MCP server and plugins do not read it); loaded once at startup, falls
-back to defaults when absent. Editable in place with `next config get/set`.
+Read by the CLI and the TUI (the MCP server has its own `McpConfig`; plugins read
+neither); loaded once at startup, falls back to defaults when absent. Editable in
+place with `next config get/set`.
 
 ```toml
 repository            = "/home/alice/tasks"  # use next from any directory
@@ -1074,7 +1080,15 @@ pull_timeout_secs        = 10      # stored only — not yet enforced
 plugin_sync_default_secs = 86400   # system-default periodic plugin sync interval
 ```
 
-### 11.2 Repo-stored scoring — `<repo>/config/scoring.toml`
+### 11.2 TUI override — `$XDG_CONFIG_HOME/next/tui.toml`
+
+Same schema as `config.toml`; `src/tui/config.rs` resolves `tui.toml` →
+`config.toml` → `Config::default()` and reports which it used as `ConfigSource`.
+The file is optional and exists so the TUI can differ where it should — a
+different `list_limit`, say — without a second schema to learn. `next-tui
+--config <path>` bypasses the search and stands in for `tui.toml`.
+
+### 11.3 Repo-stored scoring — `<repo>/config/scoring.toml`
 
 Committed to the repository and synced, so the CLI, the MCP server, and plugins all
 score tasks identically. Loaded by `storage::load_scoring()` into
@@ -1109,27 +1123,33 @@ started_bonus       =  4.0   # flat bonus added when status == started
 ```rust
 pub enum TaskError {
     #[error("invalid date expression '{0}': {1}")]
-    InvalidDate(String, String),       // exit 1
+    InvalidDate(String, String),
 
     #[error("task not found: {0}")]
-    TaskNotFound(String),              // exit 1
+    TaskNotFound(String),
 
     #[error("ambiguous task ID prefix '{0}': matches {1} tasks")]
-    AmbiguousId(String, usize),        // exit 1
+    AmbiguousId(String, usize),
 
     #[error("slug '{0}' is already taken by another task")]
-    SlugConflict(String),              // exit 1
+    SlugConflict(String),
 
     #[error("git conflict in files: {0:?}")]
-    GitConflict(Vec<PathBuf>),         // exit 2
+    GitConflict(Vec<PathBuf>),
 
     #[error(transparent)]
-    Io(#[from] std::io::Error),        // exit 2
+    Io(#[from] std::io::Error),
 
     #[error("{0}")]
-    Other(String),                     // exit 2
+    Other(String),
 }
 ```
+
+**Exit codes are not per variant.** Every failure exits 1 except one: merge
+conflicts surfaced by an explicit `next sync` exit 2 (REQUIREMENTS §2.2) so
+scripts can detect them, which `main` implements by downcasting to
+`sync_cmd::ConflictsError` — not by matching on `TaskError`. The same underlying
+`GitConflict` reached through any other command still exits 1.
 
 All error messages are printed to stderr; `main` propagates the `anyhow::Error` to produce a
 non-zero exit code.
