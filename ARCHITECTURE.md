@@ -1165,7 +1165,7 @@ non-zero exit code.
 | `domain::date_parse` | `src/core/domain/date_parse.rs` | Unit tests: fixed "today", assert parsed date for common expressions |
 | `domain::filter_expr` | `src/core/domain/filter_expr.rs` | Unit tests: one per atom form and operator spelling, precedence and grouping, error messages for malformed input, and `parse(print(e)) == e` round-trips |
 | `domain::filter_eval` | `src/core/domain/filter_eval.rs` | Unit tests: each atom against a hand-built task, both operator spellings, precedence, and the bare-token/`+tag` split pinned in both directions |
-| `storage::sql_filter` | `src/core/storage/sql_filter.rs` | Unit tests per atom form, plus the superset rule under `or`/`not` and a check that values are bound, never interpolated |
+| `storage::sql_filter` | `src/core/storage/sql_filter.rs` | Unit tests per atom form, plus the superset rule under `or`/`not`, positional parameter order, and injection tests asserting that user *values* are bound and leave no trace in the SQL text (the two derived literals — priority rank, `id:` prefix length — are not user text) |
 | `task_fts` maintenance | `src/core/storage/cached_store.rs` | Unit tests counting index rows through every write path — save, re-save, edit, rebuild, delete, archive, resurrect, re-archive — since search alone cannot see a duplicate or an orphan |
 | Filter pushdown | `tests/test_filter_pushdown.rs` | Differential: ~50 expressions run down both the SQL and in-memory paths over a corpus spanning active, warm-archive and pruned-cold rows, plus a rebuilt cache; pagination under a residual filter; injection attempts |
 | `TomlStore` | `src/core/storage/toml_store.rs` | Round-trip tests: write task to `tempdir`, read back, assert equal fields; migration unit tests: write legacy `state.toml`, call `TomlStore::open()`, assert per-tag files created and `state.toml` cleaned |
@@ -1181,31 +1181,53 @@ non-zero exit code.
 | MCP unit tests | `src/mcp/tools/*.rs` | Unit tests per tool module using a real `TaskRepository` in a `tempdir` git repo (requires `--features mcp`) |
 | Plugins | `tests/test_plugin.rs`, `src/core/plugin/run.rs` | End-to-end export-hook notification; unit tests for periodic sync (interval precedence, due/skip, failure-retry) |
 | Multi-instance | `tests/test_multi_instance.rs` | Several clones of one shared remote mutating in parallel (adds, edits, archive passes, resurrections); all instances must converge with no loss |
-| MCP integration tests | `tests/test_mcp.rs` | Start a real HTTP server on `127.0.0.1:0` in `#[tokio::test]`; test all 15 tools, auth, webhook, and autosync (requires `--features mcp`) |
+| MCP integration tests | `tests/test_mcp.rs` | Start a real HTTP server on `127.0.0.1:0` in `#[tokio::test]`; test all 14 tools, auth, webhook, and autosync (requires `--features mcp`) |
+| Forgejo plugin | `tests/test_forgejo.rs` | The plugin's library-backed task store: issue ↔ task mapping, `forgejo_link`, registry integration (requires `--features forgejo`) |
+| Recurrence | `tests/test_rrule.rs` | RRULE series projection (`project_series`) and the add → done → next-occurrence lifecycle through the real CLI handlers |
+| Doc examples | `tests/test_docs.rs` | Extracts every filter expression from the Markdown docs and runs it through the real `FilterArgs`, so an example that stops being true fails the suite |
+| SQLite assumptions | `tests/sqlite_assumptions.rs` | Pins the engine behaviours the FTS pushdown rests on (unicode61 tokenisation, `MATCH` constraints), so an upgrade that changes them fails loudly |
 | Container tests | `tests/test_container.rs` | Start the real container image via `testcontainers` (Podman); opt-in with `CONTAINER_TESTS=1 DOCKER_HOST=unix:///…/podman.sock`; covers git clone, auth, sync push, deferred timer, webhook, and idempotent restart |
 
 ---
 
 ## 14. Dependencies
 
+Always-on (every one is required by `core`, so they are present even in the
+featureless build):
+
 | Crate | Purpose |
 |-------|---------|
-| `clap` | CLI argument parsing |
 | `git2` | git commit / pull / push |
 | `toml` | TOML file serialisation |
-| `rusqlite` | SQLite read cache |
+| `rusqlite` | SQLite read cache (bundled build) |
 | `fs4` | cross-platform advisory file locking (`flock(2)`) |
 | `serde`, `serde_json` | serialisation (domain types, `--json` output) |
 | `chrono` | dates in domain types and scoring |
+| `rrule` | recurrence expansion (`core::recurrence`) |
 | `interim` | `date_parse` module (natural-language date expressions) |
 | `nom` | `filter_expr` module (filter expression parser combinators) |
 | `uuid` | `Task::id` |
 | `dirs` | XDG base directory resolution |
+| `tracing` | structured logging throughout core and all four binaries |
 | `anyhow`, `thiserror` | error propagation |
 
-MCP-only dependencies (feature = `"mcp"`):
+Optional, pulled in by a feature:
+
+| Crate | Feature(s) | Purpose |
+|-------|------------|---------|
+| `clap` | `cli`, `forgejo` | CLI argument parsing |
+| `tracing-subscriber` | all four | log subscriber — the binaries install it; the library only emits |
+| `tokio` | `mcp`, `forgejo` | async runtime |
+| `axum` | `mcp` | HTTP server, middleware, `DefaultBodyLimit` |
+| `forgejo-api`, `url` | `forgejo` | Forgejo REST client |
+| `ratatui` | `tui` | terminal UI framework (its re-exported `crossterm` is used, never a direct dependency) |
+| `tui-input`, `tui-textarea-2`, `tui-tree-widget` | `tui` | single-line input, edit-modal text area, tree view |
+
+Dev-dependencies (`cargo test` only; dev-deps cannot be optional, so these
+compile for every test run while the code using them stays feature-gated):
 
 | Crate | Purpose |
 |-------|---------|
-| `tokio` | async runtime for `next-mcp` |
-| `axum` | HTTP server, middleware, `DefaultBodyLimit` |
+| `tempfile` | throwaway git repos for store and CLI tests |
+| `reqwest` | HTTP client for the MCP integration tests |
+| `testcontainers` | starts the real container image in `tests/test_container.rs` |
