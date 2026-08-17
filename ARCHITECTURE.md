@@ -68,6 +68,7 @@ next/                             # crate root (also git repo)
       error.rs                    # TaskError, Result
       config.rs                   # Config + SyncConfig (config.toml schema; machine-local, no scoring)
       store.rs                    # Store + VcsBackend traits; TaskQuery, Page, paginate()
+      progress.rs                 # ProgressSink/ProgressTask traits + NoProgress default (no renderer)
       resolve.rs                  # resolve_task_id(store, id_str) -> Result<Uuid>
       task_repository.rs          # TaskRepository: store + vcs + repo_root + scoring + transactions + plugin events
       bootstrap.rs                # config-file parsing + repo resolution + opening (shared by cli/tui)
@@ -155,7 +156,8 @@ projection), `core::scoring::nonzero_factors` (score-breakdown rows), and `core:
 
 With **no features** (`--no-default-features`) the crate is just the core library —
 `domain`, `storage`, `store`, `plugin`, `config`, `resolve`, `error`, `scoring`, `service`,
-`task_repository` — with no `clap`/CLI dependencies, so other crates can link it.
+`progress`, `task_repository` — with no `clap`/CLI dependencies, so other crates can link
+it (`progress` included: it is the abstraction, not a renderer, so it pulls in nothing).
 `AppContext` (the CLI's `Config` + `TaskRepository` wrapper) is **not** part of core; it
 lives at `src/cli/app_context.rs`, compiled only with the `cli` feature. The four feature
 modules depend only on this core (the cross-cutting helpers they share — filter-token
@@ -193,7 +195,21 @@ enabled.
 | `scoring` | `ScoredTask`, `ScoringConfig`, `fn score(task, parent, today, weights, tag_metas)`, `fn score_and_sort(tasks, all_tasks, today, weights, tag_metas)` |
 | `service` | `CreateTaskParams`, `EditTaskParams`, `create_task()`, `complete_task()`, `apply_edits()`, `validate_slug()`, `validate_url()`, `begin_mutation()`/`end_mutation()` — shared business logic used by the CLI, MCP, and Forgejo handlers |
 | `recurrence` | `fn next_occurrence(rrule, anchor, after)`, `fn apply_snap(date, snap)`, `fn spawn_next(task, today)` |
-| `task_repository` | `TaskRepository` — store + vcs + repo_root + scoring + transactions + plugin events |
+| `task_repository` | `TaskRepository` — store + vcs + repo_root + scoring + transactions + plugin events + the progress sink |
+| `progress` | `ProgressSink` (`begin(label, total) -> Box<dyn ProgressTask>`, `is_noop()`), `ProgressTask` (`inc`/`set_total`/`set_message`/`finish`), `NoProgress`, `FinishOnce` — reporting for long operations, with **no** rendering dependency |
+
+**Progress reporting** (`next::core::progress`) is an abstraction only: core says
+*what* is happening, never *how* it is shown. `TaskRepository` carries an
+`Arc<dyn ProgressSink>` — installed once at startup with
+`TaskRepository::with_progress(sink)`, which also pushes it into the store and the VCS
+backend through the `Store::set_progress` / `VcsBackend::set_progress` trait hooks (both
+have an empty default body, so no implementor or test double is affected). The default is
+`NoProgress`, a sink that discards everything, so `next-mcp`, `next-forgejo` and library
+consumers — whose stdout is a protocol — are silent *by construction* rather than by
+remembering to pass a quiet flag down every call. A `ProgressTask` finishes on `Drop` as
+well as explicitly (guarded by `FinishOnce` so the pair reports once), because the `?` on
+an early return is exactly the cleanup path no call site remembers. The renderer lives in
+the CLI, not here.
 
 Key `Task` fields: `id`, `title`, `status`, `priority`, `due`, `start`, `long_term`,
 `slug`, `parent_id`, `assignee`, `tags`, `blocked_by`, `score_adjustment`, `description`,
@@ -240,6 +256,9 @@ pub trait Store: Send + Sync {
     fn after_pull(&mut self, new_head: &str) -> Result<()>;
     fn note_head(&mut self, new_head: &str) -> Result<()>;
 
+    // Progress reporting for long operations; default no-op (see `progress`)
+    fn set_progress(&mut self, sink: Arc<dyn ProgressSink>) {}
+
     // Convenience wrappers implemented as default trait methods
     fn get_tag_description(&self, tag: &str) -> Result<Option<String>>;
     fn set_tag_description(&mut self, tag: &str, desc: &str) -> Result<()>;
@@ -254,6 +273,7 @@ pub trait VcsBackend: Send + Sync {
     fn head_hash(&self) -> Result<String>;
     fn diff(&self) -> Result<String>;       // status --short + diff HEAD
     fn force_pull(&self) -> Result<String>; // fetch + reset --hard FETCH_HEAD
+    fn set_progress(&mut self, sink: Arc<dyn ProgressSink>) {}  // default no-op
 }
 ```
 
@@ -1012,6 +1032,7 @@ non-zero exit code.
 | Layer | Location | Approach |
 |-------|----------|----------|
 | `core::scoring` | `src/core/scoring.rs` | Unit tests with fixed dates; each factor tested independently |
+| `core::progress` | `src/core/progress.rs` | Unit tests: the no-op default, and the finish-once rule across explicit finish / drop / both. `progress::testing::RecordingSink` (`#[cfg(test)]`, `pub(crate)`) is the shared double instrumented operations assert against from their own modules |
 | `domain::filter` | `src/core/domain/filter.rs` | Unit tests: build `FilterSet` + `Vec<Task>`, assert filtered output |
 | `domain::date_parse` | `src/core/domain/date_parse.rs` | Unit tests: fixed "today", assert parsed date for common expressions |
 | `domain::filter_expr` | `src/core/domain/filter_expr.rs` | Unit tests: one per atom form and operator spelling, precedence and grouping, error messages for malformed input, and `parse(print(e)) == e` round-trips |

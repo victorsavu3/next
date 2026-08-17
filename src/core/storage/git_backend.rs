@@ -2,11 +2,12 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     process::Command,
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use crate::core::{
     error::{Result, TaskError},
+    progress::{NoProgress, ProgressSink},
     store::{PullResult, VcsBackend},
 };
 use git2::{build::CheckoutBuilder, Repository};
@@ -26,6 +27,10 @@ pub struct GitBackend {
     /// MCP config file).  Takes precedence over the `NEXT_GIT_USER` /
     /// `NEXT_GIT_TOKEN` env vars and the system credential helper.
     git_credentials: Option<(String, String)>,
+    /// Where fetch/push report their progress. [`NoProgress`] until a caller
+    /// installs something via [`VcsBackend::set_progress`], so a library
+    /// consumer stays silent. An `Arc` because every VCS method takes `&self`.
+    progress: Arc<dyn ProgressSink>,
 }
 
 impl GitBackend {
@@ -38,7 +43,13 @@ impl GitBackend {
             work_dir: root.to_path_buf(),
             use_subprocess: false,
             git_credentials: None,
+            progress: Arc::new(NoProgress),
         })
+    }
+
+    /// The progress sink installed on this backend, [`NoProgress`] by default.
+    pub fn progress(&self) -> &dyn ProgressSink {
+        &*self.progress
     }
 
     /// Returns a new `GitBackend` that uses subprocess git for `pull`/`push`.
@@ -185,6 +196,10 @@ impl GitBackend {
 }
 
 impl VcsBackend for GitBackend {
+    fn set_progress(&mut self, sink: Arc<dyn ProgressSink>) {
+        self.progress = sink;
+    }
+
     fn commit(&self, paths: &[PathBuf], message: &str) -> Result<()> {
         let _lock = self.acquire_repo_lock()?;
         let repo = self
@@ -675,6 +690,30 @@ mod tests {
             config.set_str("user.email", "test@example.com").unwrap();
         }
         repo
+    }
+
+    #[test]
+    fn a_fresh_backend_reports_no_progress() {
+        let dir = tempfile::TempDir::new().unwrap();
+        init_repo(dir.path());
+        let backend = GitBackend::open(dir.path()).unwrap();
+        assert!(
+            backend.progress().is_noop(),
+            "a backend nobody handed a sink must stay silent"
+        );
+    }
+
+    #[test]
+    fn set_progress_installs_the_sink_for_later_fetches() {
+        use crate::core::progress::testing::RecordingSink;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        init_repo(dir.path());
+        let mut backend = GitBackend::open(dir.path()).unwrap();
+        let sink = Arc::new(RecordingSink::new());
+        backend.set_progress(sink.clone());
+        drop(backend.progress().begin("fetch", None));
+        assert_eq!(sink.labels(), vec!["fetch".to_owned()]);
     }
 
     #[test]

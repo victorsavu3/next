@@ -1,8 +1,13 @@
-use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use crate::core::{
     domain::{state::GlobalState, tag::TagMeta, task::Task},
     error::{Result, TaskError},
+    progress::{NoProgress, ProgressSink},
     scoring::TaskDates,
     store::{Page, Store, TaskLocation, TaskQuery, DEFAULT_PAGE_SIZE},
 };
@@ -27,6 +32,11 @@ pub struct CachedStore {
     /// Repository root, used to resolve repo-relative paths from git diffs.
     root: PathBuf,
     conn: Mutex<Connection>,
+    /// Where the rebuild reports its progress. [`NoProgress`] until a caller
+    /// installs something via [`Store::set_progress`], so a library consumer
+    /// stays silent. An `Arc` rather than a `Box` because `rebuild` takes
+    /// `&self` and a renderer may be shared with the CLI's other bars.
+    progress: Arc<dyn ProgressSink>,
 }
 
 impl CachedStore {
@@ -46,9 +56,15 @@ impl CachedStore {
             inner,
             root,
             conn: Mutex::new(conn),
+            progress: Arc::new(NoProgress),
         };
         this.reconcile(head_hash)?;
         Ok(this)
+    }
+
+    /// The progress sink installed on this store, [`NoProgress`] by default.
+    pub fn progress(&self) -> &dyn ProgressSink {
+        &*self.progress
     }
 
     fn with_conn<F, T>(&self, f: F) -> Result<T>
@@ -303,6 +319,10 @@ fn delete_by_path(conn: &Connection, path: &str) -> Result<Option<(String, Optio
 // ---------------------------------------------------------------------------
 
 impl Store for CachedStore {
+    fn set_progress(&mut self, sink: Arc<dyn ProgressSink>) {
+        self.progress = sink;
+    }
+
     fn rebuild_cache(&self, head_hash: &str) -> Result<()> {
         self.rebuild(head_hash)
     }
@@ -1190,6 +1210,26 @@ mod tests {
         let db_path = dir.path().join(".next.db");
         let store = CachedStore::open(inner, db_path, &head_hash).unwrap();
         (dir, store, vcs)
+    }
+
+    #[test]
+    fn a_fresh_store_reports_no_progress() {
+        let (_dir, store, _vcs) = setup();
+        assert!(
+            store.progress().is_noop(),
+            "a store nobody handed a sink must stay silent"
+        );
+    }
+
+    #[test]
+    fn set_progress_installs_the_sink_for_later_rebuilds() {
+        use crate::core::progress::testing::RecordingSink;
+
+        let (_dir, mut store, _vcs) = setup();
+        let sink = Arc::new(RecordingSink::new());
+        store.set_progress(sink.clone());
+        drop(store.progress().begin("rebuild", Some(1)));
+        assert_eq!(sink.labels(), vec!["rebuild".to_owned()]);
     }
 
     #[test]

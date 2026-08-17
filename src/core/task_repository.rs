@@ -8,11 +8,13 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use uuid::Uuid;
 
 use crate::core::{
     plugin::TaskEvent,
+    progress::{NoProgress, ProgressSink},
     scoring::{ScoringConfig, TaskDates},
     Store, VcsBackend,
 };
@@ -33,6 +35,14 @@ pub struct TaskRepository {
     /// when dispatching notifications so a plugin is never notified of its own
     /// changes (loop guard).
     plugin_origin: Option<String>,
+    /// Where long operations report their progress.
+    ///
+    /// Carried here rather than passed down every signature because the slow
+    /// code (the cache rebuild, the archive pass, a fetch) sits several layers
+    /// below whatever knows a terminal is attached. Defaults to
+    /// [`NoProgress`], so a consumer that installs nothing — `next-mcp`,
+    /// `next-forgejo`, any library user — is silent by construction.
+    progress: Arc<dyn ProgressSink>,
 }
 
 impl TaskRepository {
@@ -50,7 +60,31 @@ impl TaskRepository {
             plugin_origin: std::env::var("NEXT_PLUGIN_ORIGIN")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            progress: Arc::new(NoProgress),
         }
+    }
+
+    /// Installs `sink` as the destination for progress reports, here and in the
+    /// parts that do the slow work.
+    ///
+    /// A builder method because installing a renderer is a decision made once,
+    /// at startup, by the binary that owns the terminal — the CLI does it right
+    /// after opening the repository, and nothing else does it at all. The sink
+    /// is pushed into the store and the VCS backend as well as kept here, so an
+    /// operation reports from wherever it actually runs (the rebuild inside
+    /// `CachedStore`, a fetch inside `GitBackend`) without either of them
+    /// needing a path back to the repository.
+    pub fn with_progress(mut self, sink: Arc<dyn ProgressSink>) -> Self {
+        self.store.set_progress(sink.clone());
+        self.vcs.set_progress(sink.clone());
+        self.progress = sink;
+        self
+    }
+
+    /// The installed progress sink — [`NoProgress`] unless
+    /// [`with_progress`](Self::with_progress) was called.
+    pub fn progress(&self) -> &dyn ProgressSink {
+        &*self.progress
     }
 
     /// Opens the task store and git backend at `repo_root`. No config-file
@@ -128,5 +162,126 @@ impl TaskRepository {
     ) -> anyhow::Result<T> {
         let _lock = crate::core::storage::lock_state(&self.repo_root)?;
         f(&mut *self.store)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::core::domain::{state::GlobalState, tag::TagMeta, task::Task};
+    use crate::core::error::Result as StoreResult;
+    use crate::core::progress::testing::RecordingSink;
+    use crate::core::store::PullResult;
+
+    /// A store that answers nothing but reports the sink it was handed, by
+    /// beginning a task named after itself. Observing the *label* proves the
+    /// propagation reached this object with the caller's sink — a boolean flag
+    /// would only prove that some sink arrived.
+    struct SpyStore;
+
+    impl Store for SpyStore {
+        fn set_progress(&mut self, sink: Arc<dyn ProgressSink>) {
+            drop(sink.begin("store", None));
+        }
+        fn get_task(&self, _id: Uuid) -> StoreResult<Task> {
+            unimplemented!()
+        }
+        fn get_task_by_slug(&self, _slug: &str) -> StoreResult<Option<Task>> {
+            unimplemented!()
+        }
+        fn find_tasks_by_prefix(&self, _prefix: &str) -> StoreResult<Vec<Task>> {
+            unimplemented!()
+        }
+        fn list_tasks(&self) -> StoreResult<Vec<Task>> {
+            unimplemented!()
+        }
+        fn save_task(&mut self, _task: &Task) -> StoreResult<()> {
+            unimplemented!()
+        }
+        fn delete_task(&mut self, _id: Uuid) -> StoreResult<()> {
+            unimplemented!()
+        }
+        fn get_state(&self) -> StoreResult<GlobalState> {
+            unimplemented!()
+        }
+        fn save_state(&mut self, _state: &GlobalState) -> StoreResult<()> {
+            unimplemented!()
+        }
+        fn get_tag_meta(&self, _tag: &str) -> StoreResult<Option<TagMeta>> {
+            unimplemented!()
+        }
+        fn set_tag_meta(&mut self, _tag: &str, _meta: TagMeta) -> StoreResult<()> {
+            unimplemented!()
+        }
+        fn delete_tag_meta(&mut self, _tag: &str) -> StoreResult<()> {
+            unimplemented!()
+        }
+        fn list_tag_metas(&self) -> StoreResult<HashMap<String, TagMeta>> {
+            unimplemented!()
+        }
+    }
+
+    /// The `VcsBackend` counterpart of [`SpyStore`].
+    struct SpyVcs;
+
+    impl VcsBackend for SpyVcs {
+        fn set_progress(&mut self, sink: Arc<dyn ProgressSink>) {
+            drop(sink.begin("vcs", None));
+        }
+        fn commit(&self, _paths: &[PathBuf], _message: &str) -> StoreResult<()> {
+            unimplemented!()
+        }
+        fn pull(&self) -> StoreResult<PullResult> {
+            unimplemented!()
+        }
+        fn push(&self) -> StoreResult<()> {
+            unimplemented!()
+        }
+        fn head_hash(&self) -> StoreResult<String> {
+            unimplemented!()
+        }
+    }
+
+    fn spy_repo() -> (tempfile::TempDir, TaskRepository) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let repo = TaskRepository::with_parts(
+            Box::new(SpyStore),
+            Box::new(SpyVcs),
+            dir.path().to_path_buf(),
+        );
+        (dir, repo)
+    }
+
+    #[test]
+    fn a_fresh_repository_carries_no_progress() {
+        let (_dir, repo) = spy_repo();
+        assert!(
+            repo.progress().is_noop(),
+            "installing nothing must mean reporting nothing"
+        );
+        // And the no-op sink is usable, not a trap.
+        let task = repo.progress().begin("rebuild", Some(2));
+        task.set_message("tasks/foo.toml");
+        task.inc(2);
+        task.finish(None);
+    }
+
+    #[test]
+    fn with_progress_installs_the_sink_in_the_repository_store_and_vcs() {
+        let (_dir, repo) = spy_repo();
+        let sink = Arc::new(RecordingSink::new());
+        let repo = repo.with_progress(sink.clone());
+
+        drop(repo.progress().begin("repo", None));
+        assert_eq!(
+            sink.labels(),
+            vec!["store".to_owned(), "vcs".to_owned(), "repo".to_owned()],
+            "the sink must reach the store and the VCS backend, not just the handle"
+        );
+        assert!(!repo.progress().is_noop());
     }
 }
