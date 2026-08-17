@@ -78,7 +78,23 @@ impl CachedStore {
         f(&conn)
     }
 
+    /// Rebuilds the cache from scratch, reporting one [`ProgressTask`] per
+    /// phase.
+    ///
+    /// The phases are reported one at a time rather than as a single bar
+    /// because they have no common unit: the history walk is a subprocess of
+    /// unknown cost (a spinner), while the three indexing loops each count
+    /// something different — task files, checkout segments, pruned segments —
+    /// and a repo may have thousands of the first and none of the last two.
+    /// A phase whose count is zero is not begun at all, so a repo with no
+    /// archive does not flash two empty bars.
+    ///
+    /// [`ProgressTask`]: crate::core::progress::ProgressTask
     fn rebuild(&self, head_hash: &str) -> Result<()> {
+        // Everything before the first row is written: the two TOML reads plus
+        // the `git log` walk, whose cost is not knowable up front — hence a
+        // spinner. An error inside finishes it through the `Drop` contract.
+        let reading = self.progress.begin("Reading git history", None);
         let tasks = self.inner.list_tasks_with_paths()?;
         let state = self.inner.get_state()?;
         // One git-history walk to backfill the date columns; empty when the
@@ -88,6 +104,13 @@ impl CachedStore {
         // Archive segments are self-contained: entries carry frozen dates,
         // so they never touch git history.
         let segments = super::archive::segment_paths(&self.root)?;
+        reading.finish(None);
+        drop(reading);
+
+        let indexing = (!tasks.is_empty()).then(|| {
+            self.progress
+                .begin("Indexing tasks", Some(tasks.len() as u64))
+        });
         self.with_conn(|conn| {
             conn.execute("DELETE FROM tasks", [])
                 .map_err(|e| TaskError::Other(format!("sqlite clear tasks: {e}")))?;
@@ -105,6 +128,9 @@ impl CachedStore {
                 let filename = path.strip_prefix("tasks/").unwrap_or(path);
                 let dates = backfill.get(&hex[..8]).or_else(|| backfill.get(filename));
                 upsert_task_row(conn, task, path, dates, 0)?;
+                if let Some(indexing) = &indexing {
+                    indexing.inc(1);
+                }
             }
             let state_json = serde_json::to_string(&state)
                 .map_err(|e| TaskError::Other(format!("serialize state: {e}")))?;
@@ -112,17 +138,52 @@ impl CachedStore {
             set_meta(conn, "head_hash", head_hash)?;
             Ok(())
         })?;
+        if let Some(indexing) = &indexing {
+            indexing.finish(None);
+        }
+        drop(indexing);
+
+        let warm = (!segments.is_empty()).then(|| {
+            self.progress
+                .begin("Indexing archive segments", Some(segments.len() as u64))
+        });
         for (rel, abs) in &segments {
+            if let Some(warm) = &warm {
+                // `rel` is already a `String`; nothing is formatted per item,
+                // so this costs a vtable call under `NoProgress`.
+                warm.set_message(rel);
+                warm.inc(1);
+            }
             let entries = super::archive::read_segment(abs)?;
             self.with_conn(|conn| upsert_segment_rows(conn, rel, &entries, 1))?;
         }
+        if let Some(warm) = &warm {
+            warm.finish(None);
+        }
+        drop(warm);
+
         // Cold tier: manifest-listed segments no longer in the checkout are
         // recovered from their blobs — one object read each.
         let in_checkout: std::collections::HashSet<&str> =
             segments.iter().map(|(rel, _)| rel.as_str()).collect();
-        for pruned in super::archive::read_manifest(&self.root)? {
-            if in_checkout.contains(pruned.path.as_str()) {
-                continue;
+        // Filtering the manifest up front costs a `Vec` walk and no I/O, and
+        // buys a determinate bar over the segments actually read.
+        let pruned_segments: Vec<_> = super::archive::read_manifest(&self.root)?
+            .into_iter()
+            .filter(|pruned| !in_checkout.contains(pruned.path.as_str()))
+            .collect();
+        let cold = (!pruned_segments.is_empty()).then(|| {
+            self.progress.begin(
+                "Indexing pruned segments",
+                Some(pruned_segments.len() as u64),
+            )
+        });
+        for pruned in pruned_segments {
+            if let Some(cold) = &cold {
+                cold.set_message(&pruned.path);
+                // Advanced before the read, so a segment skipped below as
+                // unreachable still counts towards the total.
+                cold.inc(1);
             }
             let Some(content) = super::git_backend::blob_content(&self.root, &pruned.blob) else {
                 tracing::warn!(
@@ -134,6 +195,9 @@ impl CachedStore {
             };
             let entries = super::archive::parse_segment(&content)?;
             self.with_conn(|conn| upsert_segment_rows(conn, &pruned.path, &entries, 2))?;
+        }
+        if let Some(cold) = &cold {
+            cold.finish(None);
         }
         Ok(())
     }
@@ -168,6 +232,12 @@ impl CachedStore {
     }
 
     /// Applies an incremental set of file changes to the cache.
+    ///
+    /// Reported as a single bar over `changes.len()`: the two passes below are
+    /// an ordering constraint (deletes before upserts, so a rename nets out),
+    /// not two units of work, so each `FileChange` is counted once — by the
+    /// pass that actually handles its variant. Nothing is begun for an empty
+    /// change set.
     fn apply_changes(&self, changes: &[FileChange], new_head: &str) -> Result<()> {
         // The exact change time of each file lies somewhere in the diffed
         // commit range; the new head's time is the closest cheap bound.
@@ -182,11 +252,21 @@ impl CachedStore {
         // rows' creation times so a rename does not reset task age. A deleted
         // segment drops every row it carried.
         let mut stashed_created: HashMap<String, String> = HashMap::new();
+        let updating = (!changes.is_empty()).then(|| {
+            self.progress
+                .begin("Updating cache", Some(changes.len() as u64))
+        });
         self.with_conn(|conn| {
             for change in changes {
                 let FileChange::Delete(path) = change else {
                     continue;
                 };
+                if let Some(updating) = &updating {
+                    // The path is borrowed from the change set, so the detail
+                    // line allocates nothing per item.
+                    updating.set_message(path);
+                    updating.inc(1);
+                }
                 if is_task_file(path) {
                     if let Some((id, Some(created))) = delete_by_path(conn, path)? {
                         stashed_created.insert(id, created);
@@ -201,6 +281,10 @@ impl CachedStore {
             let FileChange::Upsert(path) = change else {
                 continue;
             };
+            if let Some(updating) = &updating {
+                updating.set_message(path);
+                updating.inc(1);
+            }
             if is_task_file(path) {
                 let abs = self.root.join(path);
                 match std::fs::read_to_string(&abs) {
@@ -247,6 +331,9 @@ impl CachedStore {
                     self.with_conn(|conn| upsert_segment_rows(conn, &pruned.path, &entries, 2))?;
                 }
             }
+        }
+        if let Some(updating) = &updating {
+            updating.finish(None);
         }
         self.with_conn(|conn| set_meta(conn, "head_hash", new_head))
     }
@@ -1230,6 +1317,251 @@ mod tests {
         store.set_progress(sink.clone());
         drop(store.progress().begin("rebuild", Some(1)));
         assert_eq!(sink.labels(), vec!["rebuild".to_owned()]);
+    }
+
+    /// A store over a repo that already holds `tasks`, with `sink` installed
+    /// so the *next* operation reports into it. `CachedStore::open` reconciles
+    /// before any caller can install a sink, hence the two-step.
+    fn setup_recording(
+        task_count: usize,
+    ) -> (
+        TempDir,
+        CachedStore,
+        GitBackend,
+        Arc<crate::core::progress::testing::RecordingSink>,
+    ) {
+        let (dir, mut store, vcs) = setup();
+        for n in 0..task_count {
+            let mut task = Task::new(format!("Task {n}"));
+            task.slug = Some(format!("task-{n}"));
+            store.save_task(&task).unwrap();
+        }
+        let sink = Arc::new(crate::core::progress::testing::RecordingSink::new());
+        store.set_progress(sink.clone());
+        (dir, store, vcs, sink)
+    }
+
+    #[test]
+    fn a_rebuild_reports_a_bar_over_every_indexed_task() {
+        let (_dir, store, vcs, sink) = setup_recording(5);
+
+        store.rebuild_cache(&vcs.head_hash().unwrap()).unwrap();
+
+        // The history walk is a spinner: cost unknown before the subprocess
+        // runs, so it has no total, only a single finish.
+        let reading = sink
+            .task("Reading git history")
+            .expect("the history walk must be reported");
+        assert_eq!(reading.total, None, "the walk cannot know its size");
+        assert_eq!(reading.finishes, 1);
+
+        let indexing = sink
+            .task("Indexing tasks")
+            .expect("the indexing loop must be reported");
+        assert_eq!(indexing.total, Some(5));
+        assert_eq!(indexing.progressed, 5, "one tick per upserted task");
+        assert!(indexing.completed());
+    }
+
+    #[test]
+    fn a_rebuild_without_an_archive_begins_no_segment_phases() {
+        let (_dir, store, vcs, sink) = setup_recording(2);
+
+        store.rebuild_cache(&vcs.head_hash().unwrap()).unwrap();
+
+        assert_eq!(
+            sink.labels(),
+            vec![
+                "Reading git history".to_owned(),
+                "Indexing tasks".to_owned()
+            ],
+            "empty phases must not flash an empty bar"
+        );
+    }
+
+    #[test]
+    fn a_rebuild_reports_the_warm_and_cold_segment_phases() {
+        use crate::core::storage::archive::{
+            append_manifest, write_segment, ArchivedTask, PrunedSegment,
+        };
+
+        let (dir, store, vcs, sink) = setup_recording(1);
+        let frozen = chrono::DateTime::from_timestamp(1_700_000_000, 0);
+        let entry = |title: &str| {
+            let mut task = Task::new(title);
+            task.mark_done(chrono::NaiveDate::from_ymd_opt(2025, 12, 5).unwrap());
+            ArchivedTask {
+                created_at: frozen,
+                updated_at: frozen,
+                task,
+            }
+        };
+
+        // Two segments stay in the checkout (warm)…
+        let warm: Vec<String> = ["archive/2025/12-001.toml", "archive/2025/12-002.toml"]
+            .iter()
+            .map(|rel| {
+                write_segment(&dir.path().join(rel), vec![entry("Warm")]).unwrap();
+                (*rel).to_owned()
+            })
+            .collect();
+        // …and a third is committed, then pruned into the manifest (cold).
+        let cold_rel = "archive/2025/11-001.toml";
+        let cold_abs = dir.path().join(cold_rel);
+        write_segment(&cold_abs, vec![entry("Cold")]).unwrap();
+        vcs.commit(std::slice::from_ref(&cold_abs), "archive")
+            .unwrap();
+        let blob = super::super::git_backend::blob_id_at_head(dir.path(), cold_rel).unwrap();
+        fs::remove_file(&cold_abs).unwrap();
+        append_manifest(
+            dir.path(),
+            &[PrunedSegment {
+                path: cold_rel.to_owned(),
+                blob,
+                tasks: 1,
+            }],
+        )
+        .unwrap();
+
+        store.rebuild_cache(&vcs.head_hash().unwrap()).unwrap();
+
+        let segments = sink.task("Indexing archive segments").unwrap();
+        assert_eq!(segments.total, Some(2));
+        assert!(segments.completed());
+        assert_eq!(segments.messages, warm, "each segment names its own path");
+
+        let pruned = sink.task("Indexing pruned segments").unwrap();
+        assert_eq!(
+            pruned.total,
+            Some(1),
+            "only manifest entries missing from the checkout count"
+        );
+        assert!(pruned.completed());
+        assert_eq!(pruned.messages, vec![cold_rel.to_owned()]);
+    }
+
+    #[test]
+    fn an_incremental_reconcile_counts_each_change_once() {
+        let (dir, mut store, vcs, sink) = setup_recording(0);
+        let mut alpha = Task::new("Alpha");
+        alpha.slug = Some("alpha".into());
+        let mut beta = Task::new("Beta");
+        beta.slug = Some("beta".into());
+        store.save_task(&alpha).unwrap();
+        store.save_task(&beta).unwrap();
+        let paths: Vec<_> = [&alpha, &beta]
+            .iter()
+            .map(|t| crate::core::storage::task_path(dir.path(), t))
+            .collect();
+        vcs.commit(&paths, "initial").unwrap();
+        store.note_head(&vcs.head_hash().unwrap()).unwrap();
+
+        // A change set that mixes both passes: one delete, two upserts.
+        alpha.title = "Alpha II".into();
+        fs::write(
+            dir.path().join("tasks/alpha.toml"),
+            toml::to_string_pretty(&alpha).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(dir.path().join("tasks/beta.toml")).unwrap();
+        let mut gamma = Task::new("Gamma");
+        gamma.slug = Some("gamma".into());
+        fs::write(
+            dir.path().join("tasks/gamma.toml"),
+            toml::to_string_pretty(&gamma).unwrap(),
+        )
+        .unwrap();
+        vcs.commit(
+            &[
+                dir.path().join("tasks/alpha.toml"),
+                dir.path().join("tasks/beta.toml"),
+                dir.path().join("tasks/gamma.toml"),
+            ],
+            "external",
+        )
+        .unwrap();
+
+        store.after_pull(&vcs.head_hash().unwrap()).unwrap();
+
+        assert_eq!(
+            sink.labels(),
+            vec!["Updating cache".to_owned()],
+            "the incremental path must not also run the rebuild's phases"
+        );
+        let updating = sink.task("Updating cache").unwrap();
+        assert_eq!(updating.total, Some(3));
+        assert_eq!(
+            updating.progressed, 3,
+            "the delete pass and the upsert pass share one count"
+        );
+        assert!(updating.completed());
+        let mut named = updating.messages.clone();
+        named.sort();
+        assert_eq!(
+            named,
+            vec![
+                "tasks/alpha.toml".to_owned(),
+                "tasks/beta.toml".to_owned(),
+                "tasks/gamma.toml".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reconcile_with_nothing_to_do_begins_no_bar() {
+        let (_dir, mut store, vcs, sink) = setup_recording(1);
+        let head = vcs.head_hash().unwrap();
+        store.note_head(&head).unwrap();
+
+        store.after_pull(&head).unwrap();
+
+        assert!(
+            sink.labels().is_empty(),
+            "an already-current cache reports nothing"
+        );
+    }
+
+    #[test]
+    fn a_failed_reconcile_still_finishes_its_bar_once() {
+        let (dir, mut store, vcs, sink) = setup_recording(0);
+        let mut alpha = Task::new("Alpha");
+        alpha.slug = Some("alpha".into());
+        store.save_task(&alpha).unwrap();
+        vcs.commit(
+            &[crate::core::storage::task_path(dir.path(), &alpha)],
+            "initial",
+        )
+        .unwrap();
+        store.note_head(&vcs.head_hash().unwrap()).unwrap();
+
+        // A pull that brings in a corrupt task file: the upsert pass returns
+        // through `?` halfway, leaving the bar to the `Drop` contract.
+        fs::write(dir.path().join("tasks/alpha.toml"), "this is not toml{").unwrap();
+        vcs.commit(&[dir.path().join("tasks/alpha.toml")], "corrupt")
+            .unwrap();
+        let err = store.after_pull(&vcs.head_hash().unwrap());
+
+        assert!(err.is_err(), "a corrupt task file must fail the reconcile");
+        let updating = sink.task("Updating cache").unwrap();
+        assert_eq!(updating.total, Some(1));
+        assert_eq!(
+            updating.finishes, 1,
+            "the `?` return finishes the bar exactly once, through Drop"
+        );
+    }
+
+    #[test]
+    fn the_default_store_reports_nothing_through_a_rebuild() {
+        // No sink installed: `NoProgress` must swallow every phase, and the
+        // rebuild must behave exactly as before.
+        let (_dir, mut store, vcs) = setup();
+        let mut task = Task::new("Silent");
+        task.slug = Some("silent".into());
+        store.save_task(&task).unwrap();
+
+        assert!(store.progress().is_noop());
+        store.rebuild_cache(&vcs.head_hash().unwrap()).unwrap();
+        assert!(store.get_task_by_slug("silent").unwrap().is_some());
     }
 
     #[test]

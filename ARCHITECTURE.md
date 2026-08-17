@@ -351,6 +351,22 @@ pub enum TaskError {
   unresolvable (fresh clone); it parses task files and archive segments and
   backfills the date columns from one `git log` walk. A `schema_version` meta
   key drops and rebuilds the tables on layout changes.
+- **Progress**: both paths report through the store's `ProgressSink` (see
+  `core::progress`; `NoProgress` by default, so nothing is emitted unless a
+  renderer was installed). The rebuild reports one task per phase, in
+  sequence and never nested, because the phases share no unit: *Reading git
+  history* (a spinner — the `git log` subprocess and the TOML reads cannot
+  know their cost up front), then determinate bars for *Indexing tasks*
+  (`tasks.len()`), *Indexing archive segments* (`segment_paths().len()`) and
+  *Indexing pruned segments* (the manifest entries absent from the checkout,
+  counted by a `Vec` filter before the blob reads start). A phase with a zero
+  count is not begun at all. The incremental path reports a single
+  *Updating cache* bar over `changes.len()`, ticked once per `FileChange` by
+  whichever of the two passes (delete, then upsert) handles that variant, so
+  the ordering constraint does not double-count. Detail lines carry the
+  segment or file path, which is borrowed from data the loop already holds —
+  no per-item formatting, so a million-task rebuild pays nothing under
+  `NoProgress`.
 
 SQLite schema (v3):
 
