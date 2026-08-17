@@ -98,6 +98,22 @@ test-one filter:
         | awk '{p+=$4; f+=$6} END {print p" passed, "f" failed"}') ──"
     exit $status
 
+# Install every binary into ~/.cargo/bin from the working tree.
+#
+# All four (`next`, `next-mcp`, `next-forgejo`, `next-tui`) are gated behind
+# required-features, so anything short of `--all-features` silently installs a
+# subset — which is how a stale `next-mcp` ends up serving an old tool schema
+# long after the CLI was rebuilt.
+install:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    out=$(cargo install --path . --all-features --locked --force 2>&1)
+    if [ $? -ne 0 ]; then
+        grep -E "^(error|warning)(\[|:)" -A 6 <<<"$out" | head -40
+        exit 1
+    fi
+    grep -E "^ *(Installed|Replaced|Replacing)" <<<"$out"
+
 # Everything the pre-commit hook checks, plus the default-feature test run.
 check: fmt-check lint test
 
