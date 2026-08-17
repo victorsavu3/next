@@ -21,6 +21,9 @@ const DOCS: &[&str] = &[
     "REQUIREMENTS.md",
     "CHANGELOG.md",
     "TUTORIAL.md",
+    // ARCHITECTURE.md describes the filter pipeline, so its examples are as
+    // able to go stale as any other doc's — and nothing else checks that file.
+    "ARCHITECTURE.md",
 ];
 
 /// The commands whose trailing arguments are a filter expression.
