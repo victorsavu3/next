@@ -911,6 +911,12 @@ fn tree_count_and_list_count_differ_where_the_implicit_gate_bites() {
     .unwrap();
     let list_count = String::from_utf8(buf).unwrap().trim().to_string();
 
-    assert_eq!(tree_count, "1", "the tree draws and counts the blocked task");
-    assert_eq!(list_count, "0", "the implicit gate hides it from the listing");
+    assert_eq!(
+        tree_count, "1",
+        "the tree draws and counts the blocked task"
+    );
+    assert_eq!(
+        list_count, "0",
+        "the implicit gate hides it from the listing"
+    );
 }
