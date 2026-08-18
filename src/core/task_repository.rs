@@ -75,10 +75,23 @@ impl TaskRepository {
     /// `CachedStore`, a fetch inside `GitBackend`) without either of them
     /// needing a path back to the repository.
     pub fn with_progress(mut self, sink: Arc<dyn ProgressSink>) -> Self {
+        self.install_progress(sink);
+        self
+    }
+
+    /// [`with_progress`](Self::with_progress) for a repository that is already
+    /// owned by something else.
+    ///
+    /// The CLI keeps its repository in a field of `AppContext`, so the
+    /// consuming builder is unusable there without moving the field out and
+    /// back — which is `mem::replace` gymnastics for what is a one-line
+    /// assignment. Both forms install into the same three places: the store
+    /// (the cache rebuild reports from there), the VCS backend (fetch and
+    /// push), and here.
+    pub fn install_progress(&mut self, sink: Arc<dyn ProgressSink>) {
         self.store.set_progress(sink.clone());
         self.vcs.set_progress(sink.clone());
         self.progress = sink;
-        self
     }
 
     /// The installed progress sink — [`NoProgress`] unless
@@ -294,6 +307,22 @@ mod tests {
             sink.labels(),
             vec!["store".to_owned(), "vcs".to_owned(), "repo".to_owned()],
             "the sink must reach the store and the VCS backend, not just the handle"
+        );
+        assert!(!repo.progress().is_noop());
+    }
+
+    #[test]
+    fn install_progress_reaches_the_same_three_places() {
+        // The CLI's repository lives in a field, so it installs through the
+        // non-consuming form; it must not be the weaker of the two.
+        let (_dir, mut repo) = spy_repo();
+        let sink = Arc::new(RecordingSink::new());
+        repo.install_progress(sink.clone());
+
+        drop(repo.progress().begin("repo", None));
+        assert_eq!(
+            sink.labels(),
+            vec!["store".to_owned(), "vcs".to_owned(), "repo".to_owned()]
         );
         assert!(!repo.progress().is_noop());
     }

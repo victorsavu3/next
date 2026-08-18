@@ -672,6 +672,10 @@ next sync [--push-only] [--pull-only]
 See §2.2. After a clean sync, any registered plugin whose periodic sync is due is run
 (see §10.4).
 
+The fetch and the push each report progress (§11.1): a spinner while the remote is
+being contacted, upgraded to a determinate bar once the transfer announces its size.
+`--quiet` suppresses both that and the `Synced with remote.` confirmation.
+
 ### 8.10 Forecasting
 
 ```
@@ -717,6 +721,10 @@ everyday command list stays small (room for future integrity/cleanup operations)
   throttle (see §2.3). It is a mutation (it commits) and follows the normal
   autopush rules. The archive pass is exposed *only* here — there is no
   top-level `next archive` command.
+- Both are long enough to need progress (§11.1): `rebuild-cache` reports one
+  phase per pass over the corpus (history walk, tasks, archive segments,
+  pruned segments) and `archive` one per stage of the pass. Under `--json`
+  neither renders, since JSON output means a script is reading.
 
 ---
 
@@ -866,6 +874,35 @@ direction, run on a schedule rather than per-event:
   text when stdout is not a TTY (pipe-safe)
 - Date expressions in `--due` and `--start` MUST accept natural-language input
   ("tomorrow", "in two weeks", "next Monday", "2026-06-01") in addition to ISO 8601
+
+### 11.1 Progress reporting
+
+Long operations — the cache rebuild on a fresh clone, the archive pass, a
+`git` fetch, a tag rename across every tier — MUST be able to say what they are
+doing rather than look like a hang.
+
+- Progress MUST be drawn on **stderr**. stdout carries results only, so a
+  progress bar can never corrupt a pipeline or a JSON document.
+- Progress MUST be **transient**: a finished phase clears its bar, leaving
+  stderr as it was found. Nothing is summarised there — results belong on
+  stdout.
+- A phase MUST NOT paint anything during its first **100 ms**, so the many
+  operations that finish instantly stay invisible. The delay MUST be a timer,
+  not a "paint on the first update": the case it exists for — a stalled fetch
+  against an unreachable remote — never reports an update at all.
+- Progress MUST be rendered only when **all** of the following hold:
+  stderr is a terminal; neither `--quiet` nor `--no-progress` was given; the
+  command's selected output is not JSON (`--json` / `--format json`); and
+  `TERM` is not `dumb`.
+- `NEXT_FORCE_PROGRESS=1` MUST override the automatic conditions above (a
+  redirected stderr, a JSON command, a dumb terminal) and MUST additionally
+  skip the 100 ms delay, so a forced run always paints. It MUST NOT override
+  `--quiet` or `--no-progress`.
+- `--quiet` MUST additionally suppress the informational stderr notes (the
+  auto-pull note and warning of §9.2) and the `next sync` success
+  confirmation. It MUST NOT suppress errors or command results.
+- Non-interactive consumers (`next-mcp`, `next-forgejo`, library users) MUST
+  render nothing, without needing to ask: the default sink discards.
 
 ---
 

@@ -99,6 +99,7 @@ next/                             # crate root (also git repo)
     cli/                          # feature = "cli" (default); the `next` binary + clap
       main.rs                     # `next` binary entry point
       app_context.rs              # AppContext: Config + TaskRepository (field `repo`); config.toml loading
+      progress.rs                 # IndicatifSink (bars on stderr) + ProgressGate + machine_readable()
       mod.rs  render.rs
       commands/
         add.rs   cancel.rs  config.rs  context.rs  data.rs   delete.rs  done.rs  edit.rs
@@ -138,7 +139,7 @@ next/                             # crate root (also git repo)
 
 | Feature | Default | Adds | Optional deps pulled in |
 |---------|---------|------|--------------------------|
-| `cli` | ✓ | `next` binary, `src/cli/**` | `clap`, `tracing-subscriber` |
+| `cli` | ✓ | `next` binary, `src/cli/**` | `clap`, `indicatif`, `tracing-subscriber` |
 | `mcp` | | `next-mcp` binary, `src/mcp/**` | `tokio`, `axum`, `tracing-subscriber` |
 | `forgejo` | | `next-forgejo` binary, `src/forgejo/**` | `forgejo-api`, `url`, `tokio`, `clap`, `tracing-subscriber` |
 | `tui` | | `next-tui` binary, `src/tui/**` | `ratatui`, `tui-input`, `tui-textarea-2`, `tui-tree-widget`, `tracing-subscriber` |
@@ -168,7 +169,9 @@ keep the core build clean.
 Every **non-optional** dependency is required by `core`, so it is present even in the
 featureless build; there are no CLI-exclusive always-on dependencies. The CLI-only crate
 `clap` is `optional` and pulled in by the `cli` feature (and also by `forgejo`, whose binary
-uses clap too); `tracing-subscriber` is shared by all four binaries. The `dep:` syntax in
+uses clap too); `indicatif` is pulled in by the `cli` feature *alone*, since the CLI is the
+only surface that draws progress (`src/cli/progress.rs`) — the abstraction it renders lives
+in core and costs nothing; `tracing-subscriber` is shared by all four binaries. The `dep:` syntax in
 `[features]` keeps these optional crates out of the dependency graph unless their feature is
 enabled.
 
@@ -476,8 +479,61 @@ See the §2 tree for the full file list. Key entry points:
   on/off) and the granular `--autopull` / `--no-autopull` / `--autopush` / `--no-autopush`.
   The master and granular flags are mutually exclusive (clap `conflicts_with`).
 - `src/cli/render.rs` — task list and detail rendering (text and `--json`).
+- `src/cli/progress.rs` — the progress **renderer** and the decision to render (below).
 - `src/cli/commands/` — one module per subcommand (`add`, `done`, `edit`, …), plus the
   `tag/` (`mod`/`meta`/`data`) and `plugin/` submodules.
+
+#### Progress rendering (`src/cli/progress.rs`)
+
+Core reports *what* is happening through `core::progress`; this is the only module that
+turns those reports into pixels, and the only one that depends on `indicatif`.
+
+`IndicatifSink` draws on **stderr** — stdout carries results — through one `MultiProgress`,
+with two templates kept side by side (`SPINNER_TEMPLATE`, `BAR_TEMPLATE`) because they are
+the whole visual design. `set_total` swaps a live spinner's style for the bar's, which is
+how a fetch becomes determinate mid-flight. Every finish is `finish_and_clear`: progress is
+transient, results are not, and no core call site passes a summary (all pass `None`), so
+there is no unused summary path to keep correct. `FinishOnce` makes the explicit finish and
+the `Drop` report exactly one.
+
+**The 100 ms delay** is the design's one subtlety. A task paints nothing for its first
+100 ms so that fast operations stay invisible, and it is a **timer**, not a reveal-on-first
+update: the case that matters most — a stalled fetch — never calls `inc`, so a lazy scheme
+would hide exactly the wait it exists to explain. Each begun task is therefore created with
+`ProgressDrawTarget::hidden()` and given a small thread that waits out the window on a
+`Condvar` and then joins the bar to the `MultiProgress` (which is what gives it somewhere to
+draw) and enables the steady tick. Reveal and finish take the same mutex and read the same
+three-state flag (`Hidden` → `Shown` | `Done`), so a task that ends inside the window can
+never be painted afterwards by its own timer; finishing also notifies the `Condvar`, so the
+thread ends with the task rather than sleeping out the window. Tasks are few and sequential,
+so a thread each is cheaper than a scheduler.
+
+**The gate is one chokepoint**, in `main.rs` immediately after `AppContext::new` and before
+the autopull (which is one of the operations that must show a spinner). `ProgressGate` is a
+pure predicate over six booleans — stderr is a terminal, `--quiet`, `--no-progress`,
+`machine_readable`, `TERM=dumb`, `NEXT_FORCE_PROGRESS=1` — so every branch is testable
+without a terminal. The two explicit flags win first, then the forced escape hatch, then the
+automatic detection. `machine_readable(&Command)` is an **exhaustive match with no wildcard
+arm**, so a new command has to decide; it answers through `OutputFormat::resolve` rather than
+re-deriving the `--format` / `--json` precedence. Rendering means
+`TaskRepository::install_progress` (the non-consuming twin of `with_progress`, since
+`AppContext` owns `repo` as a field), which pushes the sink into the store and the VCS
+backend too.
+
+`NEXT_FORCE_PROGRESS=1` overrides the automatic conditions *and* skips the delay, which is
+what makes the rendering path testable without a pty (`tests/test_progress.rs` spawns the
+real binary). Since indicatif deliberately suppresses its own stderr target when stderr is
+not a terminal, the forced path falls back to `PlainStderr`, a `TermLike` that writes frames
+regardless.
+
+Two known limits, both deliberate: the cache reconcile inside `AppContext::new` happens
+*before* any sink can be installed (the store reconciles as it opens), so a fresh clone's
+very first rebuild is still silent — closing that means giving `storage::open` a sink, a
+core signature change. And `tracing` output is not routed through `MultiProgress::suspend`:
+the default level is `error`, i.e. one line just before exit, and a custom `MakeWriter` is
+more machinery than that collision is worth. The informational `eprintln!` notes in `main.rs`
+*are* wrapped in `suspend`, cheap insurance for a note that ever gets printed while a bar
+is live.
 
 ID resolution (`resolve_task_id`) and filter-token conversion (`FilterArgs`) are **not** in
 `cli` — they live in `next::core::resolve` (`src/core/resolve.rs`) and
@@ -530,6 +586,8 @@ Remote access is provided via MCP — connect with `claude mcp add --transport h
    If command is Tutorial → print embedded TUTORIAL.md; exit
    If command is Config → read/write config.toml; exit
 3. AppContext::new(): locate repository root, open CachedStore + GitBackend into TaskRepository
+3b. Progress gate (`cli::progress::ProgressGate`): decide once whether this run renders
+   progress, and if so install `IndicatifSink` on the repository — before step 5's autopull
 4. Resolve `effective_autopull` / `effective_autopush` from the flags and config
    (precedence: granular flag → master flag → `config.sync.autopull`/`autopush`)
 5. Autopull (all commands except `sync`): when `effective_autopull`, core::sync::pull_if_stale()

@@ -1,9 +1,11 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
 use clap::Parser;
 use next::{
     cli::commands::sync as sync_cmd,
+    cli::progress::{IndicatifSink, ProgressGate},
     cli::{commands, Cli, Command},
     core, AppContext,
 };
@@ -50,6 +52,8 @@ fn main() -> anyhow::Result<()> {
     let cli_no_autopull = cli.no_autopull;
     let cli_autopush = cli.autopush;
     let cli_no_autopush = cli.no_autopush;
+    let cli_quiet = cli.quiet;
+    let cli_no_progress = cli.no_progress;
     let mut ctx = AppContext::new(cli.config.as_deref(), cli.repo.as_deref())?;
 
     // Resolve the two orthogonal sync capabilities for this invocation.
@@ -96,6 +100,37 @@ fn main() -> anyhow::Result<()> {
             tokens: vec![],
         })
     });
+
+    // Whether this run draws progress is decided **once**, here, and never
+    // asked again: every operation reports unconditionally into the sink it
+    // was handed (`NoProgress` by default), so this is the only place that
+    // knows about terminals. It has to happen before the autopull below, which
+    // is one of the operations that must show a spinner.
+    //
+    // What it cannot cover: the cache reconcile inside `AppContext::new`. The
+    // store reconciles as it opens, which is before any sink can be installed
+    // on it — so a fresh clone's first rebuild is still silent. Fixing that
+    // means giving `storage::open` a sink, which is a core signature change.
+    let gate = ProgressGate::detect(&command, cli_quiet, cli_no_progress);
+    let renderer = gate
+        .should_render()
+        .then(|| Arc::new(IndicatifSink::for_stderr(gate.forced)));
+    if let Some(sink) = &renderer {
+        ctx.repo.install_progress(sink.clone());
+    }
+
+    // Informational stderr notes — suppressed by `--quiet`, and printed with
+    // the bars lifted off the screen in case one is ever live when a note is
+    // emitted. Errors and command results do not come through here.
+    let note = |msg: &str| {
+        if cli_quiet {
+            return;
+        }
+        match &renderer {
+            Some(sink) => sink.suspend(|| eprintln!("{msg}")),
+            None => eprintln!("{msg}"),
+        }
+    };
 
     let cmd_name = match &command {
         Command::Init(_) => unreachable!("handled above"),
@@ -163,10 +198,12 @@ fn main() -> anyhow::Result<()> {
         };
         match core::sync::pull_if_stale(&mut ctx.repo, &opts) {
             core::sync::PullStatus::Pulled => {
-                eprintln!("note: pulled latest changes (local copy was stale)");
+                note("note: pulled latest changes (local copy was stale)");
             }
             core::sync::PullStatus::Failed(msg) => {
-                eprintln!("warning: auto-pull failed: {msg}; results may be out of date");
+                note(&format!(
+                    "warning: auto-pull failed: {msg}; results may be out of date"
+                ));
             }
             core::sync::PullStatus::Fresh | core::sync::PullStatus::Disabled => {}
         }
@@ -189,7 +226,13 @@ fn main() -> anyhow::Result<()> {
         Command::Move(args) => commands::move_cmd::run(args, &mut ctx),
         Command::User(args) => commands::user::run(args, &mut ctx),
         Command::Forecast(args) => commands::forecast::run(args, &ctx),
-        Command::Sync(args) => commands::sync::run(args, &mut ctx),
+        // `Args::quiet` is `#[arg(skip)]` — set by autosync below, and now by
+        // the global `--quiet` too, rather than adding a second flag that
+        // means the same thing.
+        Command::Sync(mut args) => {
+            args.quiet |= cli_quiet;
+            commands::sync::run(args, &mut ctx)
+        }
         Command::Maintenance(args) => commands::maintenance::run(args, &mut ctx),
         Command::Tag(args) => commands::tag::run(args, &mut ctx),
         Command::Tree(args) => commands::tree::run(args, &ctx),
