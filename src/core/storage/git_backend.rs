@@ -7,7 +7,7 @@ use std::{
 
 use crate::core::{
     error::{Result, TaskError},
-    progress::{NoProgress, ProgressSink},
+    progress::{NoProgress, ProgressSink, ProgressTask},
     store::{PullResult, VcsBackend},
 };
 use git2::{build::CheckoutBuilder, Repository};
@@ -126,6 +126,128 @@ fn remote_callbacks<'a>(explicit: Option<(String, String)>) -> git2::RemoteCallb
     cb
 }
 
+/// Detail lines for the two phases a fetch spends its time in. Both are
+/// `&'static str`, so setting one allocates nothing on a callback that fires
+/// once per packet.
+const RECEIVING: &str = "receiving objects";
+const RESOLVING: &str = "resolving deltas";
+
+/// The advance one transfer callback invocation should report.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TransferStep {
+    /// A total to announce with [`ProgressTask::set_total`], or `None` when it
+    /// is still unknown or already announced.
+    total: Option<u64>,
+    /// How far to advance the bar. Never negative and never a re-count: the
+    /// caller can pass this straight to [`ProgressTask::inc`].
+    delta: u64,
+}
+
+/// Converts git2's transfer counters into what [`ProgressTask`] wants.
+///
+/// The two are shaped differently, and this is the whole reason the type
+/// exists: git2 reports an **absolute** position on every invocation
+/// (`received_objects()` for a fetch, `current` for a push — each a running
+/// count that starts at zero and climbs to the total), while `inc` takes a
+/// **delta**. Feeding the absolute position to `inc` would make a 1 000-object
+/// fetch report half a million objects. So the last position is kept here and
+/// only the difference is emitted.
+///
+/// Three cases the arithmetic has to survive, all of them observed from real
+/// transports rather than invented:
+///
+/// * **The total arrives late.** git2 reports `total_objects() == 0` until the
+///   remote has finished counting, so the bar starts as a spinner and becomes
+///   determinate mid-transfer. Zero is treated as "not known yet", never as a
+///   real total, and a total is announced once rather than on every packet.
+/// * **The counter restarts.** A callback outlives a single phase — a fetch
+///   that negotiates twice, a push of several refspecs — and the position then
+///   drops back towards zero. A `saturating_sub` reports nothing for that step
+///   and rebases on the new position, so the bar stalls for one tick instead
+///   of running backwards or wrapping.
+/// * **The position repeats.** Callbacks fire on byte progress too, so the
+///   same object count arrives many times in a row; each repeat is a zero
+///   delta, which the caller skips.
+#[derive(Debug, Default)]
+struct TransferCounter {
+    /// The position the last [`step`](Self::step) was told about.
+    seen: u64,
+    /// The total already announced, so it is set once and not per packet.
+    announced: Option<u64>,
+}
+
+impl TransferCounter {
+    /// Folds one absolute `(position, total)` report into a [`TransferStep`].
+    fn step(&mut self, position: u64, total: u64) -> TransferStep {
+        let announce = if total != 0 && self.announced != Some(total) {
+            self.announced = Some(total);
+            Some(total)
+        } else {
+            None
+        };
+        // Saturating, so a restarted counter rebases instead of underflowing.
+        let delta = position.saturating_sub(self.seen);
+        self.seen = position;
+        TransferStep {
+            total: announce,
+            delta,
+        }
+    }
+}
+
+/// Reports a fetch's object transfer into `task`, upgrading it from a spinner
+/// to a determinate bar as soon as git2 knows the object count.
+///
+/// Only ever called when a real sink is installed — see the `is_noop` guard at
+/// each call site — so the closure's cost is paid only when something renders
+/// it. The callback returns `true` unconditionally: `false` cancels the fetch,
+/// and reporting progress must never be able to fail a transfer.
+fn install_fetch_progress<'a>(cb: &mut git2::RemoteCallbacks<'a>, task: &'a dyn ProgressTask) {
+    let mut counter = TransferCounter::default();
+    let mut phase = "";
+    cb.transfer_progress(move |stats| {
+        let step = counter.step(
+            stats.received_objects() as u64,
+            stats.total_objects() as u64,
+        );
+        if let Some(total) = step.total {
+            task.set_total(total);
+        }
+        if step.delta > 0 {
+            task.inc(step.delta);
+        }
+        // The bar counts objects received, so it sits full while the deltas
+        // are resolved; the detail line is what explains the pause. Set only
+        // when it changes, and always to a `&'static str`.
+        let now = match (stats.received_objects(), stats.total_objects()) {
+            (_, 0) => phase, // total not announced yet — say nothing
+            (received, total) if received < total => RECEIVING,
+            _ => RESOLVING,
+        };
+        if now != phase {
+            phase = now;
+            task.set_message(now);
+        }
+        true
+    });
+}
+
+/// Reports a push's object transfer into `task`, the same way
+/// [`install_fetch_progress`] does — `current` is absolute too, so the same
+/// counter converts it. git2 gives no phase here, only counts and bytes.
+fn install_push_progress<'a>(cb: &mut git2::RemoteCallbacks<'a>, task: &'a dyn ProgressTask) {
+    let mut counter = TransferCounter::default();
+    cb.push_transfer_progress(move |current, total, _bytes| {
+        let step = counter.step(current as u64, total as u64);
+        if let Some(total) = step.total {
+            task.set_total(total);
+        }
+        if step.delta > 0 {
+            task.inc(step.delta);
+        }
+    });
+}
+
 /// Environment variables that scope a `git` invocation to a repository.
 /// Stripped from every subprocess so the command targets its working
 /// directory, never a repository inherited from the caller's environment
@@ -150,7 +272,15 @@ fn git_cmd(dir: &Path) -> Command {
 
 impl GitBackend {
     /// Runs `git pull` as a subprocess in the repository directory.
+    ///
+    /// Progress is a bare spinner for the lifetime of the child. `git` writes
+    /// its own counters ("Receiving objects: 43% …") to *its* stderr, which
+    /// `output()` captures and this function only ever inspects for conflict
+    /// markers; parsing that stream back into bar updates would mean giving up
+    /// the captured stderr the error path reports, so the subprocess mode
+    /// deliberately reports duration only, not fraction.
     fn subprocess_pull(&self) -> Result<PullResult> {
+        let _pulling = self.progress.begin("Pulling", None);
         let _lock = self.acquire_repo_lock()?;
         let output = git_cmd(&self.work_dir)
             .args(["pull", "--no-edit"])
@@ -176,7 +306,12 @@ impl GitBackend {
     }
 
     /// Runs `git push` as a subprocess in the repository directory.
+    ///
+    /// A spinner only, for the same reason as [`Self::subprocess_pull`]:
+    /// `git`'s own stderr progress is captured for the error message, not
+    /// parsed.
     fn subprocess_push(&self) -> Result<()> {
+        let _pushing = self.progress.begin("Pushing", None);
         let _lock = self.acquire_repo_lock()?;
         let output = git_cmd(&self.work_dir)
             .args(["push"])
@@ -258,6 +393,10 @@ impl VcsBackend for GitBackend {
         if self.use_subprocess {
             return self.subprocess_pull();
         }
+        // Begun before the lock so the wait for another process's transaction
+        // is on screen too, and declared before everything that borrows it so
+        // it is finished last — by `Drop`, on every `?` below as well.
+        let pulling = self.progress.begin("Pulling", None);
         let _lock = self.acquire_repo_lock()?;
         let repo = self
             .repo
@@ -268,8 +407,16 @@ impl VcsBackend for GitBackend {
             .find_remote("origin")
             .map_err(|e| TaskError::Other(format!("git remote 'origin': {e}")))?;
 
+        let mut callbacks = remote_callbacks(self.git_credentials.clone());
+        // Under the default `NoProgress` the callback is not installed at all,
+        // rather than installed and discarded: git2 skips the per-packet
+        // indexer bookkeeping, and a fetch of a large repo pays literally
+        // nothing for a sink nobody is watching.
+        if !self.progress.is_noop() {
+            install_fetch_progress(&mut callbacks, &*pulling);
+        }
         let mut fetch_opts = git2::FetchOptions::new();
-        fetch_opts.remote_callbacks(remote_callbacks(self.git_credentials.clone()));
+        fetch_opts.remote_callbacks(callbacks);
         remote
             .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
             .map_err(|e| TaskError::Other(format!("git fetch: {e}")))?;
@@ -401,6 +548,9 @@ impl VcsBackend for GitBackend {
         if self.use_subprocess {
             return self.subprocess_push();
         }
+        // Same shape as `pull`: a spinner covering the lock wait and the
+        // whole transfer, upgraded to a bar by the callback below.
+        let pushing = self.progress.begin("Pushing", None);
         let _lock = self.acquire_repo_lock()?;
         let repo = self
             .repo
@@ -420,8 +570,12 @@ impl VcsBackend for GitBackend {
         let mut remote = repo
             .find_remote("origin")
             .map_err(|e| TaskError::Other(format!("git remote 'origin': {e}")))?;
+        let mut callbacks = remote_callbacks(self.git_credentials.clone());
+        if !self.progress.is_noop() {
+            install_push_progress(&mut callbacks, &*pushing);
+        }
         let mut push_opts = git2::PushOptions::new();
-        push_opts.remote_callbacks(remote_callbacks(self.git_credentials.clone()));
+        push_opts.remote_callbacks(callbacks);
         remote
             .push(&[refspec.as_str()], Some(&mut push_opts))
             .map_err(|e| TaskError::Other(format!("git push: {e}")))?;
@@ -692,6 +846,38 @@ mod tests {
         repo
     }
 
+    /// A repository with one commit and a bare `origin` it already tracks.
+    ///
+    /// The upstream is configured by the seed push because `subprocess_pull` /
+    /// `subprocess_push` shell out to a bare `git pull` / `git push`, which
+    /// refuse to guess a branch without one. Both directories are returned so
+    /// the caller keeps them alive; dropping either deletes the repo.
+    fn repo_with_remote() -> (tempfile::TempDir, tempfile::TempDir) {
+        use crate::core::test_git::{git, init_test_repo};
+
+        let remote = tempfile::TempDir::new().unwrap();
+        git(remote.path(), &["init", "-q", "--bare"]);
+
+        let local = tempfile::TempDir::new().unwrap();
+        init_test_repo(local.path());
+        fs::write(local.path().join("seed.txt"), "seed").unwrap();
+        git(local.path(), &["add", "seed.txt"]);
+        git(local.path(), &["commit", "-q", "-m", "seed"]);
+        git(
+            local.path(),
+            &["remote", "add", "origin", remote.path().to_str().unwrap()],
+        );
+        git(local.path(), &["push", "-q", "-u", "origin", "HEAD"]);
+        (local, remote)
+    }
+
+    /// Commits a new file, so the next push has something to transfer.
+    fn commit_a_change(backend: &GitBackend, root: &Path, name: &str) {
+        let file = root.join(name);
+        fs::write(&file, name).unwrap();
+        backend.commit(&[file], name).unwrap();
+    }
+
     #[test]
     fn a_fresh_backend_reports_no_progress() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -816,5 +1002,279 @@ mod tests {
             changed_paths(dir.path(), "0000000000000000000000000000000000000000", &h2).is_none()
         );
         assert!(changed_paths(dir.path(), "unborn", &h2).is_none());
+    }
+
+    // ── The absolute → delta conversion ──────────────────────────────────
+    //
+    // git2 reports where a transfer *is*; `ProgressTask::inc` is told how far
+    // it moved. Everything that can go wrong with progress on the network
+    // paths goes wrong here, so this is tested on its own rather than through
+    // a transport.
+
+    #[test]
+    fn transfer_counter_turns_absolute_positions_into_deltas() {
+        let mut counter = TransferCounter::default();
+        assert_eq!(
+            counter.step(0, 10),
+            TransferStep {
+                total: Some(10),
+                delta: 0
+            },
+            "the first report announces the total and moves nothing"
+        );
+        assert_eq!(
+            counter.step(3, 10),
+            TransferStep {
+                total: None,
+                delta: 3
+            }
+        );
+        assert_eq!(
+            counter.step(3, 10),
+            TransferStep {
+                total: None,
+                delta: 0
+            },
+            "a repeated position is not re-counted"
+        );
+        assert_eq!(
+            counter.step(10, 10),
+            TransferStep {
+                total: None,
+                delta: 7
+            }
+        );
+    }
+
+    #[test]
+    fn transfer_counter_deltas_sum_to_the_final_position() {
+        // The property that makes the bar land exactly on full: whatever the
+        // callback reports, the deltas add up to the last absolute position.
+        let mut counter = TransferCounter::default();
+        let sum: u64 = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
+            .into_iter()
+            .map(|position| counter.step(position, 55).delta)
+            .sum();
+        assert_eq!(sum, 55);
+    }
+
+    #[test]
+    fn transfer_counter_announces_a_late_total_once() {
+        // git2 reports a total of 0 until the remote finishes counting: the
+        // task stays a spinner, then becomes a bar mid-transfer.
+        let mut counter = TransferCounter::default();
+        assert_eq!(
+            counter.step(0, 0),
+            TransferStep {
+                total: None,
+                delta: 0
+            },
+            "zero is 'unknown', never a real total"
+        );
+        assert_eq!(
+            counter.step(2, 0),
+            TransferStep {
+                total: None,
+                delta: 2
+            },
+            "a spinner still advances"
+        );
+        assert_eq!(
+            counter.step(4, 8),
+            TransferStep {
+                total: Some(8),
+                delta: 2
+            },
+            "the total arrives late and is announced then"
+        );
+        assert_eq!(
+            counter.step(5, 8),
+            TransferStep {
+                total: None,
+                delta: 1
+            },
+            "and is not re-announced on every later packet"
+        );
+    }
+
+    #[test]
+    fn transfer_counter_rebases_when_the_counter_restarts() {
+        // A second phase on the same callback starts back near zero. The bar
+        // must stall for one tick, not run backwards or wrap around.
+        let mut counter = TransferCounter::default();
+        assert_eq!(counter.step(5, 5).delta, 5);
+        assert_eq!(
+            counter.step(0, 9),
+            TransferStep {
+                total: Some(9),
+                delta: 0
+            },
+            "the restart reports no advance"
+        );
+        assert_eq!(
+            counter.step(4, 9),
+            TransferStep {
+                total: None,
+                delta: 4
+            },
+            "and counts from the new base afterwards"
+        );
+    }
+
+    // ── The network paths ────────────────────────────────────────────────
+
+    #[test]
+    fn a_push_reports_a_pushing_phase() {
+        use crate::core::progress::testing::RecordingSink;
+
+        let (local, _remote) = repo_with_remote();
+        let mut backend = GitBackend::open(local.path()).unwrap();
+        let sink = Arc::new(RecordingSink::new());
+        backend.set_progress(sink.clone());
+
+        commit_a_change(&backend, local.path(), "pushed.txt");
+        backend.push().unwrap();
+
+        assert_eq!(
+            sink.labels(),
+            vec!["Pushing".to_owned()],
+            "one phase, and `commit` reports none"
+        );
+        let rec = sink.task("Pushing").expect("push reports a phase");
+        assert_eq!(rec.finishes, 1, "exactly one finish: {rec:?}");
+        // The local transport may complete without ever reporting a count, so
+        // the lifecycle is what is pinned; when a total does arrive, the
+        // deltas must not overshoot it.
+        if let Some(total) = rec.total {
+            assert!(rec.progressed <= total, "{rec:?}");
+        }
+    }
+
+    #[test]
+    fn a_pull_that_fast_forwards_reports_a_pulling_phase() {
+        use crate::core::progress::testing::RecordingSink;
+        use crate::core::test_git::git;
+
+        let (local, remote) = repo_with_remote();
+
+        // A second working copy pushes a commit, so the pull below actually
+        // transfers objects instead of returning "up to date" immediately.
+        let other = tempfile::TempDir::new().unwrap();
+        git(
+            other.path(),
+            &["clone", "-q", remote.path().to_str().unwrap(), "."],
+        );
+        git(other.path(), &["config", "user.email", "test@test.com"]);
+        git(other.path(), &["config", "user.name", "Test"]);
+        fs::write(other.path().join("second.txt"), "second").unwrap();
+        git(other.path(), &["add", "second.txt"]);
+        git(other.path(), &["commit", "-q", "-m", "second"]);
+        git(other.path(), &["push", "-q", "origin", "HEAD"]);
+
+        let mut backend = GitBackend::open(local.path()).unwrap();
+        let sink = Arc::new(RecordingSink::new());
+        backend.set_progress(sink.clone());
+
+        assert!(matches!(backend.pull().unwrap(), PullResult::Clean));
+        assert!(
+            local.path().join("second.txt").exists(),
+            "the pull fast-forwarded the checkout"
+        );
+
+        assert_eq!(sink.labels(), vec!["Pulling".to_owned()]);
+        let rec = sink.task("Pulling").expect("pull reports a phase");
+        assert_eq!(rec.finishes, 1, "exactly one finish: {rec:?}");
+        if let Some(total) = rec.total {
+            assert!(rec.progressed <= total, "{rec:?}");
+        }
+        for message in &rec.messages {
+            assert!(
+                message == RECEIVING || message == RESOLVING,
+                "detail lines are the two static phase names: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_pull_still_finishes_its_phase_once() {
+        use crate::core::progress::testing::RecordingSink;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        init_repo(dir.path());
+        let mut backend = GitBackend::open(dir.path()).unwrap();
+        let sink = Arc::new(RecordingSink::new());
+        backend.set_progress(sink.clone());
+
+        let err = backend.pull().unwrap_err().to_string();
+        assert!(err.contains("git remote 'origin'"), "{err}");
+
+        let rec = sink.task("Pulling").expect("the phase was begun first");
+        assert_eq!(
+            rec.finishes, 1,
+            "`Drop` finishes the phase on the `?` path: {rec:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_push_still_finishes_its_phase_once() {
+        use crate::core::progress::testing::RecordingSink;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        init_repo(dir.path());
+        let mut backend = GitBackend::open(dir.path()).unwrap();
+        let sink = Arc::new(RecordingSink::new());
+        backend.set_progress(sink.clone());
+        commit_a_change(&backend, dir.path(), "only.txt");
+
+        let err = backend.push().unwrap_err().to_string();
+        assert!(err.contains("git remote 'origin'"), "{err}");
+
+        let rec = sink.task("Pushing").expect("the phase was begun first");
+        assert_eq!(
+            rec.finishes, 1,
+            "`Drop` finishes the phase on the `?` path: {rec:?}"
+        );
+    }
+
+    #[test]
+    fn subprocess_mode_reports_the_same_two_phases() {
+        use crate::core::progress::testing::RecordingSink;
+
+        let (local, _remote) = repo_with_remote();
+        let mut backend = GitBackend::open(local.path())
+            .unwrap()
+            .with_subprocess(true);
+        let sink = Arc::new(RecordingSink::new());
+        backend.set_progress(sink.clone());
+
+        commit_a_change(&backend, local.path(), "shelled-out.txt");
+        backend.push().unwrap();
+        assert!(matches!(backend.pull().unwrap(), PullResult::Clean));
+
+        assert_eq!(
+            sink.labels(),
+            vec!["Pushing".to_owned(), "Pulling".to_owned()]
+        );
+        for label in ["Pushing", "Pulling"] {
+            let rec = sink.task(label).expect("phase begun");
+            assert_eq!(rec.finishes, 1, "{label}: {rec:?}");
+            // `git`'s own stderr counters are captured for the error path, not
+            // parsed, so the subprocess phases stay spinners: no total, no
+            // advance, no detail lines.
+            assert_eq!(rec.total, None, "{label}: {rec:?}");
+            assert_eq!(rec.progressed, 0, "{label}: {rec:?}");
+            assert!(rec.messages.is_empty(), "{label}: {rec:?}");
+        }
+    }
+
+    #[test]
+    fn a_backend_without_a_sink_pulls_and_pushes_unchanged() {
+        let (local, _remote) = repo_with_remote();
+        let backend = GitBackend::open(local.path()).unwrap();
+        assert!(backend.progress().is_noop());
+
+        commit_a_change(&backend, local.path(), "silent.txt");
+        backend.push().unwrap();
+        assert!(matches!(backend.pull().unwrap(), PullResult::Clean));
     }
 }

@@ -461,7 +461,9 @@ Two one-time migrations run on `TomlStore::open()`:
 Both migrations are idempotent (subsequent opens are no-ops).
 
 **`GitBackend`** wraps `Mutex<git2::Repository>` to satisfy `Send + Sync`. Commit
-messages follow the pattern `next: <verb> "<task title>"`.
+messages follow the pattern `next: <verb> "<task title>"`. `pull`/`push` report through the
+sink installed by `VcsBackend::set_progress` — see §6.2 for the phases and the
+absolute-position → delta conversion.
 
 ### `next::cli` — command handlers (feature = `"cli"`)
 
@@ -579,6 +581,23 @@ produce a git commit.
 
 `pull` returns `PullResult::Clean` or `PullResult::Conflicts(Vec<PathBuf>)`. The sync
 command aborts and prints conflicting file paths when conflicts are detected.
+
+**Progress** (see `core::progress`; silent under the default `NoProgress`) is one phase per
+network operation — *Pulling* and *Pushing* — begun before the repo lock, so the wait for
+another process's transaction is on screen too, and finished by `Drop` on every error path.
+Each starts as a spinner and is upgraded to a determinate bar by git2's
+`transfer_progress` / `push_transfer_progress` callbacks. Those report an **absolute**
+position while `ProgressTask::inc` takes a delta, so both go through `TransferCounter`
+(`git_backend.rs`), which keeps the last position, emits the difference, treats a total of
+`0` as "not known yet" and announces a total once; a counter that restarts mid-transfer
+rebases via `saturating_sub` instead of running backwards. The fetch bar counts objects
+received and uses its detail line for the phase (`receiving objects` / `resolving deltas`,
+both `&'static str` — nothing is formatted per packet). The callbacks are **not installed
+at all** when `progress.is_noop()`, so a large fetch pays nothing for a sink nobody
+watches. The post-fetch merge / fast-forward / checkout stays under the same spinner: it is
+local and fast. In subprocess mode (`config.sync.git_subprocess`) both phases are plain
+spinners — `git`'s own stderr counters are captured for the error message, not parsed back
+into bar updates.
 
 ### 6.3 Concurrency and locking
 
