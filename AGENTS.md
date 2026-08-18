@@ -52,8 +52,30 @@ the same, including `--no-default-features`.
 - **Docs are part of the change.** `README.md` is the introduction,
   `CLI.md` the command reference, `ARCHITECTURE.md` the map,
   `REQUIREMENTS.md` the long-term plan. `tests/test_docs.rs` executes the
-  filter examples in the docs, so an example that stops being true fails the
+  filter examples in all of them, so an example that stops being true fails the
   suite.
+- **Update `ARCHITECTURE.md` in the same commit as the code.** It is the doc
+  nothing can check for you. The test above reads *filter examples*; the rest of
+  `ARCHITECTURE.md` is prose about types, signatures and file layout that no test
+  touches, so it goes stale silently and stays that way. It once drifted thirty
+  commits: a `Task` method that did not exist, two command files that had been
+  deleted, a schema two versions behind, and an SQL predicate the document
+  contradicted two paragraphs later. Reach for it when a change touches:
+
+  | Change | Section |
+  |---|---|
+  | a public signature, trait method, or `Task` field | §3 |
+  | a new, moved or deleted module | §2 |
+  | a Cargo feature or dependency | §2.1, §14 |
+  | the SQLite schema or `SCHEMA_VERSION` | §6 |
+  | the filter pipeline, pushdown, or a new atom | §7 |
+  | scoring factors or weights | §9 |
+  | a config key | §11 |
+  | a new test file | §13 |
+
+  Removing something counts. Most of that drift was not wrong when written — it
+  was true, and then a command, a parameter or a method was deleted and the map
+  kept describing it.
 - **Commit explicit paths.** `git add <path>`, never `git add -A` —
   `.claude/` and `CLAUDE.md` are local and gitignored, and sweeping them in
   is the mistake this rule exists to prevent. Keep commits small and on one
