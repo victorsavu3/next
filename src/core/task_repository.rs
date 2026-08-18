@@ -87,6 +87,19 @@ impl TaskRepository {
         &*self.progress
     }
 
+    /// An owned handle on the installed sink.
+    ///
+    /// [`transaction`](Self::transaction) hands its closure the store, the
+    /// backend and the repo root — deliberately not the repository, so a
+    /// mutation cannot start a nested one — which leaves an operation that
+    /// wants to report from *inside* a transaction (the archive pass, a tag
+    /// rename) unable to borrow [`progress`](Self::progress) across it. Cloning
+    /// the `Arc` out first and moving it into the closure is the way round
+    /// that; it costs one refcount bump per operation.
+    pub fn progress_handle(&self) -> Arc<dyn ProgressSink> {
+        Arc::clone(&self.progress)
+    }
+
     /// Opens the task store and git backend at `repo_root`. No config-file
     /// handling — that is the CLI's concern.
     pub fn open(repo_root: PathBuf) -> anyhow::Result<Self> {

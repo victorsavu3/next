@@ -418,6 +418,15 @@ contexts / resource keys. The committed half runs in a single `TaskRepository::t
 and produces one commit; the state half runs afterwards in a `state_transaction`. The
 rename is hierarchical (descendants move with their parent) and kind-preserving; existing
 destinations are rejected unless the caller opts into merging.
+Progress (see `core::progress`; silent under the default `NoProgress`) is one
+determinate bar per tier — *Rewriting tasks* (`list_tasks().len()`),
+*Rewriting archive segments* (`segment_paths().len()`, detail line = the segment path),
+*Rewriting pruned segments* (the manifest entries absent from the checkout, filtered into
+a `Vec` up front) — because a repository may hold ten thousand active tasks and no
+archive, or the reverse, and one bar over their sum would move at three different speeds.
+A tier with nothing in it begins no bar. The destination-conflict check that runs without
+`--merge` is a *second* full traversal of all three tiers, so it gets its own
+*Checking destination tags* spinner rather than being charged to the rewrite bars.
 
 **Contexts and resources are just tags.** `@context` and `#resource` tags are classified
 by their prefix (`@` or `#`) but share the same `tags/` storage as freeform tags, and —
@@ -678,6 +687,21 @@ Requirements are in REQUIREMENTS.md §2.3; the machinery lives in
   `merge=union`, last line per path wins). Cache rows flip to tier 2 in
   place. Segment numbers listed in the manifest but absent from the checkout
   are never reused.
+- **Progress**: the pass reports three phases in sequence through the
+  repository's `ProgressSink` (`core::progress`; `NoProgress` by default).
+  *Dating tasks* is a spinner covering the `git log --name-only` walk, the
+  cache dates and the eligibility fixpoint — none of which can be sized before
+  they run, and all of which happen on every pass, so it is what the daily
+  no-op auto-archive is actually waiting for. *Archiving tasks* is a
+  determinate bar over the eligible count, begun only when something is
+  eligible and advanced by `note_archived`, the single place that also moves
+  `outcome.archived` — so a tick and the counter cannot disagree. Its detail
+  line is the segment being packed, which is why `flush_segment` takes the
+  repo-relative path instead of `(month_anchor, seg_no)`. *Pruning segments*
+  is a determinate bar over the segments **examined** (each costs a full read
+  to judge; the pruned count is unknown until the end), begun inside
+  `prune_phase` because both of the pass's exits call it. A pass with nothing
+  to do therefore begins no determinate bar at all.
 - **Resurrection** (`archiver::resurrect_if_archived`, called by
   `service::apply_edits` inside the mutation's transaction): the entry leaves
   its segment (fetched from its blob when cold — `git cat-file` falls back to
