@@ -1,6 +1,7 @@
 pub mod app_context;
 pub mod commands;
 pub mod explain;
+pub mod progress;
 pub mod render;
 
 #[cfg(test)]
@@ -97,6 +98,29 @@ mod tests {
     fn no_sync_flag_is_removed() {
         let result = Cli::try_parse_from(["next", "--no-sync", "list"]);
         assert!(result.is_err(), "--no-sync must no longer be recognised");
+    }
+
+    #[test]
+    fn progress_flags_default_to_off() {
+        let cli = Cli::try_parse_from(["next", "list"]).unwrap();
+        assert!(!cli.quiet);
+        assert!(!cli.no_progress);
+    }
+
+    #[test]
+    fn progress_flags_are_global_and_combinable() {
+        // `global = true`: accepted after the subcommand as well as before it.
+        let cli = Cli::try_parse_from(["next", "list", "--quiet", "--no-progress"]).unwrap();
+        assert!(cli.quiet);
+        assert!(cli.no_progress);
+        let cli = Cli::try_parse_from(["next", "--no-progress", "sync"]).unwrap();
+        assert!(cli.no_progress);
+    }
+
+    #[test]
+    fn quiet_has_a_short_form() {
+        let cli = Cli::try_parse_from(["next", "-q", "list"]).unwrap();
+        assert!(cli.quiet);
     }
 
     #[test]
@@ -241,6 +265,16 @@ pub struct Cli {
     /// Skip the post-mutation push for this invocation.
     #[arg(long, global = true)]
     pub no_autopush: bool,
+
+    /// Never draw progress bars, even on a terminal.
+    #[arg(long, global = true)]
+    pub no_progress: bool,
+
+    /// Suppress progress bars and the informational notes on stderr (the
+    /// auto-pull note, the sync confirmation). Errors and command results are
+    /// unaffected.
+    #[arg(long, short = 'q', global = true)]
+    pub quiet: bool,
 
     /// Subcommand to run. Defaults to `list` when omitted.
     #[command(subcommand)]

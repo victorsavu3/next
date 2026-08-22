@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Progress reporting.** The operations that used to look like a hang — the
+  cache rebuild on a fresh clone, the archive pass, a fetch or push, a tag
+  rename across every tier — now draw a spinner or a bar while they run.
+
+  It is drawn on **stderr** and cleared when the phase ends, so results on
+  stdout are untouched and nothing is left on screen afterwards. Nothing
+  appears for the first 100 ms, so the operations that finish instantly (most
+  of them) stay invisible — but the wait on an unreachable remote does appear,
+  because the delay is a timer rather than a "show it once something happens".
+
+  Progress is drawn only when stderr is a terminal, `TERM` is not `dumb`, the
+  command is not printing JSON, and neither of the two new global flags was
+  given:
+
+  - `--no-progress` — never draw progress.
+  - `--quiet` / `-q` — no progress **and** no informational notes on stderr
+    (`note: pulled latest changes…`, `warning: auto-pull failed…`, and the
+    `Synced with remote.` confirmation). Errors and command results are
+    unaffected.
+
+  `NEXT_FORCE_PROGRESS=1` renders anyway — through a redirected stderr, for a
+  JSON command, on a dumb terminal — and skips the 100 ms delay so a forced run
+  always paints. It does not override `--quiet` or `--no-progress`.
+
+  `next-mcp`, `next-forgejo` and library consumers render nothing, by
+  construction: the CLI is the only surface that installs a renderer.
+
 ## 1.5.0 — the filter expression language
 
 Filtering is now an expression language rather than a fixed set of tokens.

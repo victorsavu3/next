@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 use crate::core::domain::task::{Status, Task};
 use crate::core::error::Result;
+use crate::core::progress::{ProgressSink, ProgressTask};
 use crate::core::storage::archive::{
     append_manifest, ensure_manifest_gitattributes, load_archive_config, read_manifest,
     read_segment, segment_paths, segment_rel_path, write_segment, ArchiveConfig, ArchivedTask,
@@ -111,13 +112,49 @@ fn eligible_ids(
     eligible
 }
 
+/// Records one archived task, on the bar and in the outcome at once.
+///
+/// The bar's total is the eligible count, so its ticks are only meaningful if
+/// they equal `outcome.archived`. Both are moved here and nowhere else, which
+/// makes disagreement between them unreachable rather than merely unlikely —
+/// the packing loop below has an early `flush_segment` path that would
+/// otherwise be easy to tick from twice.
+fn note_archived(outcome: &mut ArchiveOutcome, bar: &dyn ProgressTask) {
+    outcome.archived += 1;
+    bar.inc(1);
+}
+
 /// Runs the archive pass on `repo`. Returns what happened; an outcome with
 /// `archived == 0` means nothing was eligible (no commit is made).
+///
+/// # Progress
+///
+/// Three phases, reported one at a time (see [`crate::core::progress`]):
+///
+/// 1. *Dating tasks* — a spinner. The `git log` walk, the cache dates and the
+///    eligibility fixpoint cannot say how much there is before they run, and
+///    this phase happens on **every** pass, including the overwhelmingly
+///    common one that finds nothing: it is precisely the cost a daily
+///    auto-archive pays for doing nothing, so it is the honest thing to show.
+/// 2. *Archiving tasks* — a determinate bar over the eligible count, begun
+///    only when something is eligible.
+/// 3. *Pruning segments* — a determinate bar over the checkout segments
+///    examined, begun by `prune_phase` only when pruning is configured and
+///    there are segments.
+///
+/// A pass with nothing to do therefore begins no determinate bar at all.
 pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<ArchiveOutcome> {
     let config = load_archive_config(&repo.repo_root);
     let root = repo.repo_root.clone();
+    // The transaction closure is handed the store, the backend and the root,
+    // never the repository, so the sink is cloned out here and moved in.
+    let progress = repo.progress_handle();
 
-    repo.transaction(|store, vcs, repo_root| {
+    repo.transaction(move |store, vcs, repo_root| {
+        // Everything up to and including the eligibility decision: one git
+        // subprocess plus two full scans of the active tier, of unknown cost.
+        // Finished through the `Drop` contract if any of it fails.
+        let dating = progress.begin("Dating tasks", None);
         let active = store.list_tasks()?;
         // Freeze dates from git history, not from the cache: incremental
         // cache stamps are per-machine approximations (a task's author
@@ -148,9 +185,20 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
             .collect();
 
         let eligible = eligible_ids(&active, &updated, &config, today);
+        dating.finish(None);
+        drop(dating);
+
         if eligible.is_empty() {
             let mut outcome = ArchiveOutcome::default();
-            prune_phase(store, vcs, repo_root, &config, today, &mut outcome)?;
+            prune_phase(
+                store,
+                vcs,
+                repo_root,
+                &config,
+                today,
+                &mut outcome,
+                &*progress,
+            )?;
             return Ok(outcome);
         }
 
@@ -158,6 +206,13 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
         let mut to_archive: Vec<&Task> =
             active.iter().filter(|t| eligible.contains(&t.id)).collect();
         to_archive.sort_by_key(|t| (t.completed_at, t.id));
+
+        // One bar for the whole move, begun before the deletes because those
+        // are the first half of each task's work. It advances only in the
+        // packing loop, through `note_archived` — a task is not archived until
+        // it is in a segment, and ticking the delete loop as well would count
+        // every task twice.
+        let archiving = progress.begin("Archiving tasks", Some(to_archive.len() as u64));
 
         // Drop the individual files (and their active cache rows) first;
         // note_archived_segment below re-inserts each task as an archived
@@ -219,8 +274,12 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
             };
             let month_anchor =
                 NaiveDate::from_ymd_opt(year, month, 1).expect("valid month from date");
-            let mut entries =
-                read_segment(&repo_root.join(segment_rel_path(month_anchor, seg_no)))?;
+            // The segment path is hoisted out of `flush_segment` so it can
+            // also name the detail line: it is borrowed from a `String` the
+            // loop already owns, so nothing is formatted per task.
+            let mut rel = segment_rel_path(month_anchor, seg_no);
+            let mut entries = read_segment(&repo_root.join(&rel))?;
+            archiving.set_message(&rel);
 
             for task in tasks {
                 if entries.len() >= config.segment_max_tasks {
@@ -228,13 +287,14 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
                     flush_segment(
                         store,
                         repo_root,
-                        month_anchor,
-                        seg_no,
+                        &rel,
                         &entries,
                         &mut commit_paths,
                         &mut outcome,
                     )?;
                     seg_no += 1;
+                    rel = segment_rel_path(month_anchor, seg_no);
+                    archiving.set_message(&rel);
                     entries = Vec::new();
                 }
                 let frozen = dates.get(&task.id);
@@ -243,18 +303,19 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
                     updated_at: frozen.map(|d| d.updated_at),
                     task: (*task).clone(),
                 });
-                outcome.archived += 1;
+                note_archived(&mut outcome, &*archiving);
             }
             flush_segment(
                 store,
                 repo_root,
-                month_anchor,
-                seg_no,
+                &rel,
                 &entries,
                 &mut commit_paths,
                 &mut outcome,
             )?;
         }
+        archiving.finish(None);
+        drop(archiving);
 
         outcome.segments.sort();
         vcs.commit(
@@ -263,7 +324,15 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
         )?;
         // With the warm commit in HEAD, segment blobs are addressable —
         // prune whatever crossed the cold threshold.
-        prune_phase(store, vcs, repo_root, &config, today, &mut outcome)?;
+        prune_phase(
+            store,
+            vcs,
+            repo_root,
+            &config,
+            today,
+            &mut outcome,
+            &*progress,
+        )?;
         Ok(outcome)
     })
     .map_err(|e| {
@@ -275,6 +344,13 @@ pub fn run_archive_pass(repo: &mut TaskRepository, today: NaiveDate) -> Result<A
 /// than `prune_after_days` are recorded in the append-only manifest (path +
 /// blob SHA, union-merged) and removed from the working tree, as one commit.
 /// Their cache rows flip to the cold tier; recovery is a single blob read.
+///
+/// Takes the sink rather than the repository because it runs inside the
+/// caller's transaction, and is called from both of `run_archive_pass`'s exits
+/// — the "nothing eligible" one and the main one — so its bar has to be begun
+/// here rather than by either caller. The unit is *segments examined*, not
+/// segments pruned: every segment costs a full read to decide, and the pruned
+/// count is not knowable until the loop has finished.
 fn prune_phase(
     store: &mut dyn Store,
     vcs: &dyn crate::core::store::VcsBackend,
@@ -282,6 +358,7 @@ fn prune_phase(
     config: &ArchiveConfig,
     today: NaiveDate,
     outcome: &mut ArchiveOutcome,
+    progress: &dyn ProgressSink,
 ) -> Result<()> {
     let Some(prune_days) = config.prune_after_days else {
         return Ok(());
@@ -290,7 +367,16 @@ fn prune_phase(
 
     let mut manifest_lines = Vec::new();
     let mut commit_paths = Vec::new();
-    for (rel, abs) in segment_paths(repo_root)? {
+    let segments = segment_paths(repo_root)?;
+    let pruning = (!segments.is_empty())
+        .then(|| progress.begin("Pruning segments", Some(segments.len() as u64)));
+    for (rel, abs) in segments {
+        if let Some(pruning) = &pruning {
+            // Advanced before the read, so a segment the checks below skip
+            // still counts towards the total.
+            pruning.set_message(&rel);
+            pruning.inc(1);
+        }
         let entries = read_segment(&abs)?;
         let newest = entries.iter().filter_map(|e| e.task.completed_at).max();
         // A segment with no completion dates at all never prunes — without a
@@ -314,6 +400,10 @@ fn prune_phase(
         commit_paths.push(abs);
         outcome.pruned.push(rel);
     }
+    if let Some(pruning) = &pruning {
+        pruning.finish(None);
+    }
+    drop(pruning);
     if manifest_lines.is_empty() {
         return Ok(());
     }
@@ -399,27 +489,35 @@ pub fn resurrect_if_archived(
 
 /// Writes one segment to disk, mirrors it into the cache, and records the
 /// path for the commit.
+///
+/// Takes the repo-relative path rather than `(month_anchor, seg_no)` because
+/// the caller already holds it: the packing loop needs the same string for the
+/// progress detail line, and computing it twice would be the only place the
+/// two could drift apart.
 fn flush_segment(
     store: &mut dyn Store,
     repo_root: &std::path::Path,
-    month_anchor: NaiveDate,
-    seg_no: u32,
+    rel: &str,
     entries: &[ArchivedTask],
     commit_paths: &mut Vec<std::path::PathBuf>,
     outcome: &mut ArchiveOutcome,
 ) -> Result<()> {
-    let rel = segment_rel_path(month_anchor, seg_no);
-    let abs = repo_root.join(&rel);
+    let abs = repo_root.join(rel);
     write_segment(&abs, entries.to_vec())?;
-    store.note_archived_segment(&rel, entries)?;
+    store.note_archived_segment(rel, entries)?;
     commit_paths.push(abs);
-    outcome.segments.push(rel);
+    outcome.segments.push(rel.to_owned());
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use tempfile::TempDir;
+
     use super::*;
+    use crate::core::progress::testing::{ProgressEvent, RecordingSink};
     use crate::core::storage::archive::ArchiveConfig;
 
     fn done_on(title: &str, date: NaiveDate) -> Task {
@@ -547,5 +645,216 @@ mod tests {
             TODAY(),
         );
         assert!(got.is_empty(), "open grandchild pins the whole chain");
+    }
+
+    // ── Progress reporting ────────────────────────────────────────────────
+    //
+    // These run the real pass over a real repository, because what is being
+    // asserted is that the bars agree with the *outcome* — a mock store could
+    // be made to agree with anything. `RecordingSink` is `#[cfg(test)]` and
+    // crate-internal, which is why they live here rather than in
+    // `tests/test_archive.rs`.
+
+    /// A repository over a fresh temp git repo, with no sink yet.
+    fn setup_repo() -> (TempDir, TaskRepository) {
+        let dir = TempDir::new().unwrap();
+        let git = git2::Repository::init(dir.path()).unwrap();
+        {
+            let mut cfg = git.config().unwrap();
+            cfg.set_str("user.name", "Test").unwrap();
+            cfg.set_str("user.email", "test@test.com").unwrap();
+        }
+        let (store, vcs) = crate::core::storage::open(dir.path().to_path_buf()).unwrap();
+        let repo =
+            TaskRepository::with_parts(Box::new(store), Box::new(vcs), dir.path().to_path_buf());
+        (dir, repo)
+    }
+
+    /// Saves and commits `task`, as a normal mutation would.
+    fn add_committed(repo: &mut TaskRepository, task: &Task) {
+        repo.transaction(|store, vcs, root| {
+            store.save_task(task)?;
+            vcs.commit(
+                &[crate::core::storage::task_path(root, task)],
+                &format!("next: add {:?}", task.title),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    /// Installs a recording sink. Called *after* the setup commits, so the
+    /// recorded events belong to the pass under test and not to the cache
+    /// reconciliation those commits provoke.
+    fn recording(repo: TaskRepository) -> (TaskRepository, Arc<RecordingSink>) {
+        let sink = Arc::new(RecordingSink::new());
+        (repo.with_progress(sink.clone()), sink)
+    }
+
+    /// The labels of every *determinate* bar begun — the shape of "drew a
+    /// progress bar at all", as opposed to a spinner.
+    fn determinate_bars(sink: &RecordingSink) -> Vec<String> {
+        sink.events()
+            .iter()
+            .filter_map(|e| match e {
+                ProgressEvent::Begin {
+                    label,
+                    total: Some(_),
+                } => Some(label.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn prune_config(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(
+            root.join("config/archive.toml"),
+            "archive_after_days = 180\nprune_after_days = 400\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_pass_reports_one_tick_per_archived_task() {
+        let (_dir, mut repo) = setup_repo();
+        for n in 0..3 {
+            let mut task = done_on(&format!("Old {n}"), d(2025, 11, 20));
+            task.slug = Some(format!("old-{n}"));
+            add_committed(&mut repo, &task);
+        }
+        let (mut repo, sink) = recording(repo);
+
+        let outcome = run_archive_pass(&mut repo, TODAY()).unwrap();
+        assert_eq!(outcome.archived, 3);
+
+        // The dating phase cannot know its size before the git walk runs.
+        let dating = sink.task("Dating tasks").expect("dating must be reported");
+        assert_eq!(dating.total, None, "the git walk cannot size itself");
+        assert_eq!(dating.finishes, 1);
+
+        let archiving = sink
+            .task("Archiving tasks")
+            .expect("archiving must be reported");
+        assert_eq!(archiving.total, Some(3), "the bar spans the eligible set");
+        assert!(archiving.completed(), "{archiving:?}");
+        assert_eq!(
+            archiving.progressed as usize, outcome.archived,
+            "ticks and outcome.archived move in the same statement"
+        );
+        assert_eq!(
+            archiving.messages,
+            vec!["archive/2025/11-001.toml".to_owned()],
+            "the detail line names the segment being packed"
+        );
+    }
+
+    #[test]
+    fn a_pass_with_nothing_eligible_begins_no_determinate_bar() {
+        let (_dir, mut repo) = setup_repo();
+        let mut fresh = done_on("Fresh", d(2026, 7, 1));
+        fresh.slug = Some("fresh".into());
+        add_committed(&mut repo, &fresh);
+        let (mut repo, sink) = recording(repo);
+
+        let outcome = run_archive_pass(&mut repo, TODAY()).unwrap();
+        assert_eq!(outcome.archived, 0);
+
+        assert!(
+            determinate_bars(&sink).is_empty(),
+            "the daily no-op pass must not flash an empty bar: {:?}",
+            sink.labels()
+        );
+        // The spinner stays: the git walk is the cost the pass pays even when
+        // it finds nothing, so it is the honest thing to show.
+        assert_eq!(sink.labels(), vec!["Dating tasks".to_owned()]);
+    }
+
+    #[test]
+    fn the_prune_phase_ticks_once_per_segment_examined() {
+        let (_dir, mut repo) = setup_repo();
+        prune_config(&repo.repo_root.clone());
+        // One month past the prune cutoff, one month merely archivable.
+        let mut ancient = done_on("Ancient", d(2025, 3, 1));
+        ancient.slug = Some("ancient".into());
+        let mut warm = done_on("Warm", d(2025, 12, 1));
+        warm.slug = Some("warm".into());
+        add_committed(&mut repo, &ancient);
+        add_committed(&mut repo, &warm);
+        let (mut repo, sink) = recording(repo);
+
+        // Call site 1: the main path, after the warm commit.
+        let outcome = run_archive_pass(&mut repo, TODAY()).unwrap();
+        assert_eq!(outcome.pruned, vec!["archive/2025/03-001.toml"]);
+        let pruning = sink.task("Pruning segments").expect("prune is reported");
+        assert_eq!(
+            pruning.total,
+            Some(2),
+            "the unit is segments examined, not segments pruned"
+        );
+        assert!(pruning.completed(), "{pruning:?}");
+        assert_eq!(
+            pruning.messages,
+            vec![
+                "archive/2025/03-001.toml".to_owned(),
+                "archive/2025/12-001.toml".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn the_prune_phase_reports_from_the_nothing_eligible_path_too() {
+        let (_dir, mut repo) = setup_repo();
+        prune_config(&repo.repo_root.clone());
+        let mut warm = done_on("Warm", d(2025, 12, 1));
+        warm.slug = Some("warm".into());
+        add_committed(&mut repo, &warm);
+        // First pass archives it; nothing is eligible afterwards.
+        run_archive_pass(&mut repo, TODAY()).unwrap();
+        let (mut repo, sink) = recording(repo);
+
+        let outcome = run_archive_pass(&mut repo, TODAY()).unwrap();
+        assert_eq!(outcome.archived, 0, "the early return is the path taken");
+        let pruning = sink
+            .task("Pruning segments")
+            .expect("the early return prunes too, so it must report too");
+        assert_eq!(pruning.total, Some(1));
+        assert!(pruning.completed(), "{pruning:?}");
+        assert!(
+            sink.task("Archiving tasks").is_none(),
+            "nothing was eligible"
+        );
+    }
+
+    #[test]
+    fn a_failed_pass_still_finishes_its_bar_once() {
+        let (_dir, mut repo) = setup_repo();
+        let mut old = done_on("Old", d(2025, 11, 20));
+        old.slug = Some("old".into());
+        add_committed(&mut repo, &old);
+        // The month's existing segment is unparsable, so packing fails after
+        // the bar has been begun. Written after the last commit so HEAD is
+        // unchanged and the cache reconciliation never looks at it.
+        let seg = repo.repo_root.join("archive/2025/11-001.toml");
+        std::fs::create_dir_all(seg.parent().unwrap()).unwrap();
+        std::fs::write(&seg, "this is not toml [[[\n").unwrap();
+        let (mut repo, sink) = recording(repo);
+
+        let err = run_archive_pass(&mut repo, TODAY()).unwrap_err();
+        assert!(err.to_string().contains("parse segment"), "{err}");
+
+        let archiving = sink
+            .task("Archiving tasks")
+            .expect("the bar was begun before the failure");
+        assert_eq!(
+            archiving.finishes, 1,
+            "the Drop contract cleans up the `?` return exactly once: {archiving:?}"
+        );
+        assert_eq!(archiving.progressed, 0, "nothing was packed");
+        assert_eq!(
+            sink.task("Dating tasks").unwrap().finishes,
+            1,
+            "the earlier phase is not finished twice by the unwind"
+        );
     }
 }

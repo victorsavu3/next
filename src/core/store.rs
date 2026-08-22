@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use uuid::Uuid;
 
@@ -13,6 +13,7 @@ use crate::core::{
         task::{Status, Task},
     },
     error::Result,
+    progress::ProgressSink,
 };
 
 /// Default number of items per [`Page`] when a query does not set one.
@@ -429,6 +430,18 @@ pub trait Store: Send + Sync {
         sort_for_query(&mut items);
         Ok(paginate(items, q.page, q.page_size))
     }
+
+    /// Installs the progress sink for long-running operations (the cache
+    /// rebuild, above all — on a fresh clone it is the one command that looks
+    /// like a hang). Default: ignore, so a store with nothing slow to report,
+    /// and every test double, is unaffected.
+    ///
+    /// Pushed down by
+    /// [`TaskRepository::with_progress`](crate::core::TaskRepository::with_progress)
+    /// rather than passed per call: the reporting happens deep inside the
+    /// storage layer, far from the code that knows whether anything is
+    /// watching.
+    fn set_progress(&mut self, _sink: Arc<dyn ProgressSink>) {}
 }
 
 /// Sorts tasks into the canonical query order: unresolved tasks first (by
@@ -481,6 +494,12 @@ pub trait VcsBackend: Send + Sync {
             "force_pull not supported by this backend".into(),
         ))
     }
+
+    /// Installs the progress sink for long-running operations — a network
+    /// fetch or push, which is the other thing that can stall for a minute
+    /// with nothing on screen. Default: ignore, so non-git backends and test
+    /// doubles need no change.
+    fn set_progress(&mut self, _sink: Arc<dyn ProgressSink>) {}
 }
 
 #[cfg(test)]

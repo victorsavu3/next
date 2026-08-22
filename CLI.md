@@ -66,6 +66,8 @@ Available on every subcommand:
 | `--autosync` | Master switch: enable **both** autopull and autopush for this invocation. |
 | `--no-autosync` | Master switch: disable **both** autopull and autopush for this invocation. |
 | `--offline` | Alias for `--no-autosync`: disable both — no network I/O. |
+| `--no-progress` | Never draw progress bars, even on a terminal. |
+| `--quiet`, `-q` | Suppress progress bars **and** the informational notes on stderr (the auto-pull note, the `Synced with remote.` confirmation). Errors and results are unaffected. |
 
 Sync has two orthogonal capabilities: **autopull** (the pre-command staleness pull) and
 **autopush** (the push after a successful mutation). Each has a config key
@@ -82,6 +84,51 @@ proceeds on the local data.
 `next sync` always pulls **and** pushes; it refuses to run (with an error) if invoked with
 any flag that would disable either half (`--no-autopull`, `--no-autopush`, `--no-autosync`,
 or `--offline`).
+
+---
+
+## Progress reporting
+
+Operations that can take a while — the cache rebuild on a fresh clone, the archive
+pass, a fetch or push, a tag rename — draw a spinner or a bar while they run:
+
+```
+Reading git history ⠹ (2s)
+Indexing tasks [========>---------------] 4210/12480 tasks/plant-the-beds.toml (3s, eta 5s)
+Pulling [==============>---------] 812/1300 receiving objects (1s, eta 1s)
+```
+
+Three things to know about it:
+
+- **It is drawn on stderr and cleared when the phase ends.** stdout carries only
+  results, so `next list --json | jq` and `next show x > file` are unaffected,
+  and nothing is left on screen afterwards.
+- **Nothing appears for the first 100 ms.** Fast operations — which is most of
+  them — never flash a bar. The wait for a stalled remote does appear, because
+  the delay is a timer rather than a "show it once something happens".
+- **It stays out of the way of scripts.** Progress is drawn only when stderr is
+  a terminal, `TERM` is not `dumb`, the command is not printing JSON
+  (`--json` / `--format json`), and neither `--quiet` nor `--no-progress` was
+  given.
+
+`--no-progress` turns off the bars alone. `--quiet` (`-q`) turns off the bars *and*
+the informational notes — `note: pulled latest changes…`, `warning: auto-pull
+failed…`, `Synced with remote.` — while leaving errors and results alone.
+
+### `NEXT_FORCE_PROGRESS`
+
+```sh
+NEXT_FORCE_PROGRESS=1 next maintenance rebuild-cache --json 2>rebuild.log
+```
+
+Setting `NEXT_FORCE_PROGRESS=1` renders progress even when the automatic rules say
+not to — a redirected stderr, a JSON command, `TERM=dumb` — and skips the 100 ms
+delay so that a forced run always paints something. It does **not** override
+`--quiet` or `--no-progress`: an explicit "no" from the command line wins over an
+environment variable.
+
+It is there for two cases: deliberately capturing progress into a log while stderr
+is redirected, and testing the rendering path without a pseudo-terminal.
 
 ---
 

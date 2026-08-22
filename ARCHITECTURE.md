@@ -70,6 +70,7 @@ next/                             # crate root (also git repo)
       error.rs                    # TaskError, Result
       config.rs                   # Config + SyncConfig (config.toml schema; machine-local, no scoring)
       store.rs                    # Store + VcsBackend traits; TaskQuery, Page, paginate()
+      progress.rs                 # ProgressSink/ProgressTask traits + NoProgress default (no renderer)
       resolve.rs                  # resolve_task_id(store, id_str) -> Result<Uuid>
       task_repository.rs          # TaskRepository: store + vcs + repo_root + scoring + transactions + plugin events
       bootstrap.rs                # config-file parsing + repo resolution + opening (shared by cli/tui)
@@ -102,6 +103,7 @@ next/                             # crate root (also git repo)
       main.rs                     # `next` binary entry point
       app_context.rs              # AppContext: Config + TaskRepository (field `repo`); config.toml loading
       explain.rs                  # `--explain`: what a filter became (see §7)
+      progress.rs                 # IndicatifSink (bars on stderr) + ProgressGate + machine_readable()
       mod.rs  render.rs
       commands/
         add.rs   cancel.rs  config.rs  data.rs   delete.rs  done.rs  edit.rs
@@ -143,7 +145,7 @@ next/                             # crate root (also git repo)
 
 | Feature | Default | Adds | Optional deps pulled in |
 |---------|---------|------|--------------------------|
-| `cli` | ✓ | `next` binary, `src/cli/**` | `clap`, `tracing-subscriber` |
+| `cli` | ✓ | `next` binary, `src/cli/**` | `clap`, `indicatif`, `tracing-subscriber` |
 | `mcp` | | `next-mcp` binary, `src/mcp/**` | `tokio`, `axum`, `tracing-subscriber` |
 | `forgejo` | | `next-forgejo` binary, `src/forgejo/**` | `forgejo-api`, `url`, `tokio`, `clap`, `tracing-subscriber` |
 | `tui` | | `next-tui` binary, `src/tui/**` | `ratatui`, `tui-input`, `tui-textarea-2`, `tui-tree-widget`, `tracing-subscriber` |
@@ -160,11 +162,13 @@ projection), `core::scoring::nonzero_factors` (score-breakdown rows), and `core:
 (repo/config resolution + opening).
 
 With **no features** (`--no-default-features`) the crate is just the core library — the
-twenty-one modules `core/mod.rs` exports unconditionally: `archiver`, `bootstrap`,
-`config`, `domain`, `error`, `filter_args`, `forecast`, `listing`, `plugin`, `projection`,
-`recurrence`, `resolve`, `scoring`, `service`, `storage`, `store`, `sync`, `sync_state`,
-`tag_rename`, `task_repository`, `value` — with no `clap`/CLI dependencies, so other
-crates can link it. (`test_git` is `#[cfg(test)]` and is not one of them.)
+twenty-two modules `core/mod.rs` exports unconditionally: `archiver`, `bootstrap`,
+`config`, `domain`, `error`, `filter_args`, `forecast`, `listing`, `plugin`, `progress`,
+`projection`, `recurrence`, `resolve`, `scoring`, `service`, `storage`, `store`, `sync`,
+`sync_state`, `tag_rename`, `task_repository`, `value` — with no `clap`/CLI dependencies,
+so other crates can link it. (`test_git` is `#[cfg(test)]` and is not one of them.)
+`progress` belongs here because it is the reporting *abstraction*, not a renderer: it
+pulls in nothing, and the sink it defaults to discards.
 `AppContext` (the CLI's `Config` + `TaskRepository` wrapper) is **not** part of core; it
 lives at `src/cli/app_context.rs`, compiled only with the `cli` feature. The four feature
 modules depend only on this core (the cross-cutting helpers they share — filter-token
@@ -182,7 +186,9 @@ Run `just check` before calling a change done, not the hooks alone.
 Every **non-optional** dependency is required by `core`, so it is present even in the
 featureless build; there are no CLI-exclusive always-on dependencies. The CLI-only crate
 `clap` is `optional` and pulled in by the `cli` feature (and also by `forgejo`, whose binary
-uses clap too); `tracing-subscriber` is shared by all four binaries. The `dep:` syntax in
+uses clap too); `indicatif` is pulled in by the `cli` feature *alone*, since the CLI is the
+only surface that draws progress (`src/cli/progress.rs`) — the abstraction it renders lives
+in core and costs nothing; `tracing-subscriber` is shared by all four binaries. The `dep:` syntax in
 `[features]` keeps these optional crates out of the dependency graph unless their feature is
 enabled.
 
@@ -209,7 +215,21 @@ enabled.
 | `scoring` | `ScoredTask`, `ScoringConfig`, `TaskDates`, `fn score(task, parent, task_dates, today, weights, tag_metas)`, `fn score_with_breakdown(…)` (same arguments, returns the per-factor rows), `fn score_and_sort(tasks, all_tasks, today, weights, tag_metas, task_dates)` — note `task_dates` sits third in `score` and last in `score_and_sort` |
 | `service` | `CreateTaskParams`, `EditTaskParams`, `create_task()`, `complete_task()`, `apply_edits()`, `validate_slug()`, `validate_url()`, `begin_mutation()`/`end_mutation()` — shared business logic used by the CLI, MCP, and Forgejo handlers |
 | `recurrence` | `fn next_occurrence(rrule, anchor, after)`, `fn apply_snap(date, snap)`, `fn spawn_next(task, today)` |
-| `task_repository` | `TaskRepository` — store + vcs + repo_root + scoring + transactions + plugin events |
+| `task_repository` | `TaskRepository` — store + vcs + repo_root + scoring + transactions + plugin events + the progress sink |
+| `progress` | `ProgressSink` (`begin(label, total) -> Box<dyn ProgressTask>`, `is_noop()`), `ProgressTask` (`inc`/`set_total`/`set_message`/`finish`), `NoProgress`, `FinishOnce` — reporting for long operations, with **no** rendering dependency |
+
+**Progress reporting** (`next::core::progress`) is an abstraction only: core says
+*what* is happening, never *how* it is shown. `TaskRepository` carries an
+`Arc<dyn ProgressSink>` — installed once at startup with
+`TaskRepository::with_progress(sink)`, which also pushes it into the store and the VCS
+backend through the `Store::set_progress` / `VcsBackend::set_progress` trait hooks (both
+have an empty default body, so no implementor or test double is affected). The default is
+`NoProgress`, a sink that discards everything, so `next-mcp`, `next-forgejo` and library
+consumers — whose stdout is a protocol — are silent *by construction* rather than by
+remembering to pass a quiet flag down every call. A `ProgressTask` finishes on `Drop` as
+well as explicitly (guarded by `FinishOnce` so the pair reports once), because the `?` on
+an early return is exactly the cleanup path no call site remembers. The renderer lives in
+the CLI, not here.
 
 Key `Task` fields: `id`, `title`, `status`, `priority`, `due`, `start`, `long_term`,
 `slug`, `parent_id`, `assignee`, `tags`, `blocked_by`, `score_adjustment`, `description`,
@@ -263,6 +283,9 @@ pub trait Store: Send + Sync {
     fn note_head(&mut self, new_head: &str) -> Result<()>;
     fn rebuild_cache(&self, head_hash: &str) -> Result<()>;  // &self; `next maintenance rebuild-cache`
 
+    // Progress reporting for long operations; default no-op (see `progress`)
+    fn set_progress(&mut self, sink: Arc<dyn ProgressSink>) {}
+
     // Convenience wrappers implemented as default trait methods
     fn get_tag_description(&self, tag: &str) -> Result<Option<String>>;
     fn set_tag_description(&mut self, tag: &str, desc: &str) -> Result<()>;
@@ -277,6 +300,7 @@ pub trait VcsBackend: Send + Sync {
     fn head_hash(&self) -> Result<String>;
     fn diff(&self) -> Result<String>;       // status --short + diff HEAD
     fn force_pull(&self) -> Result<String>; // fetch + reset --hard FETCH_HEAD
+    fn set_progress(&mut self, sink: Arc<dyn ProgressSink>) {}  // default no-op
 }
 ```
 
@@ -368,6 +392,22 @@ pub enum TaskError {
   (`heal_on_version_change`) rebuilds — without dropping — whenever the crate
   version changes, so a release that alters what goes *into* a row cannot leave
   stale contents behind.
+- **Progress**: both paths report through the store's `ProgressSink` (see
+  `core::progress`; `NoProgress` by default, so nothing is emitted unless a
+  renderer was installed). The rebuild reports one task per phase, in
+  sequence and never nested, because the phases share no unit: *Reading git
+  history* (a spinner — the `git log` subprocess and the TOML reads cannot
+  know their cost up front), then determinate bars for *Indexing tasks*
+  (`tasks.len()`), *Indexing archive segments* (`segment_paths().len()`) and
+  *Indexing pruned segments* (the manifest entries absent from the checkout,
+  counted by a `Vec` filter before the blob reads start). A phase with a zero
+  count is not begun at all. The incremental path reports a single
+  *Updating cache* bar over `changes.len()`, ticked once per `FileChange` by
+  whichever of the two passes (delete, then upsert) handles that variant, so
+  the ordering constraint does not double-count. Detail lines carry the
+  segment or file path, which is borrowed from data the loop already holds —
+  no per-item formatting, so a million-task rebuild pays nothing under
+  `NoProgress`.
 
 SQLite schema (v5):
 
@@ -427,6 +467,15 @@ contexts / resource keys. The committed half runs in a single `TaskRepository::t
 and produces one commit; the state half runs afterwards in a `state_transaction`. The
 rename is hierarchical (descendants move with their parent) and kind-preserving; existing
 destinations are rejected unless the caller opts into merging.
+Progress (see `core::progress`; silent under the default `NoProgress`) is one
+determinate bar per tier — *Rewriting tasks* (`list_tasks().len()`),
+*Rewriting archive segments* (`segment_paths().len()`, detail line = the segment path),
+*Rewriting pruned segments* (the manifest entries absent from the checkout, filtered into
+a `Vec` up front) — because a repository may hold ten thousand active tasks and no
+archive, or the reverse, and one bar over their sum would move at three different speeds.
+A tier with nothing in it begins no bar. The destination-conflict check that runs without
+`--merge` is a *second* full traversal of all three tiers, so it gets its own
+*Checking destination tags* spinner rather than being charged to the rewrite bars.
 
 **Contexts and resources are just tags.** `@context` and `#resource` tags are classified
 by their prefix (`@` or `#`) but share the same `tags/` storage as freeform tags, and —
@@ -461,7 +510,9 @@ Two one-time migrations run on `TomlStore::open()`:
 Both migrations are idempotent (subsequent opens are no-ops).
 
 **`GitBackend`** wraps `Mutex<git2::Repository>` to satisfy `Send + Sync`. Commit
-messages follow the pattern `next: <verb> "<task title>"`.
+messages follow the pattern `next: <verb> "<task title>"`. `pull`/`push` report through the
+sink installed by `VcsBackend::set_progress` — see §6.2 for the phases and the
+absolute-position → delta conversion.
 
 ### `next::cli` — command handlers (feature = `"cli"`)
 
@@ -474,8 +525,61 @@ See the §2 tree for the full file list. Key entry points:
   on/off) and the granular `--autopull` / `--no-autopull` / `--autopush` / `--no-autopush`.
   The master and granular flags are mutually exclusive (clap `conflicts_with`).
 - `src/cli/render.rs` — task list and detail rendering (text and `--json`).
+- `src/cli/progress.rs` — the progress **renderer** and the decision to render (below).
 - `src/cli/commands/` — one module per subcommand (`add`, `done`, `edit`, …), plus the
   `tag/` (`mod`/`meta`/`data`) and `plugin/` submodules.
+
+#### Progress rendering (`src/cli/progress.rs`)
+
+Core reports *what* is happening through `core::progress`; this is the only module that
+turns those reports into pixels, and the only one that depends on `indicatif`.
+
+`IndicatifSink` draws on **stderr** — stdout carries results — through one `MultiProgress`,
+with two templates kept side by side (`SPINNER_TEMPLATE`, `BAR_TEMPLATE`) because they are
+the whole visual design. `set_total` swaps a live spinner's style for the bar's, which is
+how a fetch becomes determinate mid-flight. Every finish is `finish_and_clear`: progress is
+transient, results are not, and no core call site passes a summary (all pass `None`), so
+there is no unused summary path to keep correct. `FinishOnce` makes the explicit finish and
+the `Drop` report exactly one.
+
+**The 100 ms delay** is the design's one subtlety. A task paints nothing for its first
+100 ms so that fast operations stay invisible, and it is a **timer**, not a reveal-on-first
+update: the case that matters most — a stalled fetch — never calls `inc`, so a lazy scheme
+would hide exactly the wait it exists to explain. Each begun task is therefore created with
+`ProgressDrawTarget::hidden()` and given a small thread that waits out the window on a
+`Condvar` and then joins the bar to the `MultiProgress` (which is what gives it somewhere to
+draw) and enables the steady tick. Reveal and finish take the same mutex and read the same
+three-state flag (`Hidden` → `Shown` | `Done`), so a task that ends inside the window can
+never be painted afterwards by its own timer; finishing also notifies the `Condvar`, so the
+thread ends with the task rather than sleeping out the window. Tasks are few and sequential,
+so a thread each is cheaper than a scheduler.
+
+**The gate is one chokepoint**, in `main.rs` immediately after `AppContext::new` and before
+the autopull (which is one of the operations that must show a spinner). `ProgressGate` is a
+pure predicate over six booleans — stderr is a terminal, `--quiet`, `--no-progress`,
+`machine_readable`, `TERM=dumb`, `NEXT_FORCE_PROGRESS=1` — so every branch is testable
+without a terminal. The two explicit flags win first, then the forced escape hatch, then the
+automatic detection. `machine_readable(&Command)` is an **exhaustive match with no wildcard
+arm**, so a new command has to decide; it answers through `OutputFormat::resolve` rather than
+re-deriving the `--format` / `--json` precedence. Rendering means
+`TaskRepository::install_progress` (the non-consuming twin of `with_progress`, since
+`AppContext` owns `repo` as a field), which pushes the sink into the store and the VCS
+backend too.
+
+`NEXT_FORCE_PROGRESS=1` overrides the automatic conditions *and* skips the delay, which is
+what makes the rendering path testable without a pty (`tests/test_progress.rs` spawns the
+real binary). Since indicatif deliberately suppresses its own stderr target when stderr is
+not a terminal, the forced path falls back to `PlainStderr`, a `TermLike` that writes frames
+regardless.
+
+Two known limits, both deliberate: the cache reconcile inside `AppContext::new` happens
+*before* any sink can be installed (the store reconciles as it opens), so a fresh clone's
+very first rebuild is still silent — closing that means giving `storage::open` a sink, a
+core signature change. And `tracing` output is not routed through `MultiProgress::suspend`:
+the default level is `error`, i.e. one line just before exit, and a custom `MakeWriter` is
+more machinery than that collision is worth. The informational `eprintln!` notes in `main.rs`
+*are* wrapped in `suspend`, cheap insurance for a note that ever gets printed while a bar
+is live.
 
 ID resolution (`resolve_task_id`) and filter-token conversion (`FilterArgs`) are **not** in
 `cli` — they live in `next::core::resolve` (`src/core/resolve.rs`) and
@@ -531,6 +635,8 @@ Remote access is provided via MCP — connect with `claude mcp add --transport h
    If command is Tutorial → print embedded TUTORIAL.md; exit
    If command is Config → read/write config.toml; exit
 3. AppContext::new(): locate repository root, open CachedStore + GitBackend into TaskRepository
+3b. Progress gate (`cli::progress::ProgressGate`): decide once whether this run renders
+   progress, and if so install `IndicatifSink` on the repository — before step 5's autopull
 4. Resolve `effective_autopull` / `effective_autopush` from the flags and config
    (precedence: granular flag → master flag → `config.sync.autopull`/`autopush`)
 5. Autopull (all commands except `sync`): when `effective_autopull`, core::sync::pull_if_stale()
@@ -582,6 +688,23 @@ produce a git commit.
 
 `pull` returns `PullResult::Clean` or `PullResult::Conflicts(Vec<PathBuf>)`. The sync
 command aborts and prints conflicting file paths when conflicts are detected.
+
+**Progress** (see `core::progress`; silent under the default `NoProgress`) is one phase per
+network operation — *Pulling* and *Pushing* — begun before the repo lock, so the wait for
+another process's transaction is on screen too, and finished by `Drop` on every error path.
+Each starts as a spinner and is upgraded to a determinate bar by git2's
+`transfer_progress` / `push_transfer_progress` callbacks. Those report an **absolute**
+position while `ProgressTask::inc` takes a delta, so both go through `TransferCounter`
+(`git_backend.rs`), which keeps the last position, emits the difference, treats a total of
+`0` as "not known yet" and announces a total once; a counter that restarts mid-transfer
+rebases via `saturating_sub` instead of running backwards. The fetch bar counts objects
+received and uses its detail line for the phase (`receiving objects` / `resolving deltas`,
+both `&'static str` — nothing is formatted per packet). The callbacks are **not installed
+at all** when `progress.is_noop()`, so a large fetch pays nothing for a sink nobody
+watches. The post-fetch merge / fast-forward / checkout stays under the same spinner: it is
+local and fast. In subprocess mode (`config.sync.git_subprocess`) both phases are plain
+spinners — `git`'s own stderr counters are captured for the error message, not parsed back
+into bar updates.
 
 ### 6.3 Concurrency and locking
 
@@ -690,6 +813,21 @@ Requirements are in REQUIREMENTS.md §2.3; the machinery lives in
   `merge=union`, last line per path wins). Cache rows flip to tier 2 in
   place. Segment numbers listed in the manifest but absent from the checkout
   are never reused.
+- **Progress**: the pass reports three phases in sequence through the
+  repository's `ProgressSink` (`core::progress`; `NoProgress` by default).
+  *Dating tasks* is a spinner covering the `git log --name-only` walk, the
+  cache dates and the eligibility fixpoint — none of which can be sized before
+  they run, and all of which happen on every pass, so it is what the daily
+  no-op auto-archive is actually waiting for. *Archiving tasks* is a
+  determinate bar over the eligible count, begun only when something is
+  eligible and advanced by `note_archived`, the single place that also moves
+  `outcome.archived` — so a tick and the counter cannot disagree. Its detail
+  line is the segment being packed, which is why `flush_segment` takes the
+  repo-relative path instead of `(month_anchor, seg_no)`. *Pruning segments*
+  is a determinate bar over the segments **examined** (each costs a full read
+  to judge; the pruned count is unknown until the end), begun inside
+  `prune_phase` because both of the pass's exits call it. A pass with nothing
+  to do therefore begins no determinate bar at all.
 - **Resurrection** (`archiver::resurrect_if_archived`, called by
   `service::apply_edits` inside the mutation's transaction): the entry leaves
   its segment (fetched from its blob when cold — `git cat-file` falls back to
@@ -1161,6 +1299,7 @@ non-zero exit code.
 | Layer | Location | Approach |
 |-------|----------|----------|
 | `core::scoring` | `src/core/scoring.rs` | Unit tests with fixed dates; each factor tested independently |
+| `core::progress` | `src/core/progress.rs` | Unit tests: the no-op default, and the finish-once rule across explicit finish / drop / both. `progress::testing::RecordingSink` (`#[cfg(test)]`, `pub(crate)`) is the shared double instrumented operations assert against from their own modules |
 | `domain::filter` | `src/core/domain/filter.rs` | Unit tests: build `FilterSet` + `Vec<Task>`, assert filtered output |
 | `domain::date_parse` | `src/core/domain/date_parse.rs` | Unit tests: fixed "today", assert parsed date for common expressions |
 | `domain::filter_expr` | `src/core/domain/filter_expr.rs` | Unit tests: one per atom form and operator spelling, precedence and grouping, error messages for malformed input, and `parse(print(e)) == e` round-trips |

@@ -12,6 +12,7 @@ publish = ["victorsavu"]
 default = ["cli"]
 cli = [
     "dep:clap",
+    "dep:indicatif",
     "dep:tracing-subscriber",
 ]
 mcp = [
@@ -77,6 +78,7 @@ dirs = "5"
 tracing = "0.1"
 # CLI / binary deps (optional — enabled by the cli/mcp/forgejo features)
 clap = { version = "4", optional = true, features = ["derive"] }
+indicatif = { version = "0.18", optional = true }
 tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
 # MCP server (optional — enabled by the `mcp` feature)
 tokio = { version = "1", optional = true, features = ["full"] }
