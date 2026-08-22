@@ -235,12 +235,17 @@ impl IndicatifSink {
     /// [`FORCE_ENV`] was set and therefore no startup delay.
     pub fn for_stderr(forced: bool) -> Self {
         let stderr = ProgressDrawTarget::stderr();
-        // indicatif suppresses its own stderr target when stderr is not a
-        // terminal (or `TERM` is dumb, or `NO_COLOR` is set) — sensible as a
-        // default, but we only get here when the gate already decided to
-        // render, which off a terminal means the user forced it. So fall back
-        // to writing the frames ourselves rather than silently drawing
-        // nothing.
+        // `ProgressDrawTarget::stderr()` goes through indicatif's `term()`,
+        // which takes *colour support* as its proxy for "can animate a line"
+        // and hands back a hidden target whenever `console` says no: stderr is
+        // not a terminal, `NO_COLOR` is set, or `TERM` is unset or `dumb`.
+        // Sensible as a default, but by the time we are here the gate has
+        // already decided to render — off a terminal because the user forced
+        // it, and on one because none of those environment conditions is one
+        // the gate defers to: it turns `TERM=dumb` away itself (unless
+        // forced), and the others only withhold colour, which these templates
+        // never emit. So fall back to writing the frames ourselves rather than
+        // silently drawing nothing.
         let target = if stderr.is_hidden() {
             ProgressDrawTarget::term_like_with_hz(Box::new(PlainStderr::new()), 20)
         } else {
