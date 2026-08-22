@@ -68,12 +68,17 @@ impl TaskRepository {
     /// parts that do the slow work.
     ///
     /// A builder method because installing a renderer is a decision made once,
-    /// at startup, by the binary that owns the terminal — the CLI does it right
-    /// after opening the repository, and nothing else does it at all. The sink
-    /// is pushed into the store and the VCS backend as well as kept here, so an
-    /// operation reports from wherever it actually runs (the rebuild inside
-    /// `CachedStore`, a fetch inside `GitBackend`) without either of them
-    /// needing a path back to the repository.
+    /// at startup, by the binary that owns the terminal, and nothing else does
+    /// it at all. The sink is pushed into the store and the VCS backend as well
+    /// as kept here, so an operation reports from wherever it actually runs
+    /// (the rebuild inside `CachedStore`, a fetch inside `GitBackend`) without
+    /// either of them needing a path back to the repository.
+    ///
+    /// This is for a repository that is already open, and so covers everything
+    /// *after* that point — a later reconcile, a fetch, the archive pass. The
+    /// reconcile that opening itself performs is over by the time this can be
+    /// called: pass the sink to
+    /// [`open_with_progress`](Self::open_with_progress) to cover that one too.
     pub fn with_progress(mut self, sink: Arc<dyn ProgressSink>) -> Self {
         self.install_progress(sink);
         self
@@ -82,12 +87,12 @@ impl TaskRepository {
     /// [`with_progress`](Self::with_progress) for a repository that is already
     /// owned by something else.
     ///
-    /// The CLI keeps its repository in a field of `AppContext`, so the
-    /// consuming builder is unusable there without moving the field out and
-    /// back — which is `mem::replace` gymnastics for what is a one-line
-    /// assignment. Both forms install into the same three places: the store
-    /// (the cache rebuild reports from there), the VCS backend (fetch and
-    /// push), and here.
+    /// A front-end that keeps its repository in a field (the CLI's
+    /// `AppContext`, the TUI's loader) cannot use the consuming builder there
+    /// without moving the field out and back — `mem::replace` gymnastics for
+    /// what is a one-line assignment. Both forms install into the same three
+    /// places: the store (a cache rebuild reports from there), the VCS backend
+    /// (fetch and push), and here.
     pub fn install_progress(&mut self, sink: Arc<dyn ProgressSink>) {
         self.store.set_progress(sink.clone());
         self.vcs.set_progress(sink.clone());
@@ -115,9 +120,28 @@ impl TaskRepository {
 
     /// Opens the task store and git backend at `repo_root`. No config-file
     /// handling — that is the CLI's concern.
+    ///
+    /// Silent: see [`open_with_progress`](Self::open_with_progress).
     pub fn open(repo_root: PathBuf) -> anyhow::Result<Self> {
-        let (store, vcs) = crate::core::storage::open(repo_root.clone())?;
-        Ok(Self::with_parts(Box::new(store), Box::new(vcs), repo_root))
+        Self::open_with_progress(repo_root, Arc::new(NoProgress))
+    }
+
+    /// [`open`](Self::open) with `sink` already installed as the store opens.
+    ///
+    /// [`with_progress`](Self::with_progress) cannot cover this: the cache
+    /// reconciles *while* it opens, so by the time there is a repository to
+    /// install a sink on, the rebuild it would have reported is already done.
+    pub fn open_with_progress(
+        repo_root: PathBuf,
+        sink: Arc<dyn ProgressSink>,
+    ) -> anyhow::Result<Self> {
+        let (store, vcs) =
+            crate::core::storage::open_with_progress(repo_root.clone(), Arc::clone(&sink))?;
+        Ok(Self::with_parts(Box::new(store), Box::new(vcs), repo_root)
+            // The parts already report into `sink`; this is what makes the
+            // repository's own handle (`progress_handle`, used by the
+            // archiver and the tag rename) agree with them.
+            .with_progress(sink))
     }
 
     /// Returns a shared reference to the task store.

@@ -16,11 +16,13 @@ pub(crate) use machine_state::{
 pub use toml_store::TomlStore;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::core::store::VcsBackend as _;
 use crate::core::{
     domain::task::Task,
     error::{Result, TaskError},
+    progress::{NoProgress, ProgressSink},
 };
 
 /// Encodes a tag string to a filesystem-safe path component.
@@ -73,14 +75,35 @@ pub fn decode_tag_path(encoded: &str) -> String {
 ///
 /// State (the per-tag `tags` map and `active_users`) is stored outside
 /// the repository at `state_path_for_repo(root)` so it is never synced via git.
+///
+/// Silent: the rebuild this may trigger reports into
+/// [`NoProgress`](crate::core::progress::NoProgress). Use
+/// [`open_with_progress`] to see it.
 pub fn open(root: PathBuf) -> Result<(CachedStore, GitBackend)> {
+    open_with_progress(root, Arc::new(NoProgress))
+}
+
+/// [`open`], with `progress` installed on both halves *before* the cache
+/// reconciles with git HEAD.
+///
+/// That ordering is the reason this exists. The reconcile is part of opening,
+/// so a caller that opens and then installs a sink is too late for the one
+/// rebuild a user is most likely to wait on: the first open of a fresh clone,
+/// or the first open after a manual `git pull`. Only a binary that owns a
+/// terminal passes anything here; [`open`] keeps every other consumer
+/// (`next-mcp`, `next-forgejo`, the TUI, library users) silent by construction.
+pub fn open_with_progress(
+    root: PathBuf,
+    progress: Arc<dyn ProgressSink>,
+) -> Result<(CachedStore, GitBackend)> {
     let state_path = state_path_for_repo(&root);
     let inner = TomlStore::open(root.clone(), state_path)?;
-    let vcs = GitBackend::open(&root)?;
+    let mut vcs = GitBackend::open(&root)?;
+    vcs.set_progress(Arc::clone(&progress));
     migrate_tag_paths(&root, &vcs)?;
     let head_hash = vcs.head_hash()?;
     let db_path = root.join(".next.db");
-    let store = CachedStore::open(inner, db_path, &head_hash)?;
+    let store = CachedStore::open_with_progress(inner, db_path, &head_hash, progress)?;
     Ok((store, vcs))
 }
 

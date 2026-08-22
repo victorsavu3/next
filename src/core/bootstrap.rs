@@ -6,9 +6,11 @@
 //! reuse the exact same plumbing without duplicating it.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Context as _;
 
+use crate::core::progress::{NoProgress, ProgressSink};
 use crate::core::TaskRepository;
 use crate::Config;
 
@@ -70,13 +72,26 @@ pub fn resolve_root(repo_override: Option<&Path>, config: &Config) -> anyhow::Re
 
 /// Opens the task store and git backend at `root`, applying the config's
 /// git-subprocess setting, and assembles a [`TaskRepository`].
+///
+/// Silent: see [`open_repository_with_progress`].
 pub fn open_repository(root: PathBuf, config: &Config) -> anyhow::Result<TaskRepository> {
-    let (store, vcs) =
-        crate::core::storage::open(root.clone()).context("failed to open local task store")?;
+    open_repository_with_progress(root, config, Arc::new(NoProgress))
+}
+
+/// [`open_repository`] with `sink` installed before the cache reconciles with
+/// git HEAD, so the rebuild that opening a stale or cache-less repository
+/// triggers is reported rather than looking like a hang.
+///
+/// The front-ends that own no terminal — the TUI's loader, `next-mcp`,
+/// `next-forgejo` — keep calling [`open_repository`] and stay silent.
+pub fn open_repository_with_progress(
+    root: PathBuf,
+    config: &Config,
+    sink: Arc<dyn ProgressSink>,
+) -> anyhow::Result<TaskRepository> {
+    let (store, vcs) = crate::core::storage::open_with_progress(root.clone(), Arc::clone(&sink))
+        .context("failed to open local task store")?;
+    // `with_subprocess` moves the backend, sink and all.
     let vcs = vcs.with_subprocess(config.sync.git_subprocess);
-    Ok(TaskRepository::with_parts(
-        Box::new(store),
-        Box::new(vcs),
-        root,
-    ))
+    Ok(TaskRepository::with_parts(Box::new(store), Box::new(vcs), root).with_progress(sink))
 }

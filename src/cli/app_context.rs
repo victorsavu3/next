@@ -7,8 +7,10 @@
 //! `ctx.config`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::core::bootstrap;
+use crate::core::progress::{NoProgress, ProgressSink};
 use crate::{core::TaskRepository, Config};
 
 pub struct AppContext {
@@ -22,10 +24,30 @@ impl AppContext {
     /// * `config_path` — use this config file instead of the XDG default.
     /// * `repo` — use this repository root instead of the config value or the
     ///   upward directory search.
+    ///
+    /// Opens silently; [`new_with_progress`](Self::new_with_progress) is the
+    /// form `main` uses.
     pub fn new(config_path: Option<&Path>, repo: Option<&Path>) -> anyhow::Result<Self> {
+        Self::new_with_progress(config_path, repo, None)
+    }
+
+    /// [`new`](Self::new), reporting the work *opening* does into `progress`.
+    ///
+    /// `None` — no renderer for this run — is the same thing as [`new`](Self::new).
+    /// A renderer passed here is installed before the cache reconciles with git
+    /// HEAD, which is the only way that particular rebuild is ever seen: it
+    /// happens inside this constructor, so installing afterwards is always too
+    /// late. It is also why `main` decides the gate before opening the
+    /// repository rather than after.
+    pub fn new_with_progress(
+        config_path: Option<&Path>,
+        repo: Option<&Path>,
+        progress: Option<Arc<dyn ProgressSink>>,
+    ) -> anyhow::Result<Self> {
         let config = load_config(config_path);
         let root = bootstrap::resolve_root(repo, &config)?;
-        let repo = bootstrap::open_repository(root, &config)?;
+        let sink = progress.unwrap_or_else(|| Arc::new(NoProgress));
+        let repo = bootstrap::open_repository_with_progress(root, &config, sink)?;
         Ok(Self { config, repo })
     }
 }

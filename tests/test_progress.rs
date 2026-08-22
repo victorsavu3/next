@@ -68,6 +68,16 @@ impl Fixture {
         &self.env.ctx.repo.repo_root
     }
 
+    /// Deletes the SQLite cache, so the next process to open this repository
+    /// has to rebuild it from the TOML files — a fresh clone, in other words.
+    /// The journal files go too: a stray WAL would be recovered into the new
+    /// database and the rebuild would not happen.
+    fn drop_cache(&self) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(self.root().join(format!(".next.db{suffix}")));
+        }
+    }
+
     /// The binary, pointed at this repository and nothing of the developer's.
     fn cmd(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_next"));
@@ -198,6 +208,44 @@ fn forcing_renders_progress_without_touching_stdout() {
     let json = run.assert_stdout_json();
     assert_eq!(json["rebuilt"], serde_json::json!(true));
     assert_eq!(json["active_tasks"], serde_json::json!(40));
+}
+
+/// The rebuild nobody asked for: no command triggers it, opening the
+/// repository does. It runs inside `AppContext::new`, so it is the one phase
+/// the CLI can only reach by deciding about progress *before* it opens
+/// anything.
+#[test]
+fn opening_a_cache_less_repository_reports_its_rebuild() {
+    let fx = Fixture::seeded(40);
+    fx.drop_cache();
+    // `list` asks for nothing slow itself — every label below comes from the
+    // open.
+    let run = fx.run_forced(&["--offline", "list"]);
+    run.assert_ok().assert_progress();
+}
+
+#[test]
+fn opening_a_cache_less_repository_is_silent_without_a_terminal() {
+    let fx = Fixture::seeded(40);
+    fx.drop_cache();
+    let run = fx.run(&["--offline", "list"]);
+    run.assert_ok().assert_no_progress();
+    assert!(
+        run.stdout.contains("Task 0"),
+        "the rebuild still happened, silently: {:?}",
+        run.stdout
+    );
+}
+
+#[test]
+fn quiet_and_no_progress_beat_the_open_time_rebuild() {
+    let fx = Fixture::seeded(40);
+    for flag in ["--quiet", "--no-progress"] {
+        fx.drop_cache();
+        fx.run_forced(&["--offline", flag, "list"])
+            .assert_ok()
+            .assert_no_progress();
+    }
 }
 
 #[test]

@@ -16,6 +16,14 @@
 //! threaded through every signature, because the operations that need it sit
 //! several layers below the code that knows whether a terminal is attached.
 //!
+//! The one thing a carried sink cannot reach is the work *opening* does: the
+//! cache reconciles with git HEAD as part of
+//! [`storage::open`](crate::core::storage::open), before there is a repository
+//! to install anything on. That path takes its sink as an argument instead —
+//! [`open_with_progress`](crate::core::storage::open_with_progress) and the
+//! `*_with_progress` twins above it — with the plain form passing
+//! [`NoProgress`], so silence stays the default there too.
+//!
 //! Both traits are object-safe and the sink is `Send + Sync`: a renderer may
 //! live on another thread and receive events over a channel.
 

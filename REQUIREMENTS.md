@@ -883,6 +883,10 @@ doing rather than look like a hang.
 
 - Progress MUST be drawn on **stderr**. stdout carries results only, so a
   progress bar can never corrupt a pipeline or a JSON document.
+- The cache rebuild that **opening** the repository triggers — a fresh clone
+  with no cache, or one left stale by a manual `git pull` — MUST report like
+  any other phase, whatever command was invoked. No command asks for that work,
+  so it is the wait most likely to be mistaken for a hang.
 - Progress MUST be **transient**: a finished phase clears its bar, leaving
   stderr as it was found. Nothing is summarised there — results belong on
   stdout.

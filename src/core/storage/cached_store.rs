@@ -45,7 +45,28 @@ impl CachedStore {
     /// `head_hash` is the current git HEAD SHA or `"unborn"` for a fresh repo.
     /// If the stored hash differs from `head_hash` the cache is reconciled
     /// (incrementally when possible) with the TOML files before returning.
+    ///
+    /// Silent: the open-time reconcile reports into [`NoProgress`]. Use
+    /// [`open_with_progress`](Self::open_with_progress) to see it.
     pub fn open(inner: TomlStore, db_path: PathBuf, head_hash: &str) -> Result<Self> {
+        Self::open_with_progress(inner, db_path, head_hash, Arc::new(NoProgress))
+    }
+
+    /// [`open`](Self::open), reporting the open-time reconcile into `progress`.
+    ///
+    /// The sink has to be supplied *here* rather than installed afterwards:
+    /// opening is the one moment the reconcile cannot be separated from, so a
+    /// caller that opens first and calls [`Store::set_progress`] second has
+    /// already missed the slowest thing the store ever does — the full rebuild
+    /// a fresh clone (no `.next.db`) or a cache left stale by a manual
+    /// `git pull` triggers. Everything below installs before
+    /// [`reconcile`](Self::reconcile) runs, which is the whole point.
+    pub fn open_with_progress(
+        inner: TomlStore,
+        db_path: PathBuf,
+        head_hash: &str,
+        progress: Arc<dyn ProgressSink>,
+    ) -> Result<Self> {
         let conn = Connection::open(&db_path)
             .map_err(|e| TaskError::Other(format!("sqlite open {}: {e}", db_path.display())))?;
         configure_connection(&conn)?;
@@ -56,7 +77,7 @@ impl CachedStore {
             inner,
             root,
             conn: Mutex::new(conn),
-            progress: Arc::new(NoProgress),
+            progress,
         };
         this.reconcile(head_hash)?;
         Ok(this)
@@ -1320,8 +1341,9 @@ mod tests {
     }
 
     /// A store over a repo that already holds `tasks`, with `sink` installed
-    /// so the *next* operation reports into it. `CachedStore::open` reconciles
-    /// before any caller can install a sink, hence the two-step.
+    /// so the *next* operation reports into it. The tasks are written through
+    /// the store after it opens, so the sink goes on afterwards too; the
+    /// open-time reconcile has its own tests below.
     fn setup_recording(
         task_count: usize,
     ) -> (
@@ -1548,6 +1570,110 @@ mod tests {
             updating.finishes, 1,
             "the `?` return finishes the bar exactly once, through Drop"
         );
+    }
+
+    /// Reopens the repository at `dir` the way a fresh process would, handing
+    /// the sink to the constructor. That is the only way to see the reconcile
+    /// `open` performs: it is over before the caller has a store to install
+    /// anything on.
+    fn reopen_with(
+        dir: &TempDir,
+        vcs: &GitBackend,
+        sink: Arc<crate::core::progress::testing::RecordingSink>,
+    ) -> CachedStore {
+        let inner =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        CachedStore::open_with_progress(
+            inner,
+            dir.path().join(".next.db"),
+            &vcs.head_hash().unwrap(),
+            sink,
+        )
+        .unwrap()
+    }
+
+    /// Commits `task` as a new TOML file without going through the store, the
+    /// way a `git pull` delivers one.
+    fn commit_task(dir: &TempDir, vcs: &GitBackend, slug: &str) {
+        let mut task = Task::new(format!("Task {slug}"));
+        task.slug = Some(slug.to_owned());
+        let path = crate::core::storage::task_path(dir.path(), &task);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, toml::to_string_pretty(&task).unwrap()).unwrap();
+        vcs.commit(&[path], "external").unwrap();
+    }
+
+    #[test]
+    fn a_sink_supplied_at_open_time_reports_the_rebuild() {
+        let (dir, store, vcs, _sink) = setup_recording(3);
+        drop(store);
+        // No cache at all — a fresh clone. SQLite leaves its journal beside the
+        // database, and a stray WAL would be recovered into the new one.
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = fs::remove_file(dir.path().join(format!(".next.db{suffix}")));
+        }
+
+        let sink = Arc::new(crate::core::progress::testing::RecordingSink::new());
+        let store = reopen_with(&dir, &vcs, sink.clone());
+
+        assert_eq!(
+            sink.labels(),
+            vec![
+                "Reading git history".to_owned(),
+                "Indexing tasks".to_owned()
+            ],
+            "opening a cache-less repository must report its rebuild"
+        );
+        let indexing = sink.task("Indexing tasks").expect("the rebuild indexed");
+        assert_eq!(indexing.total, Some(3));
+        assert!(indexing.completed());
+        assert!(store.get_task_by_slug("task-0").unwrap().is_some());
+    }
+
+    #[test]
+    fn a_sink_supplied_at_open_time_reports_a_stale_cache_update() {
+        let (dir, mut store, vcs, _sink) = setup_recording(0);
+        commit_task(&dir, &vcs, "alpha");
+        store.note_head(&vcs.head_hash().unwrap()).unwrap();
+        drop(store);
+        // A commit the cache has never seen — what a `git pull` outside the
+        // process leaves behind.
+        commit_task(&dir, &vcs, "beta");
+
+        let sink = Arc::new(crate::core::progress::testing::RecordingSink::new());
+        let store = reopen_with(&dir, &vcs, sink.clone());
+
+        assert_eq!(
+            sink.labels(),
+            vec!["Updating cache".to_owned()],
+            "a stale cache reconciles incrementally, and says so"
+        );
+        let updating = sink.task("Updating cache").expect("the reconcile ran");
+        assert_eq!(updating.total, Some(1));
+        assert!(updating.completed());
+        assert!(store.get_task_by_slug("beta").unwrap().is_some());
+    }
+
+    #[test]
+    fn opening_without_a_sink_stays_silent() {
+        let (dir, store, vcs, _sink) = setup_recording(2);
+        drop(store);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = fs::remove_file(dir.path().join(format!(".next.db{suffix}")));
+        }
+
+        // The plain constructor is what every non-interactive consumer calls.
+        let inner =
+            TomlStore::open(dir.path().to_path_buf(), dir.path().join("state.toml")).unwrap();
+        let store = CachedStore::open(
+            inner,
+            dir.path().join(".next.db"),
+            &vcs.head_hash().unwrap(),
+        )
+        .unwrap();
+
+        assert!(store.progress().is_noop(), "silence is still the default");
+        assert!(store.get_task_by_slug("task-0").unwrap().is_some());
     }
 
     #[test]

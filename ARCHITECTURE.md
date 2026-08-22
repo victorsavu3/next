@@ -231,6 +231,24 @@ well as explicitly (guarded by `FinishOnce` so the pair reports once), because t
 an early return is exactly the cleanup path no call site remembers. The renderer lives in
 the CLI, not here.
 
+**Opening is the exception to "carried, not threaded".** The cache reconciles with git
+HEAD *inside* `CachedStore::open`, so a sink installed on the returned store or repository
+is always too late for the rebuild a fresh clone (no `.next.db`) or a manual `git pull`
+triggers — the one wait a user is most likely to sit through. Each opening function
+therefore has a `_with_progress` twin that takes the sink as an argument and installs it
+before the reconcile runs, with the original preserved as a delegate passing `NoProgress`:
+
+| silent (unchanged) | reporting |
+|---|---|
+| `storage::open(root)` | `storage::open_with_progress(root, sink)` |
+| `CachedStore::open(inner, db_path, head)` | `CachedStore::open_with_progress(inner, db_path, head, sink)` |
+| `TaskRepository::open(root)` | `TaskRepository::open_with_progress(root, sink)` |
+| `bootstrap::open_repository(root, config)` | `bootstrap::open_repository_with_progress(root, config, sink)` |
+| `AppContext::new(config_path, repo)` | `AppContext::new_with_progress(config_path, repo, Option<sink>)` |
+
+Only the CLI passes anything: the TUI, `next-mcp`, `next-forgejo` and library consumers
+keep calling the plain form and keep rendering nothing.
+
 Key `Task` fields: `id`, `title`, `status`, `priority`, `due`, `start`, `long_term`,
 `slug`, `parent_id`, `assignee`, `tags`, `blocked_by`, `score_adjustment`, `description`,
 `url`, `notes`, `data` (arbitrary JSON map; `data["time_log"]` accumulates start/stop events),
@@ -394,7 +412,9 @@ pub enum TaskError {
   stale contents behind.
 - **Progress**: both paths report through the store's `ProgressSink` (see
   `core::progress`; `NoProgress` by default, so nothing is emitted unless a
-  renderer was installed). The rebuild reports one task per phase, in
+  renderer was installed — including the reconcile `CachedStore::open` itself
+  performs, which is why `open_with_progress` takes the sink as an argument
+  instead of relying on `set_progress` afterwards). The rebuild reports one task per phase, in
   sequence and never nested, because the phases share no unit: *Reading git
   history* (a spinner — the `git log` subprocess and the TOML reads cannot
   know their cost up front), then determinate bars for *Indexing tasks*
@@ -554,17 +574,23 @@ never be painted afterwards by its own timer; finishing also notifies the `Condv
 thread ends with the task rather than sleeping out the window. Tasks are few and sequential,
 so a thread each is cheaper than a scheduler.
 
-**The gate is one chokepoint**, in `main.rs` immediately after `AppContext::new` and before
-the autopull (which is one of the operations that must show a spinner). `ProgressGate` is a
+**The gate is one chokepoint**, in `main.rs` **before** `AppContext::new_with_progress`
+(and so before the autopull, which is one of the operations that must show a spinner).
+It sits there rather than after the open because the open itself is a reporting operation:
+the cache reconcile inside it is the one phase no later installation can reach. Nothing in
+the decision needs the repository — the default subcommand is a constant and the gate is a
+function of `command` plus the environment — so the resolution of `cli.command` moved up
+with it. `ProgressGate` is a
 pure predicate over six booleans — stderr is a terminal, `--quiet`, `--no-progress`,
 `machine_readable`, `TERM=dumb`, `NEXT_FORCE_PROGRESS=1` — so every branch is testable
 without a terminal. The two explicit flags win first, then the forced escape hatch, then the
 automatic detection. `machine_readable(&Command)` is an **exhaustive match with no wildcard
 arm**, so a new command has to decide; it answers through `OutputFormat::resolve` rather than
-re-deriving the `--format` / `--json` precedence. Rendering means
-`TaskRepository::install_progress` (the non-consuming twin of `with_progress`, since
-`AppContext` owns `repo` as a field), which pushes the sink into the store and the VCS
-backend too.
+re-deriving the `--format` / `--json` precedence. Rendering means handing the
+`IndicatifSink` to `AppContext::new_with_progress`, which carries it down to
+`storage::open_with_progress` and into the store and the VCS backend before the cache
+reconciles. (`TaskRepository::install_progress`, the non-consuming twin of `with_progress`,
+remains for a front-end that owns an already-opened repository in a field.)
 
 `NEXT_FORCE_PROGRESS=1` overrides the automatic conditions *and* skips the delay, which is
 what makes the rendering path testable without a pty (`tests/test_progress.rs` spawns the
@@ -572,14 +598,11 @@ real binary). Since indicatif deliberately suppresses its own stderr target when
 not a terminal, the forced path falls back to `PlainStderr`, a `TermLike` that writes frames
 regardless.
 
-Two known limits, both deliberate: the cache reconcile inside `AppContext::new` happens
-*before* any sink can be installed (the store reconciles as it opens), so a fresh clone's
-very first rebuild is still silent — closing that means giving `storage::open` a sink, a
-core signature change. And `tracing` output is not routed through `MultiProgress::suspend`:
-the default level is `error`, i.e. one line just before exit, and a custom `MakeWriter` is
-more machinery than that collision is worth. The informational `eprintln!` notes in `main.rs`
-*are* wrapped in `suspend`, cheap insurance for a note that ever gets printed while a bar
-is live.
+One known limit, deliberate: `tracing` output is not routed through
+`MultiProgress::suspend`. The default level is `error`, i.e. one line just before exit, and
+a custom `MakeWriter` is more machinery than that collision is worth. The informational
+`eprintln!` notes in `main.rs` *are* wrapped in `suspend`, cheap insurance for a note that
+ever gets printed while a bar is live.
 
 ID resolution (`resolve_task_id`) and filter-token conversion (`FilterArgs`) are **not** in
 `cli` — they live in `next::core::resolve` (`src/core/resolve.rs`) and
@@ -634,9 +657,11 @@ Remote access is provided via MCP — connect with `claude mcp add --transport h
 2. If command is Init → run init::run(args, cwd); exit
    If command is Tutorial → print embedded TUTORIAL.md; exit
    If command is Config → read/write config.toml; exit
-3. AppContext::new(): locate repository root, open CachedStore + GitBackend into TaskRepository
-3b. Progress gate (`cli::progress::ProgressGate`): decide once whether this run renders
-   progress, and if so install `IndicatifSink` on the repository — before step 5's autopull
+2b. Progress gate (`cli::progress::ProgressGate`): decide once, from the resolved command
+   and the environment, whether this run renders progress — before the repository is
+   opened, so the cache rebuild in step 3 is reported too, and before step 5's autopull
+3. AppContext::new_with_progress(gate's `IndicatifSink`, or `None`): locate repository root,
+   open CachedStore + GitBackend into TaskRepository with the sink installed as they open
 4. Resolve `effective_autopull` / `effective_autopush` from the flags and config
    (precedence: granular flag → master flag → `config.sync.autopull`/`autopush`)
 5. Autopull (all commands except `sync`): when `effective_autopull`, core::sync::pull_if_stale()
@@ -1317,6 +1342,7 @@ non-zero exit code.
 | Migration | `tests/test_migration.rs` | Integration tests: write legacy `state.toml` with `[tag_descriptions]`, call `next::storage::open()`, assert per-tag files, state cleanup, idempotency, and persistence across reopens |
 | File locking | `tests/test_locking.rs` | Concurrency tests: multiple threads open independent `TomlStore`/`GitBackend` instances (simulating separate processes) and assert no data loss or corruption, including transactional lost-update prevention (N processes each add a distinct tag to one task; all must survive). Re-entrant lock unit tests live in `src/core/storage/lock.rs` |
 | CLI commands | `tests/test_*.rs` | Integration tests: construct `AppContext` directly in a `tempdir` git repo; call `run()` functions; assert store state |
+| Progress rendering | `tests/test_progress.rs` | The only tests that spawn the real binary (`CARGO_BIN_EXE_next`), because what is under test is the process's own stderr: silence when it is piped, under `--json`, `--quiet` and `--no-progress`; labels on stderr under `NEXT_FORCE_PROGRESS=1` (which also skips the 100 ms delay), including the rebuild that opening a cache-less repository triggers; and a clean stderr after a failing command |
 | MCP unit tests | `src/mcp/tools/*.rs` | Unit tests per tool module using a real `TaskRepository` in a `tempdir` git repo (requires `--features mcp`) |
 | Plugins | `tests/test_plugin.rs`, `src/core/plugin/run.rs` | End-to-end export-hook notification; unit tests for periodic sync (interval precedence, due/skip, failure-retry) |
 | Multi-instance | `tests/test_multi_instance.rs` | Several clones of one shared remote mutating in parallel (adds, edits, archive passes, resurrections); all instances must converge with no loss |

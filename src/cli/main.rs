@@ -7,7 +7,9 @@ use next::{
     cli::commands::sync as sync_cmd,
     cli::progress::{IndicatifSink, ProgressGate},
     cli::{commands, Cli, Command},
-    core, AppContext,
+    core,
+    core::progress::ProgressSink,
+    AppContext,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -54,7 +56,48 @@ fn main() -> anyhow::Result<()> {
     let cli_no_autopush = cli.no_autopush;
     let cli_quiet = cli.quiet;
     let cli_no_progress = cli.no_progress;
-    let mut ctx = AppContext::new(cli.config.as_deref(), cli.repo.as_deref())?;
+
+    // Default to `list` when no subcommand is given.
+    let command = cli.command.unwrap_or_else(|| {
+        Command::List(commands::list::Args {
+            future: false,
+            all: false,
+            closed: false,
+            archived: false,
+            all_users: false,
+            json: false,
+            format: None,
+            count: false,
+            explain: false,
+            fields: vec![],
+            limit: None,
+            page_size: None,
+            page: 1,
+            tokens: vec![],
+        })
+    });
+
+    // Whether this run draws progress is decided **once**, here, and never
+    // asked again: every operation reports unconditionally into the sink it
+    // was handed (`NoProgress` by default), so this is the only place that
+    // knows about terminals.
+    //
+    // It happens **before the repository is opened**, which is what lets the
+    // renderer cover the rebuild a fresh clone (or a cache left stale by a
+    // manual `git pull`) triggers as the store opens — the one a user is most
+    // likely to be sitting through. That reconcile is part of opening, so a
+    // sink installed on the returned repository is always too late; it has to
+    // be handed to the constructor. Nothing here needs the repository: the
+    // default subcommand is a constant, and the gate asks only about `command`
+    // and the environment. It also has to precede the autopull below, which is
+    // another operation that must show a spinner.
+    let gate = ProgressGate::detect(&command, cli_quiet, cli_no_progress);
+    let renderer = gate
+        .should_render()
+        .then(|| Arc::new(IndicatifSink::for_stderr(gate.forced)));
+
+    let sink: Option<Arc<dyn ProgressSink>> = renderer.clone().map(|s| s as Arc<dyn ProgressSink>);
+    let mut ctx = AppContext::new_with_progress(cli.config.as_deref(), cli.repo.as_deref(), sink)?;
 
     // Resolve the two orthogonal sync capabilities for this invocation.
     // Precedence: granular flag → master flag → config default.
@@ -80,44 +123,6 @@ fn main() -> anyhow::Result<()> {
     } else {
         ctx.config.sync.autopush
     };
-
-    // Default to `list` when no subcommand is given.
-    let command = cli.command.unwrap_or_else(|| {
-        Command::List(commands::list::Args {
-            future: false,
-            all: false,
-            closed: false,
-            archived: false,
-            all_users: false,
-            json: false,
-            format: None,
-            count: false,
-            explain: false,
-            fields: vec![],
-            limit: None,
-            page_size: None,
-            page: 1,
-            tokens: vec![],
-        })
-    });
-
-    // Whether this run draws progress is decided **once**, here, and never
-    // asked again: every operation reports unconditionally into the sink it
-    // was handed (`NoProgress` by default), so this is the only place that
-    // knows about terminals. It has to happen before the autopull below, which
-    // is one of the operations that must show a spinner.
-    //
-    // What it cannot cover: the cache reconcile inside `AppContext::new`. The
-    // store reconciles as it opens, which is before any sink can be installed
-    // on it — so a fresh clone's first rebuild is still silent. Fixing that
-    // means giving `storage::open` a sink, which is a core signature change.
-    let gate = ProgressGate::detect(&command, cli_quiet, cli_no_progress);
-    let renderer = gate
-        .should_render()
-        .then(|| Arc::new(IndicatifSink::for_stderr(gate.forced)));
-    if let Some(sink) = &renderer {
-        ctx.repo.install_progress(sink.clone());
-    }
 
     // Informational stderr notes — suppressed by `--quiet`, and printed with
     // the bars lifted off the screen in case one is ever live when a note is

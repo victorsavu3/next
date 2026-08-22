@@ -8,6 +8,10 @@
   cache rebuild on a fresh clone, the archive pass, a fetch or push, a tag
   rename across every tier — now draw a spinner or a bar while they run.
 
+  That includes the rebuild no command asks for: opening a repository whose
+  cache is missing (a fresh clone) or stale (a manual `git pull`) rebuilds it
+  first, and now says so, whatever command you actually ran.
+
   It is drawn on **stderr** and cleared when the phase ends, so results on
   stdout are untouched and nothing is left on screen afterwards. Nothing
   appears for the first 100 ms, so the operations that finish instantly (most
