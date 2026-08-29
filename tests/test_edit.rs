@@ -1,6 +1,7 @@
 mod common;
 
 use next::cli::commands::{add, edit};
+use next::core::domain::task::{Recurrence, Snap};
 
 fn add_args(title: &str) -> add::Args {
     add::Args {
@@ -47,6 +48,7 @@ fn base_edit(id: &str) -> edit::Args {
         recur_schedule: None,
         recur_completion: None,
         recur_snap: None,
+        clear_recur_snap: false,
         clear_recurrence: false,
         long_term: false,
         adjust: None,
@@ -517,5 +519,215 @@ fn title_edit_commits_the_file_rename() {
         String::from_utf8_lossy(&out.stdout).trim(),
         "",
         "the rename must leave no uncommitted tracked changes"
+    );
+}
+
+// ── recurrence snap edits ───────────────────────────────────────────────────
+
+/// Adds a task with a completion rule and a `dom:1` snap, returning its slug.
+fn add_snapped_task(env: &mut common::TestEnv, slug: &str) -> String {
+    add::run(
+        add::Args {
+            slug: Some(slug.to_owned()),
+            recur_completion: Some(7),
+            recur_snap: Some("dom:1".to_owned()),
+            ..add_args("Pay the rent")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    slug.to_owned()
+}
+
+fn recurrence_of(env: &mut common::TestEnv, slug: &str) -> Option<Recurrence> {
+    env.ctx
+        .repo
+        .store
+        .get_task_by_slug(slug)
+        .unwrap()
+        .unwrap()
+        .recurrence
+}
+
+#[test]
+fn edit_recur_completion_keeps_existing_snap() {
+    // Changing only the interval must not wipe the snap the task already had.
+    let mut env = common::setup();
+    let slug = add_snapped_task(&mut env, "rent");
+
+    edit::run(
+        edit::Args {
+            recur_completion: Some(31),
+            ..base_edit(&slug)
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    match recurrence_of(&mut env, &slug) {
+        Some(Recurrence::Completion {
+            interval_days,
+            snap,
+        }) => {
+            assert_eq!(interval_days, 31, "the interval must be updated");
+            assert_eq!(
+                snap,
+                Some(Snap::DayOfMonth { day: 1 }),
+                "the snap must survive a bare --recur-completion"
+            );
+        }
+        other => panic!("expected a completion rule, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_recur_schedule_keeps_existing_snap() {
+    // The same carry-forward applies when switching to a schedule rule.
+    let mut env = common::setup();
+    let slug = add_snapped_task(&mut env, "rent-schedule");
+
+    edit::run(
+        edit::Args {
+            recur_schedule: Some("FREQ=MONTHLY;BYMONTHDAY=28".to_owned()),
+            ..base_edit(&slug)
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    match recurrence_of(&mut env, &slug) {
+        Some(Recurrence::Schedule { rrule, snap, .. }) => {
+            assert_eq!(rrule, "FREQ=MONTHLY;BYMONTHDAY=28");
+            assert_eq!(snap, Some(Snap::DayOfMonth { day: 1 }));
+        }
+        other => panic!("expected a schedule rule, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_recur_snap_still_wins_over_the_carried_one() {
+    let mut env = common::setup();
+    let slug = add_snapped_task(&mut env, "rent-replace");
+
+    edit::run(
+        edit::Args {
+            recur_completion: Some(14),
+            recur_snap: Some("monday".to_owned()),
+            ..base_edit(&slug)
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    match recurrence_of(&mut env, &slug) {
+        Some(Recurrence::Completion {
+            interval_days,
+            snap,
+        }) => {
+            assert_eq!(interval_days, 14);
+            assert_eq!(snap, Some(Snap::NextWeekday { weekday: 0 }));
+        }
+        other => panic!("expected a completion rule, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_clear_recur_snap_standalone_keeps_the_rule() {
+    let mut env = common::setup();
+    let slug = add_snapped_task(&mut env, "rent-clear");
+
+    edit::run(
+        edit::Args {
+            clear_recur_snap: true,
+            ..base_edit(&slug)
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    match recurrence_of(&mut env, &slug) {
+        Some(Recurrence::Completion {
+            interval_days,
+            snap,
+        }) => {
+            assert_eq!(interval_days, 7, "the rule itself must be untouched");
+            assert_eq!(snap, None, "--clear-recur-snap must drop the snap");
+        }
+        other => panic!("expected a completion rule, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_clear_recur_snap_alongside_a_rule_change() {
+    let mut env = common::setup();
+    let slug = add_snapped_task(&mut env, "rent-both");
+
+    edit::run(
+        edit::Args {
+            recur_completion: Some(31),
+            clear_recur_snap: true,
+            ..base_edit(&slug)
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    match recurrence_of(&mut env, &slug) {
+        Some(Recurrence::Completion {
+            interval_days,
+            snap,
+        }) => {
+            assert_eq!(interval_days, 31);
+            assert_eq!(snap, None);
+        }
+        other => panic!("expected a completion rule, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_recur_snap_and_clear_recur_snap_conflict() {
+    let mut env = common::setup();
+    let slug = add_snapped_task(&mut env, "rent-conflict");
+
+    let err = edit::run(
+        edit::Args {
+            recur_snap: Some("monday".to_owned()),
+            clear_recur_snap: true,
+            ..base_edit(&slug)
+        },
+        &mut env.ctx,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("--recur-snap and --clear-recur-snap are mutually exclusive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn edit_clear_recur_snap_without_recurrence_errors() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            slug: Some("plain".to_owned()),
+            ..add_args("Not recurring")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let err = edit::run(
+        edit::Args {
+            clear_recur_snap: true,
+            ..base_edit("plain")
+        },
+        &mut env.ctx,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("--clear-recur-snap requires an existing recurrence rule"),
+        "unexpected error: {err}"
     );
 }

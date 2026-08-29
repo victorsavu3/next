@@ -62,6 +62,31 @@ pub enum Recurrence {
     },
 }
 
+impl Recurrence {
+    /// The calendar snap this rule applies to its computed dates, if any.
+    ///
+    /// Both variants carry the same date-shaping fields alongside the rule
+    /// itself. Reading them through one accessor is what lets an edit that
+    /// only replaces the rule carry the rest forward without matching on the
+    /// variant twice.
+    pub fn snap(&self) -> Option<&Snap> {
+        match self {
+            Recurrence::Schedule { snap, .. } | Recurrence::Completion { snap, .. } => {
+                snap.as_ref()
+            }
+        }
+    }
+
+    /// Replace the calendar snap, leaving the rule itself untouched.
+    pub fn set_snap(&mut self, value: Option<Snap>) {
+        match self {
+            Recurrence::Schedule { snap, .. } | Recurrence::Completion { snap, .. } => {
+                *snap = value
+            }
+        }
+    }
+}
+
 /// A single task — the central domain object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {

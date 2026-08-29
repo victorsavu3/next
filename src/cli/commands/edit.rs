@@ -88,6 +88,10 @@ pub struct Args {
     #[arg(long)]
     pub recur_snap: Option<String>,
 
+    /// Remove the calendar snap, keeping the recurrence rule itself.
+    #[arg(long)]
+    pub clear_recur_snap: bool,
+
     /// Remove the recurrence rule from this task.
     #[arg(long)]
     pub clear_recurrence: bool,
@@ -184,35 +188,62 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     // Build the recurrence update if any recurrence flags are set.
     //
     // We need the current task's anchor to preserve it when editing an existing
-    // Schedule rule — so load the task here just for that.
+    // Schedule rule, and its snap to carry forward — so load the task here just
+    // for that.
+    let requested_snap = args.recur_snap.as_deref().map(parse_snap).transpose()?;
+    anyhow::ensure!(
+        !(requested_snap.is_some() && args.clear_recur_snap),
+        "--recur-snap and --clear-recur-snap are mutually exclusive"
+    );
+    let rule_edit = args.recur_schedule.is_some() || args.recur_completion.is_some();
+    let snap_edit = requested_snap.is_some() || args.clear_recur_snap;
+
     let recurrence: Option<Recurrence> = if args.clear_recurrence {
         None // handled via clear_recurrence flag
-    } else if args.recur_schedule.is_some() || args.recur_completion.is_some() {
+    } else if rule_edit || snap_edit {
         let existing = ctx.repo.store.get_task(id)?;
-        let anchor = match &existing.recurrence {
-            Some(Recurrence::Schedule { anchor, .. }) => *anchor,
-            _ => existing.start.or(existing.due).unwrap_or(today),
+        // The snap belongs to the series, not to the rule being replaced: a
+        // bare --recur-completion must keep it, or it would silently vanish.
+        // Only --recur-snap (replace) or --clear-recur-snap (drop) change it.
+        let snap = if snap_edit {
+            requested_snap
+        } else {
+            existing
+                .recurrence
+                .as_ref()
+                .and_then(Recurrence::snap)
+                .cloned()
         };
-        parse_recurrence(
-            args.recur_schedule,
-            args.recur_completion,
-            args.recur_snap.as_deref(),
-            anchor,
-        )?
-    } else if let Some(ref snap_str) = args.recur_snap {
-        // Standalone --recur-snap: update the snap on an existing recurrence rule.
-        let snap = Some(parse_snap(snap_str)?);
-        let existing = ctx.repo.store.get_task(id)?;
-        match existing.recurrence {
-            Some(Recurrence::Schedule { rrule, anchor, .. }) => {
-                Some(Recurrence::Schedule { rrule, anchor, snap })
+
+        if rule_edit {
+            let anchor = match &existing.recurrence {
+                Some(Recurrence::Schedule { anchor, .. }) => *anchor,
+                _ => existing.start.or(existing.due).unwrap_or(today),
+            };
+            let mut rule =
+                parse_recurrence(args.recur_schedule, args.recur_completion, None, anchor)?;
+            if let Some(rule) = rule.as_mut() {
+                rule.set_snap(snap);
             }
-            Some(Recurrence::Completion { interval_days, .. }) => {
-                Some(Recurrence::Completion { interval_days, snap })
+            rule
+        } else {
+            // Standalone snap edit: keep the rule, change only what it snaps to.
+            match existing.recurrence {
+                Some(mut rule) => {
+                    rule.set_snap(snap);
+                    Some(rule)
+                }
+                None => {
+                    let flag = if args.clear_recur_snap {
+                        "--clear-recur-snap"
+                    } else {
+                        "--recur-snap"
+                    };
+                    anyhow::bail!(
+                        "{flag} requires an existing recurrence rule; use --recur-schedule or --recur-completion first"
+                    )
+                }
             }
-            None => anyhow::bail!(
-                "--recur-snap requires an existing recurrence rule; use --recur-schedule or --recur-completion first"
-            ),
         }
     } else {
         None

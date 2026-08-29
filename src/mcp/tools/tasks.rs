@@ -62,6 +62,7 @@ const EDIT_PARAM_KEYS: &[&str] = &[
     "recur_schedule",
     "recur_completion",
     "recur_snap",
+    "clear_recur_snap",
     "clear_recurrence",
     "long_term",
     "score_adjustment",
@@ -302,6 +303,88 @@ pub fn add_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
 
 // ── update_task ───────────────────────────────────────────────────────────────
 
+/// Builds the recurrence rule an `update_task` call leaves behind, or `None`
+/// when the call does not replace one.
+///
+/// Loading the stored task is what makes the edit additive: a schedule change
+/// keeps the series anchor, and any rule change keeps the snap unless the call
+/// sets a new one (`recur_snap`) or drops it (`clear_recur_snap`). Without the
+/// carry-forward, `recur_completion: 31` on its own silently wiped the snap.
+fn recurrence_edit(
+    params: &Value,
+    id: uuid::Uuid,
+    ctx: &mut TaskRepository,
+    today: chrono::NaiveDate,
+) -> anyhow::Result<Option<Recurrence>> {
+    let clear_snap = bool_param(params, "clear_recur_snap");
+    let requested_snap = str_param(params, "recur_snap")
+        .map(parse_snap)
+        .transpose()?;
+    anyhow::ensure!(
+        !(requested_snap.is_some() && clear_snap),
+        "recur_snap and clear_recur_snap are mutually exclusive"
+    );
+
+    let schedule = str_param(params, "recur_schedule");
+    let completion = params.get("recur_completion").and_then(|v| v.as_u64());
+    let rule_edit = schedule.is_some() || completion.is_some();
+    let snap_edit = requested_snap.is_some() || clear_snap;
+    // `clear_recurrence` drops the rule wholesale through its own flag, so
+    // nothing needs building here.
+    if bool_param(params, "clear_recurrence") || !(rule_edit || snap_edit) {
+        return Ok(None);
+    }
+
+    let existing = ctx.store.get_task(id)?;
+    let snap = if snap_edit {
+        requested_snap
+    } else {
+        existing
+            .recurrence
+            .as_ref()
+            .and_then(Recurrence::snap)
+            .cloned()
+    };
+
+    if let Some(rule) = schedule {
+        validate_rrule(rule)
+            .map_err(|e| anyhow::anyhow!("invalid recurrence rule {rule:?}: {e}"))?;
+        let anchor = match &existing.recurrence {
+            Some(Recurrence::Schedule { anchor, .. }) => *anchor,
+            _ => existing.start.or(existing.due).unwrap_or(today),
+        };
+        return Ok(Some(Recurrence::Schedule {
+            rrule: rule.to_owned(),
+            anchor,
+            snap,
+        }));
+    }
+    if let Some(days) = completion {
+        return Ok(Some(Recurrence::Completion {
+            interval_days: days as u32,
+            snap,
+        }));
+    }
+
+    // Snap-only edit: keep the rule, change only what it snaps to.
+    match existing.recurrence {
+        Some(mut rule) => {
+            rule.set_snap(snap);
+            Ok(Some(rule))
+        }
+        None => {
+            let param = if clear_snap {
+                "clear_recur_snap"
+            } else {
+                "recur_snap"
+            };
+            anyhow::bail!(
+                "{param} requires an existing recurrence rule; set recur_schedule or recur_completion first"
+            )
+        }
+    }
+}
+
 pub fn update_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let today = Local::now().date_naive();
     let id_str = params
@@ -328,51 +411,7 @@ pub fn update_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<V
     let mut edited: Option<Task> = None;
     if has_edit_params(params) || matches!(action, None | Some("move")) {
         // Build recurrence update from params.
-        let recurrence: Option<Recurrence> = if bool_param(params, "clear_recurrence") {
-            None // handled via clear_recurrence flag
-        } else if let Some(rule) = str_param(params, "recur_schedule") {
-            validate_rrule(rule)
-                .map_err(|e| anyhow::anyhow!("invalid recurrence rule {rule:?}: {e}"))?;
-            let existing = ctx.store.get_task(id)?;
-            let anchor = match &existing.recurrence {
-                Some(Recurrence::Schedule { anchor, .. }) => *anchor,
-                _ => existing.start.or(existing.due).unwrap_or(today),
-            };
-            let snap = str_param(params, "recur_snap")
-                .map(parse_snap)
-                .transpose()?;
-            Some(Recurrence::Schedule {
-                rrule: rule.to_owned(),
-                anchor,
-                snap,
-            })
-        } else if let Some(days) = params.get("recur_completion").and_then(|v| v.as_u64()) {
-            let snap = str_param(params, "recur_snap")
-                .map(parse_snap)
-                .transpose()?;
-            Some(Recurrence::Completion {
-                interval_days: days as u32,
-                snap,
-            })
-        } else if let Some(snap_str) = str_param(params, "recur_snap") {
-            // Standalone recur_snap: update the snap on the existing rule
-            // (mirrors the CLI's `next edit --recur-snap`).
-            let snap = Some(parse_snap(snap_str)?);
-            let existing = ctx.store.get_task(id)?;
-            match existing.recurrence {
-                Some(Recurrence::Schedule { rrule, anchor, .. }) => {
-                    Some(Recurrence::Schedule { rrule, anchor, snap })
-                }
-                Some(Recurrence::Completion { interval_days, .. }) => {
-                    Some(Recurrence::Completion { interval_days, snap })
-                }
-                None => anyhow::bail!(
-                    "recur_snap requires an existing recurrence rule; set recur_schedule or recur_completion first"
-                ),
-            }
-        } else {
-            None
-        };
+        let recurrence: Option<Recurrence> = recurrence_edit(params, id, ctx, today)?;
 
         let due = if bool_param(params, "clear_due") {
             None
@@ -780,6 +819,121 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("recur_snap requires an existing recurrence"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// A recurring task with a `dom:1` snap, returning its id.
+    fn snapped_task(ctx: &mut TaskRepository) -> String {
+        let task = add_task(
+            &json!({ "title": "Pay the rent", "recur_completion": 7, "recur_snap": "dom:1" }),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(task["recurrence"]["snap"]["day"], 1);
+        task["id"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn update_task_recur_completion_keeps_existing_snap() {
+        // Changing only the interval must not wipe the snap (UX-2).
+        let (_dir, mut ctx) = make_ctx();
+        let id = snapped_task(&mut ctx);
+
+        let updated = update_task(&json!({ "id": id, "recur_completion": 31 }), &mut ctx).unwrap();
+        assert_eq!(updated["recurrence"]["interval_days"], 31);
+        assert_eq!(
+            updated["recurrence"]["snap"]["day"], 1,
+            "the snap must survive a bare recur_completion: {updated}"
+        );
+    }
+
+    #[test]
+    fn update_task_recur_schedule_keeps_existing_snap() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = snapped_task(&mut ctx);
+
+        let updated = update_task(
+            &json!({ "id": id, "recur_schedule": "FREQ=MONTHLY;BYMONTHDAY=28" }),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(updated["recurrence"]["rrule"], "FREQ=MONTHLY;BYMONTHDAY=28");
+        assert_eq!(updated["recurrence"]["snap"]["day"], 1);
+    }
+
+    #[test]
+    fn update_task_recur_snap_overrides_the_carried_one() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = snapped_task(&mut ctx);
+
+        let updated = update_task(
+            &json!({ "id": id, "recur_completion": 14, "recur_snap": "monday" }),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(updated["recurrence"]["interval_days"], 14);
+        assert_eq!(updated["recurrence"]["snap"]["type"], "next_weekday");
+    }
+
+    #[test]
+    fn update_task_clear_recur_snap_keeps_the_rule() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = snapped_task(&mut ctx);
+
+        let updated =
+            update_task(&json!({ "id": id, "clear_recur_snap": true }), &mut ctx).unwrap();
+        assert_eq!(
+            updated["recurrence"]["interval_days"], 7,
+            "the rule itself must be untouched"
+        );
+        assert!(
+            updated["recurrence"]["snap"].is_null(),
+            "clear_recur_snap must drop the snap: {updated}"
+        );
+    }
+
+    #[test]
+    fn update_task_clear_recur_snap_alongside_a_rule_change() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = snapped_task(&mut ctx);
+
+        let updated = update_task(
+            &json!({ "id": id, "recur_completion": 31, "clear_recur_snap": true }),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(updated["recurrence"]["interval_days"], 31);
+        assert!(updated["recurrence"]["snap"].is_null());
+    }
+
+    #[test]
+    fn update_task_recur_snap_and_clear_recur_snap_conflict() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = snapped_task(&mut ctx);
+
+        let err = update_task(
+            &json!({ "id": id, "recur_snap": "monday", "clear_recur_snap": true }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("recur_snap and clear_recur_snap are mutually exclusive"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn update_task_clear_recur_snap_without_recurrence_errors() {
+        let (_dir, mut ctx) = make_ctx();
+        let task = add_task(&json!({ "title": "No recurrence" }), &mut ctx).unwrap();
+        let id = task["id"].as_str().unwrap();
+        let err =
+            update_task(&json!({ "id": id, "clear_recur_snap": true }), &mut ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("clear_recur_snap requires an existing recurrence rule"),
             "unexpected error: {err}"
         );
     }

@@ -580,9 +580,12 @@ Same flags as `next add`, plus:
 | `--clear-description` | flag | false | Remove the description. |
 | `--clear-url` | flag | false | Remove the URL. |
 | `--clear-recurrence` | flag | false | Remove the recurrence rule and `recurrence_id`. |
+| `--clear-recur-snap` | flag | false | Remove the snap but keep the recurrence rule. Rejected together with `--recur-snap`. |
 | `--json` | flag | false | Emit the updated task as JSON. |
 
 `--recur-schedule`, `--recur-completion`, and `--recur-snap` work the same as in `next add`. When editing a schedule rule, the original `anchor` date is preserved so interval alignment stays correct. `--recur-snap` can also be used standalone to change the snap on an existing recurring task without re-specifying the full rule.
+
+Changing the rule keeps the snap: `next edit water-plants --recur-completion 31` leaves an existing `dom:1` snap in place. Use `--recur-snap` to replace it or `--clear-recur-snap` to drop it — either may be combined with a rule change or sent on its own.
 
 Trailing `+tag` and `-tag` tokens may also be used to add or remove tags:
 
@@ -598,6 +601,7 @@ next edit a1b2 --priority high --tag @work
 next edit a1b2 --remove-tag @home --clear-due
 next edit a1b2 --url "https://example.com/ticket-42" --description "See comments in ticket"
 next edit standup --recur-snap monday        # change snap without re-specifying the rule
+next edit standup --clear-recur-snap         # drop the snap, keep the rule
 next edit old-task --clear-recurrence        # remove the recurrence rule entirely
 ```
 
