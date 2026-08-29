@@ -94,6 +94,9 @@ fn clamped_date(year: i32, month: u32, day: u32) -> NaiveDate {
 /// `schedule` and `completion` are mutually exclusive; passing both returns an
 /// error.  If neither is provided the function returns `Ok(None)`.
 ///
+/// A `completion` interval must be at least one day, mirroring the `INTERVAL
+/// >= 1` rule [`validate_rrule`] enforces for schedules.
+///
 /// `anchor` is the date used as the starting point for schedule-based rules.
 /// The caller is responsible for supplying the appropriate anchor (e.g. the
 /// task's start/due date or today for `add`, and the existing anchor when
@@ -121,10 +124,20 @@ pub fn parse_recurrence(
                 snap: snap_val,
             }))
         }
-        (None, Some(interval)) => Ok(Some(Recurrence::Completion {
-            interval_days: interval,
-            snap: snap_val,
-        })),
+        (None, Some(interval)) => {
+            // A zero-day interval never advances: every spawned instance would
+            // be due the day it was created, forever. Reject it here, where
+            // every completion rule is built, rather than letting the series
+            // stall long after the rule was accepted.
+            anyhow::ensure!(
+                interval >= 1,
+                "completion interval must be >= 1 day, got {interval}"
+            );
+            Ok(Some(Recurrence::Completion {
+                interval_days: interval,
+                snap: snap_val,
+            }))
+        }
         (None, None) => Ok(None),
     }
 }
@@ -457,6 +470,32 @@ mod tests {
             }
             other => panic!("expected Completion with snap, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_recurrence_completion_zero_interval_is_error() {
+        // interval_days: 0 produces a series that never advances.
+        let anchor = d(2026, 5, 1);
+        let result = parse_recurrence(None, Some(0), None, anchor);
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("completion interval must be >= 1 day, got 0"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_recurrence_completion_one_day_is_accepted() {
+        // The bound is inclusive: a daily chore is a legitimate rule.
+        let anchor = d(2026, 5, 1);
+        let result = parse_recurrence(None, Some(1), None, anchor).unwrap();
+        assert!(matches!(
+            result,
+            Some(Recurrence::Completion {
+                interval_days: 1,
+                ..
+            })
+        ));
     }
 
     #[test]

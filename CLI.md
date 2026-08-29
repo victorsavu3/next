@@ -1076,7 +1076,7 @@ If you complete a task late (past its due date), the next occurrence is computed
 
 ### Completion-based (`--recur-completion <days>`)
 
-The next instance is created `<days>` after the completion date (i.e., relative to when you mark it done, not a fixed calendar date).
+The next instance is created `<days>` after the completion date (i.e., relative to when you mark it done, not a fixed calendar date). `<days>` must be at least 1: a zero-day interval would never advance the series, so it is rejected — the same way `INTERVAL=0` is rejected in an RRULE.
 
 ```sh
 next add "Water plants" --recur-completion 7   # once a week, whenever done
