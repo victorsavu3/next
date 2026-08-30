@@ -201,10 +201,41 @@ pub fn next_occurrence(
 
 // ─── project_series ──────────────────────────────────────────────────────────
 
-/// Hard cap on the number of projected occurrences generated per series, as a
-/// safety net against a misbehaving rule that fails to advance. The horizon is
-/// the real bound; this only guards against pathological cases.
+/// Hard cap on the number of dates a single series contributes to a forecast.
+///
+/// The horizon is the real bound; this keeps one daily series from filling a
+/// long forecast on its own. It counts *emitted* dates: a snap that collapses a
+/// run of raw occurrences onto one boundary spends one slot, not one per raw
+/// step, so a snapped series reaches as far into the horizon as an unsnapped
+/// one does.
 const MAX_PROJECTED_PER_SERIES: usize = 366;
+
+/// Hard cap on the raw steps taken while filling those dates.
+///
+/// This is what guarantees termination, and why the emitted cap alone cannot:
+/// snapping can collapse arbitrarily many raw occurrences onto one date, so a
+/// walk could keep stepping without ever emitting its 366th date. Every step
+/// strictly advances the raw date instead, so the walk covers at most this many
+/// occurrences of the series and then stops regardless of the horizon. It sits
+/// far above the emitted cap so only a pathological rule-and-horizon pair —
+/// a daily rule snapped to a monthly boundary, forecast decades out — ever
+/// reaches it.
+const MAX_SERIES_STEPS: usize = 10_000;
+
+/// Appends `date` unless it repeats the one before it.
+///
+/// Snapping maps whole runs of raw dates onto the same boundary — a daily rule
+/// snapped to Monday hits that Monday five times over — and a forecast wants
+/// each date once. Snaps only ever move a date forward and never reorder two,
+/// so the series is non-decreasing and comparing against the last entry removes
+/// exactly what `Vec::dedup` would remove at the end of the walk. Doing it as
+/// dates are added is what lets [`MAX_PROJECTED_PER_SERIES`] count emitted
+/// dates rather than raw steps.
+fn push_deduped(dates: &mut Vec<NaiveDate>, date: NaiveDate) {
+    if dates.last() != Some(&date) {
+        dates.push(date);
+    }
+}
 
 /// Enumerate the projected (not-yet-spawned) future occurrences of `task`'s
 /// recurrence series with dates `> today` (and `> the current instance`) up to
@@ -218,6 +249,9 @@ const MAX_PROJECTED_PER_SERIES: usize = 366;
 /// - **Completion** (`interval_days`): assumes each instance is completed on its
 ///   due date ("as soon as possible"), so the next due is always
 ///   `prev_due + interval_days`. This gives a best-case projection.
+///
+/// The returned dates are strictly increasing: when a snap lands several raw
+/// occurrences on the same boundary, that boundary is reported once.
 ///
 /// Shared by both the CLI `forecast` command and the MCP `get_forecast` tool so
 /// their projections cannot drift.
@@ -243,7 +277,10 @@ pub fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<N
             // snap is applied only to the emitted date.
             let mut after = base;
             let mut dates = Vec::new();
-            for _ in 0..MAX_PROJECTED_PER_SERIES {
+            for _ in 0..MAX_SERIES_STEPS {
+                if dates.len() >= MAX_PROJECTED_PER_SERIES {
+                    break;
+                }
                 let raw = match next_occurrence(rrule, *anchor, after) {
                     Ok(d) => d,
                     Err(_) => break,
@@ -256,7 +293,7 @@ pub fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<N
                 }
                 // Snapping can move a date backwards; only keep strictly-future dates.
                 if occurrence > today {
-                    dates.push(occurrence);
+                    push_deduped(&mut dates, occurrence);
                 }
             }
             dates
@@ -270,7 +307,10 @@ pub fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<N
             // always advances by exactly interval_days per iteration.
             let mut base_raw = base;
             let mut dates = Vec::new();
-            for _ in 0..MAX_PROJECTED_PER_SERIES {
+            for _ in 0..MAX_SERIES_STEPS {
+                if dates.len() >= MAX_PROJECTED_PER_SERIES {
+                    break;
+                }
                 let raw = base_raw + Duration::days(*interval_days as i64);
                 // raw > base_raw always (interval_days >= 1), so walk terminates.
                 base_raw = raw;
@@ -279,7 +319,7 @@ pub fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<N
                     break;
                 }
                 if occurrence > today {
-                    dates.push(occurrence);
+                    push_deduped(&mut dates, occurrence);
                 }
             }
             dates
@@ -1277,6 +1317,77 @@ mod tests {
         let dates = project_series(&task, today, cutoff);
         // base = May4; May4+14=May18 (≤ May20); May18+14=Jun1 (> cutoff).
         assert_eq!(dates, vec![d(2026, 5, 18)]);
+    }
+
+    #[test]
+    fn project_series_snap_collapsing_many_raw_dates_emits_each_once() {
+        // A daily schedule snapped to Monday: the seven raw dates of a week all
+        // land on the same Monday, which belongs in the forecast once.
+        let anchor = d(2026, 5, 4); // Monday
+        let mut task = Task::new("Daily, snapped to Monday");
+        task.due = Some(anchor);
+        task.recurrence = Some(Recurrence::Schedule {
+            rrule: "FREQ=DAILY".into(),
+            anchor,
+            snap: Some(Snap::NextWeekday { weekday: 0 }),
+        });
+        let dates = project_series(&task, anchor, d(2026, 5, 31));
+        assert_eq!(dates, vec![d(2026, 5, 11), d(2026, 5, 18), d(2026, 5, 25)]);
+    }
+
+    #[test]
+    fn project_series_completion_snap_collapsing_emits_each_once() {
+        // Same collapse on the completion branch: a daily chore snapped to the
+        // 1st of the month yields one date per month, not one per day.
+        let mut task = Task::new("Daily, snapped to the 1st");
+        task.due = Some(d(2026, 5, 4));
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 1,
+            snap: Some(Snap::DayOfMonth { day: 1 }),
+        });
+        let dates = project_series(&task, d(2026, 5, 4), d(2026, 8, 15));
+        assert_eq!(dates, vec![d(2026, 6, 1), d(2026, 7, 1), d(2026, 8, 1)]);
+    }
+
+    #[test]
+    fn project_series_cap_counts_emitted_dates() {
+        // A daily series over a horizon far beyond the cap stops at exactly
+        // MAX_PROJECTED_PER_SERIES distinct dates.
+        let today = d(2026, 5, 4);
+        let mut task = Task::new("Daily chore");
+        task.due = Some(today);
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 1,
+            snap: None,
+        });
+        let dates = project_series(&task, today, today + Duration::days(3000));
+        assert_eq!(dates.len(), MAX_PROJECTED_PER_SERIES);
+        assert!(
+            dates.windows(2).all(|w| w[0] < w[1]),
+            "projected dates must be strictly increasing"
+        );
+        assert_eq!(dates.last(), Some(&(today + Duration::days(366))));
+    }
+
+    #[test]
+    fn project_series_collapsing_snap_terminates_on_a_huge_horizon() {
+        // The pathological case the step guard exists for: every raw date
+        // collapses onto a monthly boundary, so the emitted cap alone would
+        // never stop the walk. It must still return, capped and deduplicated.
+        let today = d(2026, 5, 4);
+        let mut task = Task::new("Daily, snapped to the 1st");
+        task.due = Some(today);
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 1,
+            snap: Some(Snap::DayOfMonth { day: 1 }),
+        });
+        let dates = project_series(&task, today, d(2126, 1, 1));
+        assert!(
+            !dates.is_empty() && dates.len() <= MAX_PROJECTED_PER_SERIES,
+            "expected a bounded non-empty projection, got {}",
+            dates.len()
+        );
+        assert!(dates.windows(2).all(|w| w[0] < w[1]));
     }
 
     #[test]
