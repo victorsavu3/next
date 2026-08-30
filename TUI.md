@@ -179,8 +179,15 @@ The buffer accepts the same tokens as `next list` (`+tag`, `-tag`, `parent:`, `c
 
 Modal-level keys win; everything else is routed to the focused field. Fields include
 title, due, start, priority, tags, assignee, url, score adjustment, long-term, the
-recurrence fields (mode / rule / completion / snap), description, notes, and a data
-key/value pair.
+recurrence fields (mode / rule / completion / snap / leeway), description, notes, and a
+data key/value pair.
+
+The **Leeway** row follows Snap in the tab order and takes the same spec `next add` does —
+`3` for both directions or `BACK,FORWARD` (`5,0`). Blank means unset, which is the
+forward-only default: a snap with no leeway moves dates later only, however far. The form
+routes through the same rule builder as the CLI, so the validation messages are identical
+— a leeway with no snap, or a backward tolerance not shorter than the completion interval,
+is refused on save with the modal left open.
 
 | Key | Action |
 |-----|--------|

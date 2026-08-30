@@ -185,8 +185,9 @@ next add <title> [options]
 | `--url <url>` | string | none | URL associated with this task (must be http or https). |
 | `--notes <text>` | string | none | Multi-line free-text notes. |
 | `--recur-schedule <rule>` | RRULE string | none | Schedule-based recurrence. The rule is an RFC 5545 RRULE string (without the `RRULE:` prefix). See [Recurrence](#recurrence) below. |
-| `--recur-completion <days>` | positive integer | none | Completion-based recurrence. The next instance is created `<days>` after the task is marked done. |
-| `--recur-snap <snap>` | snap value | none | Advance the computed next date to the nearest qualifying date. See [Snap values](#snap-values) below. Applies to both schedule and completion modes. |
+| `--recur-completion <days>` | positive integer | none | Completion-based recurrence. The next instance is created `<days>` after the task is marked done. Must be at least 1. |
+| `--recur-snap <snap>` | snap value | none | Move the computed next date to a qualifying date. See [Snap values](#snap-values) below. Applies to both schedule and completion modes. |
+| `--recur-snap-leeway <spec>` | `N` or `BACK,FORWARD` | none | How far the snap may move the date, in whole days (0–365). Without it a snap only ever moves dates **later**, however far. Requires `--recur-snap`. See [Snap leeway](#snap-leeway---recur-snap-leeway) below. |
 | `--long-term` | flag | false | Disables the age factor from scoring. Suitable for background or long-running tasks. |
 | `--adjust <value>` | float | 0.0 | Manual score adjustment added directly to the computed urgency score. Positive boosts, negative penalises. |
 | `--assignee <name>` | string | none | Assign the task to a user. Used by the user filter. |
@@ -208,7 +209,11 @@ next add "Launch blog" --slug launch-blog --priority high
 next add "Write first post" --parent launch-blog
 
 # Recurring: water plants 7 days after last watering, snapped to Saturday
-next add "Water plants" --slug water-plants --recur-completion 7 --recur-snap saturday --tag @home
+next add "Water plants" --slug water-plants --recur-completion 7 --recur-snap saturday --recur-snap-leeway 2 --tag @home
+
+# Recurring: rent on the 1st, and a two-day slip must not push it to next month
+next add "Pay rent" --slug rent --due 2026-06-01 \
+  --recur-completion 30 --recur-snap dom:1 --recur-snap-leeway 3
 
 # Recurring: daily standup every weekday
 next add "Daily standup" --slug standup --recur-schedule "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
@@ -580,12 +585,13 @@ Same flags as `next add`, plus:
 | `--clear-description` | flag | false | Remove the description. |
 | `--clear-url` | flag | false | Remove the URL. |
 | `--clear-recurrence` | flag | false | Remove the recurrence rule and `recurrence_id`. |
-| `--clear-recur-snap` | flag | false | Remove the snap but keep the recurrence rule. Rejected together with `--recur-snap`. |
+| `--clear-recur-snap` | flag | false | Remove the snap **and its leeway** — a leeway has nothing to mean without a boundary. Keeps the recurrence rule. Rejected together with `--recur-snap`. |
+| `--clear-recur-snap-leeway` | flag | false | Remove only the leeway, restoring the default: never pull a date earlier, always push it later. Rejected together with `--recur-snap-leeway`. |
 | `--json` | flag | false | Emit the updated task as JSON. |
 
-`--recur-schedule`, `--recur-completion`, and `--recur-snap` work the same as in `next add`. When editing a schedule rule, the original `anchor` date is preserved so interval alignment stays correct. `--recur-snap` can also be used standalone to change the snap on an existing recurring task without re-specifying the full rule.
+`--recur-schedule`, `--recur-completion`, `--recur-snap` and `--recur-snap-leeway` work the same as in `next add`. When editing a schedule rule, the original `anchor` date is preserved so interval alignment stays correct. `--recur-snap` and `--recur-snap-leeway` can also be used standalone to change the snap or its tolerance on an existing recurring task without re-specifying the full rule.
 
-Changing the rule keeps the snap: `next edit water-plants --recur-completion 31` leaves an existing `dom:1` snap in place. Use `--recur-snap` to replace it or `--clear-recur-snap` to drop it — either may be combined with a rule change or sent on its own.
+Changing the rule keeps the snap and the leeway: `next edit water-plants --recur-completion 31` leaves an existing `dom:1` snap and its leeway in place. Use `--recur-snap` / `--recur-snap-leeway` to replace them, `--clear-recur-snap-leeway` to drop the tolerance alone, or `--clear-recur-snap` to drop both — any of these may be combined with a rule change or sent on its own.
 
 Trailing `+tag` and `-tag` tokens may also be used to add or remove tags:
 
@@ -601,7 +607,9 @@ next edit a1b2 --priority high --tag @work
 next edit a1b2 --remove-tag @home --clear-due
 next edit a1b2 --url "https://example.com/ticket-42" --description "See comments in ticket"
 next edit standup --recur-snap monday        # change snap without re-specifying the rule
-next edit standup --clear-recur-snap         # drop the snap, keep the rule
+next edit rent --recur-snap-leeway 5,0       # pull back up to 5 days, never push past the 1st
+next edit rent --clear-recur-snap-leeway     # back to the forward-only default
+next edit standup --clear-recur-snap         # drop the snap and its leeway, keep the rule
 next edit old-task --clear-recurrence        # remove the recurrence rule entirely
 ```
 
@@ -1113,13 +1121,13 @@ next add "Dentist check" --recur-completion 180 # every ~6 months
 
 ### Snap values (`--recur-snap`)
 
-Advances the computed next date to the nearest qualifying day. Use when you want to round to a convenient boundary.
+Moves the computed next date to a qualifying day. Use when you want to round to a convenient boundary.
 
-| Value | Meaning |
-|-------|---------|
-| `monday` … `sunday` | Advance to that weekday (keep the day if already there). |
-| `next-workday` | Advance to the next Mon–Fri. |
-| `dom:N` | Advance to day N of the current or next month (N = 1–28). |
+| Value | Boundary |
+|-------|----------|
+| `monday` … `sunday` | That weekday (the date is kept if it is already there). |
+| `next-workday` | Any Mon–Fri. |
+| `dom:N` | Day N of the month (N = 1–28, so the day exists in every month). |
 
 ```sh
 # Completion-based, snapped to Saturday
@@ -1127,6 +1135,84 @@ next add "Weekly chore" --recur-completion 7 --recur-snap saturday
 
 # Monthly on the 1st, snapped to next workday if the 1st is a weekend
 next add "Monthly report" --recur-schedule "FREQ=MONTHLY;BYMONTHDAY=1" --recur-snap next-workday
+```
+
+By default a snap only ever moves a date **later**, and by as much as it takes to reach the next boundary. That is what [Snap leeway](#snap-leeway---recur-snap-leeway) exists to bound.
+
+### Snap leeway (`--recur-snap-leeway`)
+
+A bare snap is a ratchet, not a rounding. Take a rent task set up the way this page suggests — `--recur-completion 30 --recur-snap dom:1` — and complete it on the 2nd instead of the 1st. The raw date is the 2nd of next month, the 1st has already gone past, so the snap jumps a further month: the cycle you asked to be 30 days long becomes 60. Nothing warns you, and completing one day late every time halves the number of payments in a year.
+
+`--recur-snap-leeway` turns the boundary into a **tolerance**. The raw date moves to a boundary only if one falls within the window; otherwise the raw date stands and the interval is preserved exactly. Keeping the raw date is the feature, not a fallback — an off-boundary date on cadence beats an on-boundary date a month late.
+
+| Completed | Raw (+30) | Default → due | Gap | `--recur-snap-leeway 3` → due | Gap |
+|-----------|-----------|---------------|-----|-------------------------------|-----|
+| 2026-06-01 | 2026-07-01 | 2026-07-01 | 30 | 2026-07-01 | 30 |
+| 2026-06-02 | 2026-07-02 | 2026-08-01 | 60 | 2026-07-01 | 29 |
+| 2026-06-05 | 2026-07-05 | 2026-08-01 | 57 | 2026-07-05 | 30 |
+| 2026-06-15 | 2026-07-15 | 2026-08-01 | 47 | 2026-07-15 | 30 |
+| 2026-06-30 | 2026-07-30 | 2026-08-01 | 32 | 2026-08-01 | 32 |
+
+Read the third and fourth rows: with a leeway of 3 the 1st is out of reach, so the date stays on the 5th and the 15th. The task is off its boundary but on its cadence. Note also that the second row lands a day *short* of 30 — a backward pull can shorten one cycle, by at most `BACK` days, and the next cycle starts from the boundary again.
+
+**The spec**
+
+| Form | Meaning |
+|------|---------|
+| `N` | Both directions. `--recur-snap-leeway 3` is back 3, forward 3. |
+| `BACK,FORWARD` | Independent. `--recur-snap-leeway 5,0` pulls back up to 5 days and never pushes later. |
+
+Whole days only, each between 0 and 365. `0` means the corresponding direction never moves the date; `0,0` never snaps at all.
+
+**The rule**, in the order it is applied:
+
+1. If the raw date already sits on a boundary, keep it.
+2. If a boundary is within `BACK` days *and* stays after the date the series stepped from, pull back to it.
+3. If a boundary is within `FORWARD` days, push forward to it.
+4. If both are in range, the nearer wins; a tie goes forward.
+5. If neither is in range, keep the raw date.
+
+**The default is not "no snapping"**
+
+Omitting `--recur-snap-leeway` means `back 0, forward unbounded` — precisely the behaviour every task had before this flag existed. No stored task changes date, no file is rewritten, nothing migrates. It also means the default is the ratchet described above, so `next add` prints a hint when you set a `dom:N` or weekday snap without one.
+
+**Small leeways and `next-workday`**
+
+`next-workday` sits one day back from Friday and two days forward to Monday when the raw date is a Saturday, and the mirror when it is a Sunday. So a Saturday only reaches Monday if `FORWARD` is at least 2, and a Sunday only reaches Friday if `BACK` is at least 2. Consequences worth knowing before you type a small number:
+
+| Leeway | Raw falls on a Saturday | Raw falls on a Sunday |
+|--------|-------------------------|-----------------------|
+| unset (default) | Monday | Monday |
+| `2` | Friday (nearer than Monday) | Monday (nearer than Friday) |
+| `1` | Friday | Monday |
+| `0,1` | **stays on Saturday** | Monday |
+| `1,0` | Friday | **stays on Sunday** |
+| `0,0` | **stays on Saturday** | **stays on Sunday** |
+
+A weekend date that simply stands is the rule working as designed — no boundary was close enough — but it reads like a bug if you were not expecting it. `next show` prints the leeway alongside the snap so the cause is visible.
+
+**Errors**
+
+| Situation | Message |
+|-----------|---------|
+| Leeway with no snap | `--recur-snap-leeway requires a snap; set --recur-snap first (e.g. dom:1, monday, next-workday)` |
+| Backward tolerance not shorter than the interval | `backward leeway (5d) must be less than the completion interval (3d), or the series would not advance` |
+| Out of range | `snap leeway must be between 0 and 365 days, got 400` |
+| Malformed | `invalid snap leeway "3,-1" — expected N or BACK,FORWARD in whole days (e.g. 3 or 5,0)` |
+| Set and clear together | `--recur-snap-leeway and --clear-recur-snap-leeway are mutually exclusive` |
+
+The backward bound applies to completion rules, where the interval is known. A schedule rule has no static period to compare against, so it is guarded at computation time instead: a backward pull that would reach the date the series stepped from is discarded and the forward boundary or the raw date is used.
+
+```sh
+# The rent fix, end to end
+next add "Pay rent" --slug rent --due 2026-06-01 \
+  --recur-completion 30 --recur-snap dom:1 --recur-snap-leeway 3
+
+# Weekly on Monday, tolerating a two-day slip either way
+next add "Weekly review" --recur-completion 7 --recur-snap monday --recur-snap-leeway 2
+
+# Asymmetric: pull back up to 5 days, never push past the 1st
+next edit rent --recur-snap-leeway 5,0
 ```
 
 ### Managing recurrence with `next edit`

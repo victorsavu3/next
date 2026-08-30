@@ -254,6 +254,14 @@ Key `Task` fields: `id`, `title`, `status`, `priority`, `due`, `start`, `long_te
 `url`, `notes`, `data` (arbitrary JSON map; `data["time_log"]` accumulates start/stop events),
 `recurrence`, `recurrence_id`, `completed_at` (date set when marked done).
 
+`Recurrence` carries the rule plus two date-shaping fields, `snap` and `snap_leeway`, on
+both variants. They are reached through accessors (`snap()`, `snap_leeway()`,
+`set_snap()`, `set_snap_leeway()`, `effective_snap_leeway()`) rather than by matching, so
+an edit that replaces only the rule can carry the rest forward without spelling out both
+variants — which is what `next edit --recur-completion N` and MCP `update_task` do.
+`effective_snap_leeway()` resolves an absent leeway to `SnapLeeway::DEFAULT`, so "no
+leeway configured" and "leeway 0/unbounded" are one code path, not two that could drift.
+
 `created_at` and `updated_at` are **not** fields of `Task`. They are derived from git
 history, carried in `scoring::TaskDates` and cached in the SQLite columns of the same
 name, and reach consumers through `Store::task_dates` — which is why they can be
@@ -693,6 +701,13 @@ the `Store` trait; callers box it as `Box<dyn Store>` inside `TaskRepository`.
 - Title slug: lowercase, spaces → `-`, strip non-alphanumeric except `-`
 - Optional fields are omitted rather than written as empty strings or nulls
 - The `[recurrence]` table is only present when the task recurs
+- `[recurrence.snap]` and `[recurrence.snap_leeway]` are sibling sub-tables, each written
+  only when set. `snap_leeway` skips a zero `back` and an absent `forward`, so a task that
+  does not use the tolerance carries no such table at all — which is what makes the absent
+  case mean `SnapLeeway::DEFAULT` and leaves every pre-existing task's dates untouched.
+  It is a new *field*, not a new `Snap` variant, deliberately: an unknown internally-tagged
+  variant is a hard parse error, so a variant would break older binaries repo-wide, while
+  an unknown field parses fine
 - The `[data]` table is only present when at least one key has been set
 
 ### 6.2 Git operations

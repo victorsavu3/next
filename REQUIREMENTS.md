@@ -52,11 +52,22 @@ anchor = "2026-05-26"                          # first instance date; pins inter
 type = "completion"
 interval_days = 7
 
-# Optional snap on either type: round the computed date forward to a boundary
+# Optional snap on either type: move the computed date to a boundary
 [recurrence.snap]
 type = "next_weekday"   # "next_weekday" | "next_workday" | "day_of_month"
 weekday = 5             # 0=Mon…6=Sun; used with next_weekday
+
+# Optional tolerance around that boundary, a sibling table of [recurrence.snap]
+[recurrence.snap_leeway]
+back = 3                # days the snap may pull the date earlier; absent = 0
+forward = 3             # days it may push it later; absent = unbounded
 ```
+
+`snap_leeway` MUST be optional on both recurrence types, and an absent table MUST mean
+`back = 0, forward = unbounded` — the behaviour every task had before the field existed.
+No stored task changes date when the field is introduced and no migration is required.
+`back = 0` MUST NOT be serialised, and neither MUST an absent `forward`, so a task that
+does not use the feature carries no `[recurrence.snap_leeway]` table at all.
 
 The RRULE is parsed by the `rrule` crate, so the whole of that crate's RFC 5545 surface
 is accepted, not a curated subset: `FREQ` (required), `INTERVAL`, `UNTIL`, `COUNT`,
@@ -406,15 +417,19 @@ scoring while the project is in progress.
 
 1. Current task is marked `done`
 2. Next task is created with `start` (or `due`) = `today + interval_days`
-3. If a snap is set, the computed date is advanced to the nearest qualifying boundary
+3. If a snap is set, the computed date is moved to a boundary as far as the snap leeway allows (§7.4)
 4. If the original task has both `start` and `due`, the offset between them is preserved
+
+`interval_days` MUST be at least 1. A zero-day interval never advances the series — every
+spawned instance would be due the day it was created — so it MUST be rejected where the
+rule is built, not left to stall silently after the fact.
 
 ### 7.2 Schedule-based
 
 1. Current task is marked `done`
 2. `after = max(task.due, task.start, today)` — never re-uses a date already passed
 3. The RRULE is evaluated from `anchor` to find the first occurrence strictly after `after`
-4. If a snap is set, the resulting date is advanced further
+4. If a snap is set, the resulting date is moved to a boundary as far as the snap leeway allows (§7.4)
 5. If the original task has both `start` and `due`, the same offset is applied to the new occurrence
 
 The `anchor` is set once (on `next add`) to the task's `start` or `due` date, falling back to today. All future instances carry the same `anchor` so INTERVAL calculations stay aligned.
@@ -425,15 +440,57 @@ A schedule RRULE MUST be validated when it is set (on `next add`/`next edit`, an
 
 ### 7.3 Snap values
 
-After computing the raw next date, an optional snap advances it to a boundary:
+After computing the raw next date, an optional snap moves it to a boundary:
 
-| Snap type | TOML | Description |
-|-----------|------|-------------|
-| Next weekday | `type = "next_weekday"; weekday = N` | 0=Mon…6=Sun; keep the date if already there |
-| Next workday | `type = "next_workday"` | Advance to the next Mon–Fri |
-| Day of month | `type = "day_of_month"; day = N` | Day 1–28; use current month if not yet passed, else next |
+| Snap type | TOML | Boundary |
+|-----------|------|----------|
+| Next weekday | `type = "next_weekday"; weekday = N` | Every occurrence of weekday N (0=Mon…6=Sun) |
+| Next workday | `type = "next_workday"` | Every Mon–Fri |
+| Day of month | `type = "day_of_month"; day = N` | Day N of each month; N MUST be 1–28 so the day exists in every month |
 
-### 7.4 Series identity
+The 1–28 bound on `day_of_month` is load-bearing, not conservatism: it is what makes
+"the boundary before this date" and "the boundary after it" total functions, which §7.4
+depends on.
+
+### 7.4 Snap leeway
+
+A snap on its own is a ratchet: it rounds the computed date *up* to the next boundary
+however far away that is, so completing a 30-day task with a `dom:1` snap one day late
+pushes the next instance a full month out and doubles the realised period. `snap_leeway`
+turns the boundary into a tolerance.
+
+Given the raw date, the snap, the leeway, and `floor` — the date the raw was computed from
+(the completion date for a completion rule, the `after` bound for a schedule rule) — the
+result MUST be determined as follows:
+
+1. If the raw date already sits on a boundary, it is returned unchanged.
+2. Otherwise let `back` be the greatest boundary `<= raw` and `fwd` the least boundary
+   `>= raw`. `back` is a candidate iff `raw - back <= leeway.back` **and** `back > floor`;
+   `fwd` is a candidate iff `fwd - raw <= leeway.forward`, where an absent `forward` is
+   unbounded.
+3. If both are candidates, the nearer wins; a tie MUST resolve **forward**.
+4. If exactly one is a candidate, it is used.
+5. If neither is, the **raw date MUST be returned unsnapped**, preserving the interval
+   exactly. This is the required behaviour, not a fallback.
+
+The `back > floor` guard MUST be enforced at computation time, so that a hand-edited or
+git-merged rule cannot produce an instance due on or before the one just completed. The
+forward candidate and the raw date are always `> floor`, so the chain is total.
+
+With `back = 0, forward = unbounded` this MUST reproduce the pre-leeway rule exactly:
+the backward branch requires `raw - back <= 0`, which step 1 has already returned on.
+
+**Validation.** A leeway MUST be rejected when it has no snap to qualify; when its `back`
+is not strictly less than a completion rule's `interval_days` (a schedule rule has no
+static period, so the `back > floor` guard carries it alone); when either number falls
+outside 0–365; when the spec string is not `N` or `BACK,FORWARD` in whole days; and when a
+set and a clear are requested together. These checks MUST live where every surface builds
+a rule, so the CLI, MCP and TUI report them identically.
+
+**Clearing.** Clearing the snap MUST clear the leeway with it. Clearing the leeway alone
+MUST restore the default rather than setting `0,0`.
+
+### 7.5 Series identity
 
 All instances of a series share the same `recurrence_id` UUID (equal to the first instance's `id`). Slugs are not propagated to spawned instances.
 
@@ -512,8 +569,9 @@ next add <title> [options]
 | `--url <url>` | URL associated with this task (must be http or https) |
 | `--notes <text>` | Free-text notes |
 | `--recur-schedule <rule>` | Creates a schedule-based recurring task; `rule` is an RRULE string |
-| `--recur-completion <days>` | Creates a completion-based recurring task |
+| `--recur-completion <days>` | Creates a completion-based recurring task; the interval MUST be >= 1 |
 | `--recur-snap <snap>` | Optional snap applied after the next-date computation; see §7.3 |
+| `--recur-snap-leeway <spec>` | Optional tolerance around that snap: `N` or `BACK,FORWARD`, whole days 0–365; see §7.4. Requires `--recur-snap` |
 | `--long-term` | Sets `long_term = true` |
 | `--adjust <float>` | Sets `score_adjustment` |
 | `--assignee <name>` | Sets `assignee` |
@@ -578,6 +636,16 @@ All `<id-or-slug>` arguments MUST accept a full UUID, an unambiguous UUID prefix
 defaults to today; `--completed-at <date>` overrides it. The same date is the base date for
 recurrence scheduling (completion-based: `completed_at + interval_days`; schedule-based:
 `max(task.due, task.start, completed_at)`). Accepts ISO 8601 or natural-language dates.
+
+`next show` MUST display the whole recurrence configuration, not just the rule: the snap
+and, when a snap is set, its leeway. A leeway that is not set MUST be displayed as the
+default it stands for rather than omitted, since an invisible default is exactly what
+makes the forward-only ratchet (§7.4) hard to diagnose.
+
+`next edit` MUST carry the snap and the snap leeway forward across a change to the rule
+alone: `next edit <id> --recur-completion N` MUST NOT wipe either. Replacing them requires
+`--recur-snap` / `--recur-snap-leeway`; dropping them requires `--clear-recur-snap` (both)
+or `--clear-recur-snap-leeway` (the tolerance alone).
 
 `next open` MUST fail with an error when the task has no `url` field set.
 
@@ -698,7 +766,7 @@ being contacted, upgraded to a determinate bar once the transfer announces its s
 next forecast [filters...] [--days N]
 ```
 
-See §7.4.
+See §7.5.
 
 ### 8.11 Config
 
