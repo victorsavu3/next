@@ -177,6 +177,8 @@ fn init_then_add_task_works() {
             recur_schedule: None,
             recur_completion: None,
             recur_snap: None,
+            recur_snap_leeway: None,
+            quiet: false,
             long_term: false,
             adjust: None,
             json: false,

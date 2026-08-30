@@ -27,6 +27,8 @@ fn add_args(title: &str) -> add::Args {
         recur_schedule: None,
         recur_completion: None,
         recur_snap: None,
+        recur_snap_leeway: None,
+        quiet: false,
         long_term: false,
         adjust: None,
         json: false,

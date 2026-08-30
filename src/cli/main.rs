@@ -216,7 +216,12 @@ fn main() -> anyhow::Result<()> {
 
     let result = match command {
         Command::Init(_) => unreachable!("handled above"),
-        Command::Add(args) => commands::add::run(args, &mut ctx),
+        // `Args::quiet` is `#[arg(skip)]`, fed from the global flag — the same
+        // arrangement `sync` uses below, rather than a second flag of its own.
+        Command::Add(mut args) => {
+            args.quiet |= cli_quiet;
+            commands::add::run(args, &mut ctx)
+        }
         Command::List(args) => commands::list::run(args, &ctx),
         Command::Next(args) => commands::next_cmd::run(args, &ctx),
         Command::Show(args) => commands::show::run(args, &ctx),
