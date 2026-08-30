@@ -1009,4 +1009,225 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    // ── snap leeway ─────────────────────────────────────────────────────────
+
+    /// The worked example: 30 days after completion, snapped to the 1st, three
+    /// days of tolerance either way.
+    fn leeway_task(ctx: &mut TaskRepository) -> String {
+        let task = add_task(
+            &json!({
+                "title": "Pay the rent",
+                "recur_completion": 30,
+                "recur_snap": "dom:1",
+                "recur_snap_leeway": "3",
+            }),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(task["recurrence"]["snap_leeway"]["back"], 3);
+        assert_eq!(task["recurrence"]["snap_leeway"]["forward"], 3);
+        task["id"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn add_task_stores_an_asymmetric_leeway() {
+        let (_dir, mut ctx) = make_ctx();
+        let task = add_task(
+            &json!({
+                "title": "Pay the rent",
+                "recur_completion": 30,
+                "recur_snap": "dom:1",
+                "recur_snap_leeway": "5,0",
+            }),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(task["recurrence"]["snap_leeway"]["back"], 5);
+        assert_eq!(task["recurrence"]["snap_leeway"]["forward"], 0);
+    }
+
+    /// T13, MCP half: `add_task` builds its rule by hand, so this is what
+    /// proves it still reaches the shared checks.
+    #[test]
+    fn add_task_rejects_a_leeway_with_no_snap_to_qualify() {
+        let (_dir, mut ctx) = make_ctx();
+        let err = add_task(
+            &json!({
+                "title": "Pay the rent",
+                "recur_completion": 30,
+                "recur_snap_leeway": "3",
+            }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--recur-snap-leeway requires a snap; set --recur-snap first \
+             (e.g. dom:1, monday, next-workday)"
+        );
+    }
+
+    #[test]
+    fn add_task_rejects_a_backward_leeway_the_interval_cannot_absorb() {
+        let (_dir, mut ctx) = make_ctx();
+        let err = add_task(
+            &json!({
+                "title": "Pay the rent",
+                "recur_completion": 3,
+                "recur_snap": "dom:1",
+                "recur_snap_leeway": "5,0",
+            }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "backward leeway (5d) must be less than the completion interval (3d), \
+             or the series would not advance"
+        );
+    }
+
+    #[test]
+    fn add_task_rejects_a_zero_day_interval() {
+        // The CLI has always refused this; MCP built the rule directly and let
+        // it through, producing a series that never advances.
+        let (_dir, mut ctx) = make_ctx();
+        let err = add_task(
+            &json!({ "title": "Stuck", "recur_completion": 0 }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "completion interval must be >= 1 day, got 0"
+        );
+    }
+
+    #[test]
+    fn add_task_rejects_an_interval_no_u32_can_hold() {
+        // `as u32` used to wrap this into 705032704 without a word.
+        let (_dir, mut ctx) = make_ctx();
+        let err = add_task(
+            &json!({ "title": "Wrapped", "recur_completion": 5000000000u64 }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "recur_completion must be a whole number of days between 1 and 4294967295, \
+             got 5000000000"
+        );
+    }
+
+    #[test]
+    fn update_task_recur_completion_keeps_the_leeway_too() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let updated = update_task(&json!({ "id": id, "recur_completion": 31 }), &mut ctx).unwrap();
+        assert_eq!(updated["recurrence"]["interval_days"], 31);
+        assert_eq!(updated["recurrence"]["snap"]["day"], 1);
+        assert_eq!(
+            updated["recurrence"]["snap_leeway"]["back"], 3,
+            "the leeway must survive a bare recur_completion: {updated}"
+        );
+    }
+
+    #[test]
+    fn update_task_standalone_recur_snap_leeway_replaces_it() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let updated =
+            update_task(&json!({ "id": id, "recur_snap_leeway": "5,0" }), &mut ctx).unwrap();
+        assert_eq!(updated["recurrence"]["interval_days"], 30);
+        assert_eq!(updated["recurrence"]["snap"]["day"], 1);
+        assert_eq!(updated["recurrence"]["snap_leeway"]["back"], 5);
+        assert_eq!(updated["recurrence"]["snap_leeway"]["forward"], 0);
+    }
+
+    #[test]
+    fn update_task_clear_recur_snap_leeway_keeps_the_snap() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let updated = update_task(
+            &json!({ "id": id, "clear_recur_snap_leeway": true }),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(updated["recurrence"]["snap"]["day"], 1);
+        assert!(
+            updated["recurrence"]["snap_leeway"].is_null(),
+            "clear_recur_snap_leeway must drop only the leeway: {updated}"
+        );
+    }
+
+    #[test]
+    fn update_task_clear_recur_snap_takes_the_leeway_with_it() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let updated =
+            update_task(&json!({ "id": id, "clear_recur_snap": true }), &mut ctx).unwrap();
+        assert!(updated["recurrence"]["snap"].is_null());
+        assert!(
+            updated["recurrence"]["snap_leeway"].is_null(),
+            "a leeway with no snap is not a rule anyone can act on: {updated}"
+        );
+    }
+
+    /// T13, MCP half: the carry-forward path. `back = 3` was stored days ago
+    /// and never passes through a parser on this call.
+    #[test]
+    fn update_task_rejects_an_interval_the_carried_leeway_would_stall() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let err = update_task(&json!({ "id": id, "recur_completion": 3 }), &mut ctx).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "backward leeway (3d) must be less than the completion interval (3d), \
+             or the series would not advance"
+        );
+    }
+
+    #[test]
+    fn update_task_recur_snap_leeway_and_clear_conflict() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let err = update_task(
+            &json!({ "id": id, "recur_snap_leeway": "3", "clear_recur_snap_leeway": true }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--recur-snap-leeway and --clear-recur-snap-leeway are mutually exclusive"
+        );
+    }
+
+    #[test]
+    fn update_task_recur_snap_leeway_without_recurrence_errors() {
+        let (_dir, mut ctx) = make_ctx();
+        let task = add_task(&json!({ "title": "No recurrence" }), &mut ctx).unwrap();
+        let id = task["id"].as_str().unwrap();
+        let err =
+            update_task(&json!({ "id": id, "recur_snap_leeway": "3" }), &mut ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("recur_snap_leeway requires an existing recurrence rule"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// A leeway edit that is not registered in `EDIT_PARAM_KEYS` is dropped on
+    /// the floor whenever the call carries no other edit field.
+    #[test]
+    fn the_leeway_params_count_as_edits() {
+        assert!(has_edit_params(&json!({ "recur_snap_leeway": "3" })));
+        assert!(has_edit_params(&json!({ "clear_recur_snap_leeway": true })));
+    }
 }

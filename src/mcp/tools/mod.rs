@@ -69,6 +69,7 @@ pub fn all_tools() -> Vec<Tool> {
                     "recur_schedule": { "type": "string", "description": "RFC 5545 RRULE string e.g. 'FREQ=WEEKLY;BYDAY=MO'" },
                     "recur_completion": { "type": "integer", "description": "Completion-based recurrence: repeat N days after done" },
                     "recur_snap": { "type": "string", "description": "Snap next date: next-workday, monday…sunday, dom:N" },
+                    "recur_snap_leeway": { "type": "string", "description": "Tolerance around the snap boundary, in days: \"3\" for both directions or \"BACK,FORWARD\" e.g. \"5,0\". The raw date moves to a boundary only if one falls within the window; otherwise it is kept as is, preserving the interval. Requires recur_snap. Omit to keep the default, which never pulls a date earlier and always pushes it later — that default lengthens the cycle whenever a task is completed late." },
                     "long_term": { "type": "boolean", "description": "Suppress age-based scoring" },
                     "score_adjustment": { "type": "number" },
                     "autosync": { "type": "boolean", "default": true, "description": "Sync immediately after mutation (set false for bulk edits)" }
@@ -108,7 +109,9 @@ pub fn all_tools() -> Vec<Tool> {
                     "recur_schedule": { "type": "string" },
                     "recur_completion": { "type": "integer" },
                     "recur_snap": { "type": "string", "description": "Snap next date: next-workday, monday…sunday, dom:N. May be sent alone to change the snap on an existing recurrence. Sending recur_schedule/recur_completion without it keeps the existing snap." },
-                    "clear_recur_snap": { "type": "boolean", "description": "Drop the snap but keep the recurrence rule. Cannot be combined with recur_snap." },
+                    "clear_recur_snap": { "type": "boolean", "description": "Drop the snap but keep the recurrence rule. Cannot be combined with recur_snap. Drops the snap's leeway with it." },
+                    "recur_snap_leeway": { "type": "string", "description": "Tolerance around the snap boundary, in days: \"3\" for both directions or \"BACK,FORWARD\" e.g. \"5,0\". The raw date moves to a boundary only if one falls within the window; otherwise it is kept as is, preserving the interval. Requires recur_snap. Omit to keep the default, which never pulls a date earlier and always pushes it later — that default lengthens the cycle whenever a task is completed late." },
+                    "clear_recur_snap_leeway": { "type": "boolean", "description": "Drop the leeway but keep the snap, restoring the default (never pull back, always push forward). Cannot be combined with recur_snap_leeway." },
                     "clear_recurrence": { "type": "boolean" },
                     "long_term": { "type": "boolean", "description": "Suppress age-based scoring. false clears it (both values take effect)." },
                     "score_adjustment": { "type": "number" },
