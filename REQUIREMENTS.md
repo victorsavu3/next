@@ -58,7 +58,12 @@ type = "next_weekday"   # "next_weekday" | "next_workday" | "day_of_month"
 weekday = 5             # 0=Mon…6=Sun; used with next_weekday
 ```
 
-Supported RRULE fields: `FREQ` (`DAILY`, `WEEKLY`, `MONTHLY`, `YEARLY`), `INTERVAL`, `BYDAY`, `BYMONTHDAY`.
+The RRULE is parsed by the `rrule` crate, so the whole of that crate's RFC 5545 surface
+is accepted, not a curated subset: `FREQ` (required), `INTERVAL`, `UNTIL`, `COUNT`,
+`BYDAY` — including positional forms such as `1MO` and `-1FR` — `BYMONTHDAY`, including
+negative values (`-1` is the month-end idiom), `BYMONTH`, `BYSETPOS` and `WKST`. `next`
+adds only two rules of its own on top: `INTERVAL` MUST be >= 1 and `BYMONTHDAY` MUST be
+non-zero, both of which the crate would otherwise accept.
 
 ### 1.2 Projects and subtasks
 
@@ -414,9 +419,9 @@ scoring while the project is in progress.
 
 The `anchor` is set once (on `next add`) to the task's `start` or `due` date, falling back to today. All future instances carry the same `anchor` so INTERVAL calculations stay aligned.
 
-For `MONTHLY`/`YEARLY` rules, a target day that does not exist in a given month is CLAMPED to that month's last day rather than skipping the month/year: the 31st becomes the month's last day (e.g. Apr 30, Feb 28), and Feb 29 becomes Feb 28 in non-leap years. When several `BYMONTHDAY` values clamp to the same date (e.g. 30 and 31 both → Feb 28), the occurrence is counted once.
+For `MONTHLY`/`YEARLY` rules, a target day that does not exist in a given month is SKIPPED, per RFC 5545 — it is not clamped to that month's last day. `FREQ=MONTHLY;BYMONTHDAY=31` runs Jan 31, Mar 31, May 31 … and simply has no February occurrence; `BYMONTHDAY=29` has none in a non-leap February. A rule that wants the last day of *every* month MUST say so with the negative form, `BYMONTHDAY=-1`.
 
-A schedule RRULE MUST be validated when it is set (on `next add`/`next edit`, and via the MCP `add_task`/`update_task` tools): the rule is parsed with the same parser used to compute occurrences, and an invalid or unsupported rule (missing `FREQ`, `INTERVAL` < 1, non-positive `BYMONTHDAY`, unknown `FREQ`, positional `BYDAY`, etc.) is rejected with a clear error at set time. A malformed rule MUST NOT be stored and MUST NOT be deferred to fail later on `next done`.
+A schedule RRULE MUST be validated when it is set (on `next add`/`next edit`, and via the MCP `add_task`/`update_task` tools): the rule is parsed with the same parser used to compute occurrences, and an invalid rule is rejected with a clear error at set time. Rejected are a missing or unknown `FREQ`, `INTERVAL` < 1, `BYMONTHDAY=0`, an unparseable `UNTIL`, and anything the `rrule` crate refuses. Positional `BYDAY` (`1MO`, `-1FR`) and negative `BYMONTHDAY` are valid and MUST NOT be rejected. A malformed rule MUST NOT be stored and MUST NOT be deferred to fail later on `next done`.
 
 ### 7.3 Snap values
 

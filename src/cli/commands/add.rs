@@ -94,6 +94,8 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
         args.recur_schedule,
         args.recur_completion,
         args.recur_snap.as_deref(),
+        None,
+        false,
         anchor,
     )?;
 

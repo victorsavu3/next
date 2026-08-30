@@ -85,6 +85,26 @@ pub fn parse_snap_leeway(s: &str) -> anyhow::Result<SnapLeeway> {
     })
 }
 
+/// Resolve the "set" and "clear" leeway flags into the leeway they ask for.
+///
+/// `Ok(None)` means *no leeway*: either the clear flag was passed, or neither
+/// was and the caller has nothing of its own to carry forward.
+///
+/// It lives beside the parser rather than inside it because the flags reach
+/// [`parse_recurrence`] on `add`, but on `edit` they are resolved before the
+/// rule is assembled — one function keeps the conflict spelled the same way on
+/// both paths and on MCP.
+pub fn resolve_snap_leeway(
+    snap_leeway: Option<&str>,
+    clear_snap_leeway: bool,
+) -> anyhow::Result<Option<SnapLeeway>> {
+    anyhow::ensure!(
+        !(snap_leeway.is_some() && clear_snap_leeway),
+        "--recur-snap-leeway and --clear-recur-snap-leeway are mutually exclusive"
+    );
+    snap_leeway.map(parse_snap_leeway).transpose()
+}
+
 /// Render a [`SnapLeeway`] back into the spec string [`parse_snap_leeway`]
 /// accepts, so a form or a `show` line can round-trip what is stored.
 ///
@@ -283,13 +303,72 @@ fn clamped_date(year: i32, month: u32, day: u32) -> NaiveDate {
 
 // ─── RRULE validation and iteration (via the `rrule` crate, RFC 5545) ───────
 
+/// The rules a [`Recurrence`] must satisfy however it was spelled.
+///
+/// Kept apart from [`parse_recurrence`] because a rule is not always *parsed*
+/// — `next edit <id> --recur-completion 3` assembles one from a new interval
+/// and a leeway carried forward from what was stored, and that leeway never
+/// passes through a parser. Every surface calls this after building a rule, so
+/// a combination that is invalid together cannot be reached by setting its two
+/// halves in two separate commands.
+///
+/// The messages name CLI flags on every surface deliberately: they are the
+/// vocabulary the documentation uses, and MCP's own parameters differ only by
+/// the leading dashes.
+pub fn validate_recurrence(rec: &Recurrence) -> anyhow::Result<()> {
+    // A zero-day interval never advances: every spawned instance would be due
+    // the day it was created, forever. Checked first, because a zero interval
+    // would otherwise trip the backward-leeway bound below with a message
+    // blaming the leeway for the interval's fault.
+    if let Recurrence::Completion { interval_days, .. } = rec {
+        anyhow::ensure!(
+            *interval_days >= 1,
+            "completion interval must be >= 1 day, got {interval_days}"
+        );
+    }
+
+    // Only a configured leeway is checked. An absent one is `SnapLeeway::DEFAULT`,
+    // which is the behaviour every pre-leeway task already has.
+    let Some(leeway) = rec.snap_leeway() else {
+        return Ok(());
+    };
+
+    // A tolerance around a boundary needs a boundary. Erroring beats the silent
+    // drop `--recur-snap` alone still performs on `add`.
+    anyhow::ensure!(
+        rec.snap().is_some(),
+        "--recur-snap-leeway requires a snap; set --recur-snap first \
+         (e.g. dom:1, monday, next-workday)"
+    );
+
+    // `raw - back = completed + interval - back`, so a backward pull shorter
+    // than the interval can never reach the completion date. `snap_with_leeway`
+    // enforces the same floor at runtime for hand-edited files; this is what
+    // keeps a user from configuring the stall in the first place.
+    if let Recurrence::Completion { interval_days, .. } = rec {
+        anyhow::ensure!(
+            u32::from(leeway.back) < *interval_days,
+            "backward leeway ({}d) must be less than the completion interval ({}d), \
+             or the series would not advance",
+            leeway.back,
+            interval_days
+        );
+    }
+
+    Ok(())
+}
+
 /// Parse recurrence arguments into a [`Recurrence`] value.
 ///
 /// `schedule` and `completion` are mutually exclusive; passing both returns an
 /// error.  If neither is provided the function returns `Ok(None)`.
 ///
-/// A `completion` interval must be at least one day, mirroring the `INTERVAL
-/// >= 1` rule [`validate_rrule`] enforces for schedules.
+/// `snap_leeway` and `clear_snap_leeway` are the two halves of the same
+/// setting and are likewise mutually exclusive. Everything the result must
+/// satisfy semantically — a leeway needing a snap, a backward tolerance
+/// shorter than the interval, an interval of at least one day — is checked by
+/// [`validate_recurrence`] on the way out, so the CLI, MCP and the TUI all
+/// report it identically.
 ///
 /// `anchor` is the date used as the starting point for schedule-based rules.
 /// The caller is responsible for supplying the appropriate anchor (e.g. the
@@ -299,11 +378,14 @@ pub fn parse_recurrence(
     schedule: Option<String>,
     completion: Option<u32>,
     snap: Option<&str>,
+    snap_leeway: Option<&str>,
+    clear_snap_leeway: bool,
     anchor: NaiveDate,
 ) -> anyhow::Result<Option<Recurrence>> {
     let snap_val = snap.map(parse_snap).transpose()?;
+    let leeway_val = resolve_snap_leeway(snap_leeway, clear_snap_leeway)?;
 
-    match (schedule, completion) {
+    let rule = match (schedule, completion) {
         (Some(_), Some(_)) => {
             anyhow::bail!("--recur-schedule and --recur-completion are mutually exclusive");
         }
@@ -312,30 +394,33 @@ pub fn parse_recurrence(
             // rejected at add/edit time rather than failing later on `done`.
             validate_rrule(&rule)
                 .map_err(|e| anyhow::anyhow!("invalid recurrence rule {rule:?}: {e}"))?;
-            Ok(Some(Recurrence::Schedule {
+            Recurrence::Schedule {
                 rrule: rule,
                 anchor,
                 snap: snap_val,
-                snap_leeway: None,
-            }))
+                snap_leeway: leeway_val,
+            }
         }
-        (None, Some(interval)) => {
-            // A zero-day interval never advances: every spawned instance would
-            // be due the day it was created, forever. Reject it here, where
-            // every completion rule is built, rather than letting the series
-            // stall long after the rule was accepted.
+        (None, Some(interval)) => Recurrence::Completion {
+            interval_days: interval,
+            snap: snap_val,
+            snap_leeway: leeway_val,
+        },
+        (None, None) => {
+            // No rule to attach a leeway to at all. A bare --recur-snap-leeway
+            // is still the V1 mistake, so name the same fix rather than
+            // silently discarding the value.
             anyhow::ensure!(
-                interval >= 1,
-                "completion interval must be >= 1 day, got {interval}"
+                leeway_val.is_none(),
+                "--recur-snap-leeway requires a snap; set --recur-snap first \
+                 (e.g. dom:1, monday, next-workday)"
             );
-            Ok(Some(Recurrence::Completion {
-                interval_days: interval,
-                snap: snap_val,
-                snap_leeway: None,
-            }))
+            return Ok(None);
         }
-        (None, None) => Ok(None),
-    }
+    };
+
+    validate_recurrence(&rule)?;
+    Ok(Some(rule))
 }
 
 /// Validate a schedule recurrence rule (RRULE) string.
@@ -656,7 +741,14 @@ mod tests {
     #[test]
     fn parse_recurrence_both_schedule_and_completion_is_error() {
         let anchor = d(2026, 5, 1);
-        let result = parse_recurrence(Some("FREQ=DAILY".into()), Some(7), None, anchor);
+        let result = parse_recurrence(
+            Some("FREQ=DAILY".into()),
+            Some(7),
+            None,
+            None,
+            false,
+            anchor,
+        );
         assert!(
             result.is_err(),
             "should error when both schedule and completion are given"
@@ -671,15 +763,22 @@ mod tests {
     #[test]
     fn parse_recurrence_neither_returns_none() {
         let anchor = d(2026, 5, 1);
-        let result = parse_recurrence(None, None, None, anchor).unwrap();
+        let result = parse_recurrence(None, None, None, None, false, anchor).unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn parse_recurrence_schedule_no_snap() {
         let anchor = d(2026, 5, 1);
-        let result =
-            parse_recurrence(Some("FREQ=WEEKLY;BYDAY=MO".into()), None, None, anchor).unwrap();
+        let result = parse_recurrence(
+            Some("FREQ=WEEKLY;BYDAY=MO".into()),
+            None,
+            None,
+            None,
+            false,
+            anchor,
+        )
+        .unwrap();
         match result {
             Some(Recurrence::Schedule {
                 rrule,
@@ -702,6 +801,8 @@ mod tests {
             Some("FREQ=WEEKLY;BYDAY=MO".into()),
             None,
             Some("friday"),
+            None,
+            false,
             anchor,
         )
         .unwrap();
@@ -718,7 +819,7 @@ mod tests {
     #[test]
     fn parse_recurrence_completion_no_snap() {
         let anchor = d(2026, 5, 1);
-        let result = parse_recurrence(None, Some(14), None, anchor).unwrap();
+        let result = parse_recurrence(None, Some(14), None, None, false, anchor).unwrap();
         match result {
             Some(Recurrence::Completion {
                 interval_days,
@@ -735,7 +836,8 @@ mod tests {
     #[test]
     fn parse_recurrence_completion_with_snap() {
         let anchor = d(2026, 5, 1);
-        let result = parse_recurrence(None, Some(7), Some("next-workday"), anchor).unwrap();
+        let result =
+            parse_recurrence(None, Some(7), Some("next-workday"), None, false, anchor).unwrap();
         match result {
             Some(Recurrence::Completion {
                 snap: Some(snap), ..
@@ -750,7 +852,7 @@ mod tests {
     fn parse_recurrence_completion_zero_interval_is_error() {
         // interval_days: 0 produces a series that never advances.
         let anchor = d(2026, 5, 1);
-        let result = parse_recurrence(None, Some(0), None, anchor);
+        let result = parse_recurrence(None, Some(0), None, None, false, anchor);
         let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("completion interval must be >= 1 day, got 0"),
@@ -762,7 +864,7 @@ mod tests {
     fn parse_recurrence_completion_one_day_is_accepted() {
         // The bound is inclusive: a daily chore is a legitimate rule.
         let anchor = d(2026, 5, 1);
-        let result = parse_recurrence(None, Some(1), None, anchor).unwrap();
+        let result = parse_recurrence(None, Some(1), None, None, false, anchor).unwrap();
         assert!(matches!(
             result,
             Some(Recurrence::Completion {
@@ -775,14 +877,14 @@ mod tests {
     #[test]
     fn parse_recurrence_invalid_snap_value_is_error() {
         let anchor = d(2026, 5, 1);
-        let result = parse_recurrence(None, Some(7), Some("not-a-snap"), anchor);
+        let result = parse_recurrence(None, Some(7), Some("not-a-snap"), None, false, anchor);
         assert!(result.is_err(), "invalid snap should return error");
     }
 
     #[test]
     fn parse_recurrence_snap_dom_valid() {
         let anchor = d(2026, 5, 1);
-        let result = parse_recurrence(None, Some(30), Some("dom:15"), anchor).unwrap();
+        let result = parse_recurrence(None, Some(30), Some("dom:15"), None, false, anchor).unwrap();
         match result {
             Some(Recurrence::Completion {
                 snap: Some(snap), ..
@@ -797,8 +899,187 @@ mod tests {
     fn parse_recurrence_snap_dom_out_of_range_is_error() {
         let anchor = d(2026, 5, 1);
         // dom:29 is outside 1–28
-        let result = parse_recurrence(None, Some(30), Some("dom:29"), anchor);
+        let result = parse_recurrence(None, Some(30), Some("dom:29"), None, false, anchor);
         assert!(result.is_err(), "dom:29 should be rejected");
+    }
+
+    // ── T13: every validation message, by exact string ──────────────────────
+    //
+    // The strings are asserted whole rather than by substring: they are the
+    // contract this feature ships to three surfaces, and a reworded hint that
+    // still "contains" the old fragment is exactly the drift worth catching.
+
+    /// The error `parse_recurrence` returns for these arguments.
+    fn parse_err(
+        completion: Option<u32>,
+        snap: Option<&str>,
+        leeway: Option<&str>,
+        clear_leeway: bool,
+    ) -> String {
+        parse_recurrence(None, completion, snap, leeway, clear_leeway, d(2026, 5, 1))
+            .expect_err("expected a validation error")
+            .to_string()
+    }
+
+    #[test]
+    fn v1_leeway_without_a_snap_is_rejected() {
+        assert_eq!(
+            parse_err(Some(30), None, Some("3"), false),
+            "--recur-snap-leeway requires a snap; set --recur-snap first \
+             (e.g. dom:1, monday, next-workday)"
+        );
+    }
+
+    #[test]
+    fn v1_leeway_without_any_rule_is_rejected_too() {
+        // The `(None, None)` arm used to discard a stray snap silently; a
+        // leeway with nothing to qualify names the same fix instead.
+        assert_eq!(
+            parse_err(None, None, Some("3"), false),
+            "--recur-snap-leeway requires a snap; set --recur-snap first \
+             (e.g. dom:1, monday, next-workday)"
+        );
+    }
+
+    #[test]
+    fn v2_backward_leeway_at_least_the_interval_is_rejected() {
+        assert_eq!(
+            parse_err(Some(3), Some("dom:1"), Some("5,0"), false),
+            "backward leeway (5d) must be less than the completion interval (3d), \
+             or the series would not advance"
+        );
+    }
+
+    #[test]
+    fn v2_backward_leeway_equal_to_the_interval_is_rejected() {
+        // The bound is strict: `raw - back` must land *after* the completion
+        // date, not on it.
+        assert_eq!(
+            parse_err(Some(3), Some("dom:1"), Some("3,0"), false),
+            "backward leeway (3d) must be less than the completion interval (3d), \
+             or the series would not advance"
+        );
+    }
+
+    #[test]
+    fn v2_does_not_apply_to_a_schedule_rule() {
+        // No static bound exists for an RRULE — the runtime floor in
+        // `snap_with_leeway` carries that arm alone.
+        let rule = parse_recurrence(
+            Some("FREQ=WEEKLY;BYDAY=MO".into()),
+            None,
+            Some("dom:1"),
+            Some("300"),
+            false,
+            d(2026, 5, 4),
+        )
+        .unwrap();
+        assert_eq!(
+            rule.as_ref().and_then(Recurrence::snap_leeway),
+            Some(&SnapLeeway {
+                back: 300,
+                forward: Some(300)
+            })
+        );
+    }
+
+    #[test]
+    fn v3_out_of_range_leeway_is_rejected() {
+        assert_eq!(
+            parse_err(Some(30), Some("dom:1"), Some("400"), false),
+            "snap leeway must be between 0 and 365 days, got 400"
+        );
+    }
+
+    #[test]
+    fn v4_malformed_leeway_spec_is_rejected() {
+        assert_eq!(
+            parse_err(Some(30), Some("dom:1"), Some("3,-1"), false),
+            "invalid snap leeway \"3,-1\" — expected N or BACK,FORWARD in whole days (e.g. 3 or 5,0)"
+        );
+    }
+
+    #[test]
+    fn v5_setting_and_clearing_the_leeway_together_is_rejected() {
+        assert_eq!(
+            parse_err(Some(30), Some("dom:1"), Some("3"), true),
+            "--recur-snap-leeway and --clear-recur-snap-leeway are mutually exclusive"
+        );
+    }
+
+    #[test]
+    fn parse_recurrence_accepts_a_valid_leeway() {
+        let rule = parse_recurrence(
+            None,
+            Some(30),
+            Some("dom:1"),
+            Some("5,0"),
+            false,
+            d(2026, 5, 1),
+        )
+        .unwrap();
+        assert_eq!(
+            rule.as_ref().and_then(Recurrence::snap_leeway),
+            Some(&SnapLeeway {
+                back: 5,
+                forward: Some(0)
+            })
+        );
+    }
+
+    #[test]
+    fn clearing_the_leeway_alone_leaves_none_behind() {
+        let rule =
+            parse_recurrence(None, Some(30), Some("dom:1"), None, true, d(2026, 5, 1)).unwrap();
+        assert_eq!(rule.as_ref().and_then(Recurrence::snap_leeway), None);
+    }
+
+    // ── validate_recurrence, on rules nobody parsed ──────────────────────────
+
+    #[test]
+    fn validate_recurrence_catches_an_assembled_conflict() {
+        // What `next edit <id> --recur-completion 3` builds for a task already
+        // carrying `back = 5`: neither half ever passed through a parser.
+        let rule = Recurrence::Completion {
+            interval_days: 3,
+            snap: Some(Snap::DayOfMonth { day: 1 }),
+            snap_leeway: Some(SnapLeeway {
+                back: 5,
+                forward: Some(5),
+            }),
+        };
+        assert_eq!(
+            validate_recurrence(&rule).unwrap_err().to_string(),
+            "backward leeway (5d) must be less than the completion interval (3d), \
+             or the series would not advance"
+        );
+    }
+
+    #[test]
+    fn validate_recurrence_catches_a_leeway_left_without_its_snap() {
+        let rule = Recurrence::Completion {
+            interval_days: 30,
+            snap: None,
+            snap_leeway: Some(SnapLeeway {
+                back: 3,
+                forward: Some(3),
+            }),
+        };
+        assert_eq!(
+            validate_recurrence(&rule).unwrap_err().to_string(),
+            "--recur-snap-leeway requires a snap; set --recur-snap first \
+             (e.g. dom:1, monday, next-workday)"
+        );
+    }
+
+    #[test]
+    fn validate_recurrence_accepts_the_absent_leeway_every_stored_task_has() {
+        let rule = Recurrence::Completion {
+            interval_days: 1,
+            snap: Some(Snap::DayOfMonth { day: 1 }),
+            snap_leeway: None,
+        };
+        assert!(validate_recurrence(&rule).is_ok());
     }
 
     // ── apply_snap ──────────────────────────────────────────────────────────

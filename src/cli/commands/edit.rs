@@ -1,6 +1,6 @@
 use crate::core::domain::{date_parse::parse_date, tag, task::Recurrence};
-use crate::core::recurrence::parse_recurrence;
 use crate::core::recurrence::parse_snap;
+use crate::core::recurrence::{parse_recurrence, validate_recurrence};
 use crate::core::service::{apply_edits, validate_url, EditTaskParams};
 use chrono::Local;
 
@@ -231,11 +231,21 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
                 Some(Recurrence::Schedule { anchor, .. }) => *anchor,
                 _ => existing.start.or(existing.due).unwrap_or(today),
             };
-            let mut rule =
-                parse_recurrence(args.recur_schedule, args.recur_completion, None, anchor)?;
+            let mut rule = parse_recurrence(
+                args.recur_schedule,
+                args.recur_completion,
+                None,
+                None,
+                false,
+                anchor,
+            )?;
             if let Some(rule) = rule.as_mut() {
                 rule.set_snap(snap);
                 rule.set_snap_leeway(snap_leeway);
+                // The rule and the carried-forward leeway were never checked
+                // against each other — `--recur-completion 3` on a task with
+                // `back = 5` is only invalid once the two are put together.
+                validate_recurrence(rule)?;
             }
             rule
         } else {
@@ -244,6 +254,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
                 Some(mut rule) => {
                     rule.set_snap(snap);
                     rule.set_snap_leeway(snap_leeway);
+                    validate_recurrence(&rule)?;
                     Some(rule)
                 }
                 None => {

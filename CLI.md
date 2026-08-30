@@ -1041,12 +1041,26 @@ The next instance is determined by an RFC 5545 RRULE string. The `anchor` date (
 
 **Supported RRULE fields**
 
+The rule is handed to the `rrule` crate, so the whole of its RFC 5545 surface works — this table lists the parts you are likely to reach for, not the limit of what is accepted.
+
 | Field | Example | Notes |
 |-------|---------|-------|
 | `FREQ` | `FREQ=WEEKLY` | Required. `DAILY`, `WEEKLY`, `MONTHLY`, `YEARLY`. |
-| `INTERVAL` | `INTERVAL=3` | Every Nth period. Default 1. |
-| `BYDAY` | `BYDAY=MO,TU,WE,TH,FR` | Comma-separated weekday codes (`MO TU WE TH FR SA SU`). When omitted in a weekly rule, defaults to the anchor's weekday. Positional prefixes like `1MO` (first Monday of month) are **not** supported and will be rejected. |
-| `BYMONTHDAY` | `BYMONTHDAY=1` | Day of month. Used with `FREQ=MONTHLY`. |
+| `INTERVAL` | `INTERVAL=3` | Every Nth period. Default 1. Must be at least 1. |
+| `BYDAY` | `BYDAY=MO,TU,WE,TH,FR` | Comma-separated weekday codes (`MO TU WE TH FR SA SU`). When omitted in a weekly rule, defaults to the anchor's weekday. Positional prefixes are supported: `1MO` is the first Monday of the period, `-1FR` the last Friday. |
+| `BYMONTHDAY` | `BYMONTHDAY=1` | Day of month, 1–31 or -1–-31. Negative counts back from the end, so `-1` is the last day of the month. Must not be `0`. |
+| `BYMONTH` | `BYMONTH=1` | Month number, 1–12. Needed to pin a `FREQ=YEARLY` rule to one month. |
+| `BYSETPOS` | `BYDAY=MO;BYSETPOS=-1` | Selects from the occurrences a period generates — here, the last Monday of the month. |
+| `UNTIL` / `COUNT` | `UNTIL=20261231T000000Z`, `COUNT=12` | End the series on a date or after N occurrences. Once exhausted, `next done` marks the last instance done and spawns nothing. |
+| `WKST` | `WKST=SU` | Week start, which changes how `INTERVAL` groups weeks. Default `MO`. |
+
+**Months that skip**
+
+A day that does not exist in a month is **skipped**, not clamped back — this is what RFC 5545 requires. `FREQ=MONTHLY;BYMONTHDAY=31` runs Jan 31, Mar 31, May 31 … with no February occurrence at all. If you want the last day of *every* month, ask for it directly:
+
+```sh
+--recur-schedule "FREQ=MONTHLY;BYMONTHDAY=-1"
+```
 
 **Common patterns**
 
@@ -1066,8 +1080,17 @@ The next instance is determined by an RFC 5545 RRULE string. The `anchor` date (
 # Every 3 months on the 1st (quarterly)
 --recur-schedule "FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=1"
 
-# Every year on Jan 1
---recur-schedule "FREQ=YEARLY;BYMONTHDAY=1"
+# Every year on Jan 1 — BYMONTH is required, or the rule fires on the 1st of every month
+--recur-schedule "FREQ=YEARLY;BYMONTH=1;BYMONTHDAY=1"
+
+# First Monday of every month
+--recur-schedule "FREQ=MONTHLY;BYDAY=1MO"
+
+# Last day of every month
+--recur-schedule "FREQ=MONTHLY;BYMONTHDAY=-1"
+
+# Every Monday for a year, then stop
+--recur-schedule "FREQ=WEEKLY;BYDAY=MO;COUNT=52"
 ```
 
 When a task has both `start` and `due` dates, the start-to-due offset is preserved on every new instance. For example, a task with start=June 1, due=June 3 will next appear as start=July 1, due=July 3.

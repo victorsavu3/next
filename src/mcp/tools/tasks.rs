@@ -6,7 +6,9 @@ use crate::core::domain::{
     filter,
     task::{Recurrence, Task},
 };
-use crate::core::recurrence::{parse_snap, validate_rrule};
+use crate::core::recurrence::{
+    parse_snap, resolve_snap_leeway, validate_recurrence, validate_rrule,
+};
 use crate::core::resolve::resolve_task_id;
 use crate::core::scoring;
 use crate::core::service::{
@@ -21,6 +23,31 @@ fn str_param<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
 
 fn bool_param(params: &Value, key: &str) -> bool {
     params.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// The `recur_completion` interval, as the `u32` the domain stores.
+///
+/// JSON has no integer width, so `as_u64` happily accepts a value no `u32` can
+/// hold and `as u32` then wraps it without a word — `5000000000` became
+/// `705032704`, a rule nobody asked for. A negative or fractional value is
+/// rejected here too rather than read as "no recurrence at all", which is what
+/// a bare `as_u64()` silently did.
+fn completion_interval(params: &Value) -> anyhow::Result<Option<u32>> {
+    let value = match params.get("recur_completion") {
+        None => return Ok(None),
+        Some(v) if v.is_null() => return Ok(None),
+        Some(v) => v,
+    };
+    let days = value
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "recur_completion must be a whole number of days between 1 and {}, got {value}",
+                u32::MAX
+            )
+        })?;
+    Ok(Some(days))
 }
 
 fn strings_param(params: &Value, key: &str) -> Vec<String> {
@@ -63,6 +90,8 @@ const EDIT_PARAM_KEYS: &[&str] = &[
     "recur_completion",
     "recur_snap",
     "clear_recur_snap",
+    "recur_snap_leeway",
+    "clear_recur_snap_leeway",
     "clear_recurrence",
     "long_term",
     "score_adjustment",
@@ -240,31 +269,42 @@ pub fn add_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
         .map(|expr| parse_date(expr, today))
         .transpose()?;
 
+    let snap = str_param(params, "recur_snap")
+        .map(parse_snap)
+        .transpose()?;
+    let snap_leeway = resolve_snap_leeway(str_param(params, "recur_snap_leeway"), false)?;
     let recurrence = if let Some(rule) = str_param(params, "recur_schedule") {
         validate_rrule(rule)
             .map_err(|e| anyhow::anyhow!("invalid recurrence rule {rule:?}: {e}"))?;
         let anchor = start.or(due).unwrap_or(today);
-        let snap = str_param(params, "recur_snap")
-            .map(parse_snap)
-            .transpose()?;
         Some(Recurrence::Schedule {
             rrule: rule.to_owned(),
             anchor,
             snap,
-            snap_leeway: None,
+            snap_leeway,
         })
-    } else if let Some(days) = params.get("recur_completion").and_then(|v| v.as_u64()) {
-        let snap = str_param(params, "recur_snap")
-            .map(parse_snap)
-            .transpose()?;
+    } else if let Some(days) = completion_interval(params)? {
         Some(Recurrence::Completion {
-            interval_days: days as u32,
+            interval_days: days,
             snap,
-            snap_leeway: None,
+            snap_leeway,
         })
     } else {
+        // No rule to hang a leeway on. `recur_snap` alone has always been
+        // dropped here; the leeway says so instead of vanishing.
+        anyhow::ensure!(
+            snap_leeway.is_none(),
+            "--recur-snap-leeway requires a snap; set --recur-snap first \
+             (e.g. dom:1, monday, next-workday)"
+        );
         None
     };
+    // Built directly rather than through `parse_recurrence` — MCP takes the two
+    // rule kinds as separate parameters and prefers the schedule — so the shared
+    // semantic checks have to be invoked explicitly.
+    if let Some(rule) = &recurrence {
+        validate_recurrence(rule)?;
+    }
 
     let service_params = CreateTaskParams {
         due,
@@ -326,14 +366,19 @@ fn recurrence_edit(
         !(requested_snap.is_some() && clear_snap),
         "recur_snap and clear_recur_snap are mutually exclusive"
     );
+    let clear_leeway = bool_param(params, "clear_recur_snap_leeway");
+    let requested_leeway =
+        resolve_snap_leeway(str_param(params, "recur_snap_leeway"), clear_leeway)?;
 
     let schedule = str_param(params, "recur_schedule");
-    let completion = params.get("recur_completion").and_then(|v| v.as_u64());
+    let completion = completion_interval(params)?;
     let rule_edit = schedule.is_some() || completion.is_some();
-    let snap_edit = requested_snap.is_some() || clear_snap;
+    let snap_requested = requested_snap.is_some();
+    let snap_edit = snap_requested || clear_snap;
+    let leeway_edit = requested_leeway.is_some() || clear_leeway;
     // `clear_recurrence` drops the rule wholesale through its own flag, so
     // nothing needs building here.
-    if bool_param(params, "clear_recurrence") || !(rule_edit || snap_edit) {
+    if bool_param(params, "clear_recurrence") || !(rule_edit || snap_edit || leeway_edit) {
         return Ok(None);
     }
 
@@ -351,6 +396,8 @@ fn recurrence_edit(
     // the same terms — and is dropped with the snap it qualifies.
     let snap_leeway = if snap.is_none() {
         None
+    } else if leeway_edit {
+        requested_leeway
     } else {
         existing
             .recurrence
@@ -359,46 +406,55 @@ fn recurrence_edit(
             .cloned()
     };
 
-    if let Some(rule) = schedule {
+    let rule = if let Some(rule) = schedule {
         validate_rrule(rule)
             .map_err(|e| anyhow::anyhow!("invalid recurrence rule {rule:?}: {e}"))?;
         let anchor = match &existing.recurrence {
             Some(Recurrence::Schedule { anchor, .. }) => *anchor,
             _ => existing.start.or(existing.due).unwrap_or(today),
         };
-        return Ok(Some(Recurrence::Schedule {
+        Recurrence::Schedule {
             rrule: rule.to_owned(),
             anchor,
             snap,
             snap_leeway,
-        }));
-    }
-    if let Some(days) = completion {
-        return Ok(Some(Recurrence::Completion {
-            interval_days: days as u32,
+        }
+    } else if let Some(days) = completion {
+        Recurrence::Completion {
+            interval_days: days,
             snap,
             snap_leeway,
-        }));
-    }
+        }
+    } else {
+        // Snap/leeway-only edit: keep the rule, change only what it snaps to.
+        match existing.recurrence {
+            Some(mut rule) => {
+                rule.set_snap(snap);
+                rule.set_snap_leeway(snap_leeway);
+                rule
+            }
+            None => {
+                let param = if clear_snap {
+                    "clear_recur_snap"
+                } else if snap_requested {
+                    "recur_snap"
+                } else if clear_leeway {
+                    "clear_recur_snap_leeway"
+                } else {
+                    "recur_snap_leeway"
+                };
+                anyhow::bail!(
+                    "{param} requires an existing recurrence rule; set recur_schedule or recur_completion first"
+                )
+            }
+        }
+    };
 
-    // Snap-only edit: keep the rule, change only what it snaps to.
-    match existing.recurrence {
-        Some(mut rule) => {
-            rule.set_snap(snap);
-            rule.set_snap_leeway(snap_leeway);
-            Ok(Some(rule))
-        }
-        None => {
-            let param = if clear_snap {
-                "clear_recur_snap"
-            } else {
-                "recur_snap"
-            };
-            anyhow::bail!(
-                "{param} requires an existing recurrence rule; set recur_schedule or recur_completion first"
-            )
-        }
-    }
+    // The new rule and the carried-forward leeway have never been checked
+    // against each other: `recur_completion: 3` on a task with `back = 5` is
+    // only invalid once the two are put together.
+    validate_recurrence(&rule)?;
+    Ok(Some(rule))
 }
 
 pub fn update_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {

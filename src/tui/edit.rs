@@ -661,7 +661,7 @@ impl EditForm {
                     Some(Recurrence::Schedule { anchor, .. }) => *anchor,
                     _ => self.resolved_anchor_date(today).unwrap_or(today),
                 };
-                let rec = parse_recurrence(Some(rule.to_owned()), None, snap, anchor)?;
+                let rec = parse_recurrence(Some(rule.to_owned()), None, snap, None, false, anchor)?;
                 Ok((rec, false))
             }
             RecurMode::Completion => {
@@ -669,7 +669,7 @@ impl EditForm {
                 let interval: u32 = raw.parse().map_err(|_| {
                     anyhow::anyhow!("completion interval must be a positive integer")
                 })?;
-                let rec = parse_recurrence(None, Some(interval), snap, today)?;
+                let rec = parse_recurrence(None, Some(interval), snap, None, false, today)?;
                 Ok((rec, false))
             }
         }
