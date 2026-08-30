@@ -251,6 +251,7 @@ pub fn add_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
             rrule: rule.to_owned(),
             anchor,
             snap,
+            snap_leeway: None,
         })
     } else if let Some(days) = params.get("recur_completion").and_then(|v| v.as_u64()) {
         let snap = str_param(params, "recur_snap")
@@ -259,6 +260,7 @@ pub fn add_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
         Some(Recurrence::Completion {
             interval_days: days as u32,
             snap,
+            snap_leeway: None,
         })
     } else {
         None
@@ -345,6 +347,17 @@ fn recurrence_edit(
             .and_then(Recurrence::snap)
             .cloned()
     };
+    // The leeway belongs to the snap, so it survives a rule change on exactly
+    // the same terms — and is dropped with the snap it qualifies.
+    let snap_leeway = if snap.is_none() {
+        None
+    } else {
+        existing
+            .recurrence
+            .as_ref()
+            .and_then(Recurrence::snap_leeway)
+            .cloned()
+    };
 
     if let Some(rule) = schedule {
         validate_rrule(rule)
@@ -357,12 +370,14 @@ fn recurrence_edit(
             rrule: rule.to_owned(),
             anchor,
             snap,
+            snap_leeway,
         }));
     }
     if let Some(days) = completion {
         return Ok(Some(Recurrence::Completion {
             interval_days: days as u32,
             snap,
+            snap_leeway,
         }));
     }
 
@@ -370,6 +385,7 @@ fn recurrence_edit(
     match existing.recurrence {
         Some(mut rule) => {
             rule.set_snap(snap);
+            rule.set_snap_leeway(snap_leeway);
             Ok(Some(rule))
         }
         None => {

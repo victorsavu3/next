@@ -571,6 +571,7 @@ mod tests {
         head.recurrence = Some(Recurrence::Completion {
             interval_days: 7,
             snap: None,
+            snap_leeway: None,
         });
 
         let got = eligible_ids(
@@ -586,6 +587,7 @@ mod tests {
         successor.recurrence = Some(Recurrence::Completion {
             interval_days: 7,
             snap: None,
+            snap_leeway: None,
         });
         successor.recurrence_id = Some(head.id);
         let mut old = head.clone();

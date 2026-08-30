@@ -370,6 +370,7 @@ fn project_series_until_stops_within_horizon() {
         rrule: "FREQ=WEEKLY;BYDAY=MO;UNTIL=20260525T000000Z".into(),
         anchor,
         snap: None,
+        snap_leeway: None,
     });
     // Horizon extends to July; UNTIL cuts the series at May 25.
     let dates = project_series(&task, d(2026, 5, 4), d(2026, 7, 1));
@@ -385,6 +386,7 @@ fn project_series_count_stops_at_limit() {
         rrule: "FREQ=WEEKLY;BYDAY=MO;COUNT=3".into(),
         anchor,
         snap: None,
+        snap_leeway: None,
     });
     // COUNT=3 means May 4, May 11, May 18. The current instance (May 4) is covered
     // by the task itself; projected occurrences are May 11 and May 18.

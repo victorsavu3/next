@@ -1437,6 +1437,7 @@ mod tests {
         child.recurrence = Some(Recurrence::Completion {
             interval_days: 7,
             snap: None,
+            snap_leeway: None,
         });
         child
             .data

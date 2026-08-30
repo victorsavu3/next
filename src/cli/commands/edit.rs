@@ -214,6 +214,17 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
                 .and_then(Recurrence::snap)
                 .cloned()
         };
+        // The leeway qualifies the snap, so it survives a rule change on the
+        // same terms — and goes with the snap when that is dropped.
+        let snap_leeway = if snap.is_none() {
+            None
+        } else {
+            existing
+                .recurrence
+                .as_ref()
+                .and_then(Recurrence::snap_leeway)
+                .cloned()
+        };
 
         if rule_edit {
             let anchor = match &existing.recurrence {
@@ -224,6 +235,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
                 parse_recurrence(args.recur_schedule, args.recur_completion, None, anchor)?;
             if let Some(rule) = rule.as_mut() {
                 rule.set_snap(snap);
+                rule.set_snap_leeway(snap_leeway);
             }
             rule
         } else {
@@ -231,6 +243,7 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
             match existing.recurrence {
                 Some(mut rule) => {
                     rule.set_snap(snap);
+                    rule.set_snap_leeway(snap_leeway);
                     Some(rule)
                 }
                 None => {

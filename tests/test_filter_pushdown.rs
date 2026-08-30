@@ -235,6 +235,7 @@ fn corpus(env: &mut common::TestEnv) -> (Vec<Task>, Vec<Task>) {
     gamma.recurrence = Some(next::core::domain::task::Recurrence::Completion {
         interval_days: 7,
         snap: None,
+        snap_leeway: None,
     });
     active.push(gamma);
 

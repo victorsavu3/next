@@ -519,6 +519,7 @@ mod tests {
         task.recurrence = Some(Recurrence::Completion {
             interval_days: 7,
             snap: None,
+            snap_leeway: None,
         });
 
         store.save_task(&task).unwrap();
@@ -536,7 +537,8 @@ mod tests {
             loaded.recurrence,
             Some(Recurrence::Completion {
                 interval_days: 7,
-                snap: None
+                snap: None,
+                snap_leeway: None
             })
         ));
     }
@@ -839,6 +841,7 @@ mod tests {
             rrule: "FREQ=WEEKLY;BYDAY=MO".into(),
             anchor: NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
             snap: None,
+            snap_leeway: None,
         });
         store.save_task(&task).unwrap();
         let loaded = store.get_task(task.id).unwrap();

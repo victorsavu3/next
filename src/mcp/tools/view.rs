@@ -146,6 +146,7 @@ mod tests {
             rrule: "FREQ=WEEKLY".into(),
             anchor: today,
             snap: None,
+            snap_leeway: None,
         });
         let path = storage::task_path(&ctx.repo_root, &task);
         ctx.store.save_task(&task).unwrap();
@@ -177,6 +178,7 @@ mod tests {
         completion.recurrence = Some(Recurrence::Completion {
             interval_days: 7,
             snap: None,
+            snap_leeway: None,
         });
         let p1 = storage::task_path(&ctx.repo_root, &completion);
         ctx.store.save_task(&completion).unwrap();
@@ -190,6 +192,7 @@ mod tests {
             rrule: "FREQ=WEEKLY".into(),
             anchor: today,
             snap: None,
+            snap_leeway: None,
         });
         let p2 = storage::task_path(&ctx.repo_root, &done);
         ctx.store.save_task(&done).unwrap();

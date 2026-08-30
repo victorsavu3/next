@@ -568,6 +568,7 @@ fn edit_recur_completion_keeps_existing_snap() {
         Some(Recurrence::Completion {
             interval_days,
             snap,
+            ..
         }) => {
             assert_eq!(interval_days, 31, "the interval must be updated");
             assert_eq!(
@@ -623,6 +624,7 @@ fn edit_recur_snap_still_wins_over_the_carried_one() {
         Some(Recurrence::Completion {
             interval_days,
             snap,
+            ..
         }) => {
             assert_eq!(interval_days, 14);
             assert_eq!(snap, Some(Snap::NextWeekday { weekday: 0 }));
@@ -649,6 +651,7 @@ fn edit_clear_recur_snap_standalone_keeps_the_rule() {
         Some(Recurrence::Completion {
             interval_days,
             snap,
+            ..
         }) => {
             assert_eq!(interval_days, 7, "the rule itself must be untouched");
             assert_eq!(snap, None, "--clear-recur-snap must drop the snap");
@@ -676,6 +679,7 @@ fn edit_clear_recur_snap_alongside_a_rule_change() {
         Some(Recurrence::Completion {
             interval_days,
             snap,
+            ..
         }) => {
             assert_eq!(interval_days, 31);
             assert_eq!(snap, None);

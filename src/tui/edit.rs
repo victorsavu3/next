@@ -200,6 +200,7 @@ impl EditForm {
             Some(Recurrence::Completion {
                 interval_days,
                 snap,
+                ..
             }) => (
                 RecurMode::Completion,
                 String::new(),
@@ -912,6 +913,7 @@ mod tests {
         task.recurrence = Some(Recurrence::Completion {
             interval_days: 7,
             snap: None,
+            snap_leeway: None,
         });
         let mut form = EditForm::from_task(&task, vec![]);
         form.recur_mode = RecurMode::None;
@@ -928,6 +930,7 @@ mod tests {
             rrule: "FREQ=WEEKLY;BYDAY=MO".into(),
             anchor,
             snap: None,
+            snap_leeway: None,
         });
         let mut form = EditForm::from_task(&task, vec![]);
         // Change the rule but keep schedule mode → anchor must be preserved.
@@ -977,6 +980,7 @@ mod tests {
             Some(Recurrence::Completion {
                 interval_days,
                 snap,
+                ..
             }) => {
                 assert_eq!(interval_days, 14);
                 assert_eq!(snap, Some(Snap::NextWeekday { weekday: 4 }));

@@ -1017,6 +1017,7 @@ mod tests {
         task.recurrence = Some(crate::core::domain::task::Recurrence::Completion {
             interval_days: 7,
             snap: None,
+            snap_leeway: None,
         });
         assert!(matches("is:recurring", &task));
 
