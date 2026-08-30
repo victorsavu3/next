@@ -528,7 +528,7 @@ next done <id>
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--completed-at <date>` | date expression | today | Date the task was completed. Recorded on the task and used for recurrence scheduling. ISO 8601 or natural language. |
-| `--json` | flag | false | Emit the completed task (and the new recurrence instance, if any) as JSON. |
+| `--json` | flag | false | Emit the completed task as JSON. A spawned recurrence instance is **not** included — one object is printed. Use `next list` or `next forecast` afterwards to see the new instance. |
 
 **Notes**
 
@@ -1143,7 +1143,9 @@ When you change a schedule rule the `anchor` date is **preserved**, keeping all 
 
 ### Series identity
 
-All instances of the same recurring task share a `recurrence_id` UUID equal to the first instance's `id`. You can use this to query all instances of a series.
+All instances of the same recurring task share a `recurrence_id` UUID equal to the first instance's `id`.
+
+There is no way to query a series by it: the filter language has no `recurrence_id` atom and `--fields` cannot project the field, so `recurrence_id` is currently an internal link only. `is:recurring` selects tasks that carry a rule, which is not the same thing — it matches the current instance of every series, not every instance of one.
 
 Slugs are **not** propagated — each instance gets no slug. This prevents slug collisions on high-frequency tasks. Arbitrary data set with `next data set` is copied to each new instance (the `time_log` entry is not, since it records per-instance work time).
 

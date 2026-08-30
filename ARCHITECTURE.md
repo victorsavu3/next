@@ -81,8 +81,8 @@ next/                             # crate root (also git repo)
       projection.rs               # Fields: which task fields a listing returns (`--fields`); see §7
       scoring.rs                  # ScoredTask, ScoringConfig, TaskDates, score_and_sort()
       service.rs                  # create_task/complete_task/apply_edits; begin/end_mutation
-      recurrence.rs               # next_occurrence(), apply_snap(), spawn_next(), parse_snap()
-      forecast.rs                 # forecast projection shared by cli/mcp/tui
+      recurrence.rs               # parse_recurrence()/validate_recurrence(), validate_rrule(), next_occurrence(), snap_with_leeway(), project_series(), spawn_next()
+      forecast.rs                 # build_entries(): forecast rows, shared by cli/tui (MCP builds its own from project_series)
       listing.rs                  # load_candidates() (status pushdown), extend_with_parents()
       archiver.rs                 # run_archive_pass(), resurrect_if_archived(), prune phase
       tag_rename.rs               # rename_tag(): tags across both tiers + metadata files + state
@@ -202,7 +202,7 @@ enabled.
 
 | Module | Contents |
 |--------|----------|
-| `task` | `Task`, `Status` (`Open`/`Started`/`Done`/`Cancelled`), `Priority`, `Recurrence`, `Snap` |
+| `task` | `Task`, `Status` (`Open`/`Started`/`Done`/`Cancelled`), `Priority`, `Recurrence`, `Snap`, `SnapLeeway` (with `SnapLeeway::DEFAULT` — `back: 0, forward: None` — the policy an absent `snap_leeway` stands for, and `Recurrence::effective_snap_leeway()` resolving to it) |
 | `state` | `GlobalState` (per-tag `TagState` map — `Required`/`Excluded`/`Accepted` — plus active users); `state_of` resolves inheritance, `admits` applies the two filtering rules; unreadable entries are dropped on load, and the pre-rename spellings still deserialise |
 | `tag` | `TagKind` (Context / Resource / Freeform); `validate_tag` (allowlist: segments start with letter, contain `a-zA-Z0-9-_`, `/` separator allowed, `..` explicitly rejected); `validate_context_tag` (enforces `@` prefix); `validate_resource_tag` (enforces `#` prefix) |
 | `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
@@ -214,7 +214,7 @@ enabled.
 |--------|----------|
 | `scoring` | `ScoredTask`, `ScoringConfig`, `TaskDates`, `fn score(task, parent, task_dates, today, weights, tag_metas)`, `fn score_with_breakdown(…)` (same arguments, returns the per-factor rows), `fn score_and_sort(tasks, all_tasks, today, weights, tag_metas, task_dates)` — note `task_dates` sits third in `score` and last in `score_and_sort` |
 | `service` | `CreateTaskParams`, `EditTaskParams`, `create_task()`, `complete_task()`, `apply_edits()`, `validate_slug()`, `validate_url()`, `begin_mutation()`/`end_mutation()` — shared business logic used by the CLI, MCP, and Forgejo handlers |
-| `recurrence` | `fn next_occurrence(rrule, anchor, after)`, `fn apply_snap(date, snap)`, `fn spawn_next(task, today)` |
+| `recurrence` | Rule building: `fn parse_recurrence(schedule, completion, snap, snap_leeway, clear_snap_leeway, anchor)`, `fn validate_recurrence(&Recurrence)` (the V1–V5 checks — interval >= 1, leeway needs a snap, backward leeway < interval), `fn validate_rrule(rrule)`, `fn parse_snap(s)`, `fn parse_snap_leeway(s)`, `fn resolve_snap_leeway(spec, clear)`, `fn snap_leeway_to_str(&SnapLeeway)`, `const MAX_SNAP_LEEWAY_DAYS`. Date computation: `fn next_occurrence(rrule, anchor, after)`, `fn snap_with_leeway(raw, snap, leeway, floor)`, `fn apply_snap(date, snap)` (the pre-leeway rule, kept as the reference `snap_with_leeway` is measured against), `Snap::qualifies`/`prev_boundary`/`next_boundary`, `fn project_series(task, today, cutoff)`, `fn spawn_next(task, today)` |
 | `task_repository` | `TaskRepository` — store + vcs + repo_root + scoring + transactions + plugin events + the progress sink |
 | `progress` | `ProgressSink` (`begin(label, total) -> Box<dyn ProgressTask>`, `is_noop()`), `ProgressTask` (`inc`/`set_total`/`set_message`/`finish`), `NoProgress`, `FinishOnce` — reporting for long operations, with **no** rendering dependency |
 
