@@ -441,17 +441,28 @@ All instances of a series share the same `recurrence_id` UUID (equal to the firs
 upcoming due dates for all matching recurrence series over a configurable horizon
 (`forecast_horizon_days`, default 90, overridable with `--days`).
 
-For each active (open/started) schedule-type recurring task, the forecast MUST project
-the series forward: starting after the current instance's date (`max(due, start, today)`),
-it repeatedly evaluates the RRULE (`next_occurrence`, then any snap) to enumerate the
-successive occurrences up to and including `today + horizon`. These projected,
-not-yet-spawned occurrences MUST be shown distinctly from concrete existing tasks (a
-`(projected)` marker in text output; a `projected: true` flag in `--json`).
+For each active (open/started) recurring task — **both** recurrence types — the forecast
+MUST project the series forward, starting after the current instance's date
+(`max(due, start, today)`) and running up to and including `today + horizon`. These
+projected, not-yet-spawned occurrences MUST be shown distinctly from concrete existing
+tasks (a `(projected)` marker in text output; a `projected: true` flag in `--json`).
 
-Completion-type recurrence is NOT projected: its next date is `completion_date +
-interval_days`, and future completion dates are unknown, so only the current instance is
-shown. Done/cancelled recurring tasks are not projected. Non-recurring tasks with a due
-date within the horizon appear unchanged.
+- **Schedule-type**: the RRULE is evaluated repeatedly (`next_occurrence`) to enumerate
+  the raw series, and any snap is applied to each emitted date. The walk steps on the raw
+  date, because the RRULE defines the series and the snap is a transform over it.
+- **Completion-type**: future completion dates are unknown, so the projection assumes each
+  instance is completed on its due date — a best case, not a prediction. The next date is
+  therefore `previous_due + interval_days`, snapped. The walk MUST step from the *snapped*
+  date it emitted, not from an un-snapped shadow series, because the snapped date is what
+  `spawn_next` writes and what the user then completes; stepping on the raw value drifts
+  off the boundary and runs a whole period behind reality.
+
+The returned dates MUST be strictly increasing: when a snap lands several raw occurrences
+on the same boundary, that boundary is reported once. A single series MUST NOT contribute
+more than a bounded number of dates, so one daily rule cannot fill a long forecast alone.
+
+Done/cancelled recurring tasks are not projected. Non-recurring tasks with a due date
+within the horizon appear unchanged.
 
 This projection logic lives in a single shared core helper (`recurrence::project_series`)
 used by both `next forecast` and the MCP `get_forecast` tool (§12.5), so the two
@@ -1027,7 +1038,7 @@ filters and pagination apply, scoring does not). The result is
 
 **Input validation (data keys):** The `key` field in `manage_task_data` MUST be validated: non-empty, at most 256 characters, and contain only ASCII letters (`a-z`, `A-Z`), digits (`0-9`), hyphens (`-`), and underscores (`_`). Dots, slashes, and spaces MUST be rejected.
 
-**`get_forecast` projection:** The `get_forecast` tool MUST have the same projection behaviour as `next forecast` (§7): in addition to concrete tasks due within the horizon, it MUST project active (open/started) schedule-type recurrence series forward to `today + horizon` using the shared core helper (`recurrence::project_series`), so the two implementations cannot drift. The horizon defaults to `DEFAULT_FORECAST_HORIZON_DAYS` (90) and is overridable via the `horizon_days` parameter. Each returned entry is `{ date, id, title, score, projected }`; projected (not-yet-spawned) occurrences MUST carry `projected: true` and concrete tasks `projected: false`. Completion-type recurrence and done/cancelled tasks MUST NOT be projected.
+**`get_forecast` projection:** The `get_forecast` tool MUST have the same projection behaviour as `next forecast` (§7): in addition to concrete tasks due within the horizon, it MUST project active (open/started) recurrence series of **both** types forward to `today + horizon` using the shared core helper (`recurrence::project_series`), so the two implementations cannot drift on the dates. (The helper is all they share: `get_forecast` assembles its own entries rather than calling `core::forecast::build_entries`, which the CLI and TUI use.) The horizon defaults to `DEFAULT_FORECAST_HORIZON_DAYS` (90) and is overridable via the `horizon_days` parameter. Each returned entry is `{ date, id, title, score, projected }`; projected (not-yet-spawned) occurrences MUST carry `projected: true` and concrete tasks `projected: false`. Done/cancelled tasks MUST NOT be projected.
 
 ### 12.6 Sync mechanisms
 

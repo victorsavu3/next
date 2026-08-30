@@ -275,7 +275,7 @@ See [CLI.md](CLI.md#filter-syntax) for the full reference.
 | `next tag [require/exclude/accept/clear-state]` | Set which tags are required, excluded, or pinned to accepted |
 | `next user [set/clear/list]` | Manage user filter |
 | `next plugin [register/watch/unwatch/unregister/set-sync/set-interval/enable/disable/list]` | Manage export plugins and their periodic syncs (see [Plugins](#plugins)) |
-| `next forecast` | Upcoming due dates grouped by time, including projected schedule-recurrence occurrences over the horizon |
+| `next forecast` | Upcoming due dates grouped by time, including projected occurrences of both recurrence modes over the horizon |
 | `next sync` | Pull from remote, auto-archive if due, push local commits, run due plugin syncs |
 | `next maintenance archive` | Move old closed tasks into archive segments now |
 | `next maintenance rebuild-cache` | Drop and rebuild the local `.next.db` read cache |

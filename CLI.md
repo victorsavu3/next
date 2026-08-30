@@ -1005,6 +1005,11 @@ next user list
 
 Show upcoming recurrence due dates for all matching recurring tasks, projected over a configurable horizon (default: 90 days). Accepts the same filter tokens as `next list`.
 
+Both recurrence modes are projected. Schedule-mode dates are exact — the RRULE says when
+they fall. Completion-mode dates are a **best case**: future completion dates are unknown,
+so the projection assumes you finish each instance on its due date. Complete one late and
+the real series slips behind the forecast. The two are not distinguished in the output.
+
 **Usage**
 
 ```

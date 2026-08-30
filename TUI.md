@@ -69,7 +69,8 @@ with `Tab` (`List → Tree → Forecast → List`). It opens in the **Tree** vie
   startup. Nodes expand/collapse; a tree-local toggle includes done/cancelled tasks. The
   detail pane and per-task actions operate on the highlighted node.
 - **Forecast** (`3`) — the chronological forecast of upcoming due dates, including projected
-  schedule-recurrence occurrences over the horizon (same engine as `next forecast`). It is
+  occurrences of both recurrence modes over the horizon (same engine as `next forecast`;
+  completion-mode dates assume each instance is completed on its due date). It is
   a read-only, full-width list; the horizon is adjustable live.
 
 The List and Tree views share the detail pane and the per-task action/edit keys. The active
