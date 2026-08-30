@@ -41,6 +41,63 @@ pub fn parse_snap(s: &str) -> anyhow::Result<Snap> {
     }
 }
 
+/// The widest tolerance a snap leeway may express, in days.
+///
+/// A year is already far past the point where a leeway is a tolerance rather
+/// than a second scheduling rule, and the bound keeps the arithmetic in
+/// [`snap_with_leeway`] nowhere near an overflow.
+pub const MAX_SNAP_LEEWAY_DAYS: u16 = 365;
+
+/// Parse a CLI snap-leeway string into a [`SnapLeeway`].
+///
+/// `N` sets both directions; `BACK,FORWARD` sets them independently. Days
+/// only — a tolerance finer than the dates it applies to has nothing to mean.
+pub fn parse_snap_leeway(s: &str) -> anyhow::Result<SnapLeeway> {
+    let malformed = || {
+        anyhow::anyhow!(
+            "invalid snap leeway {s:?} — expected N or BACK,FORWARD in whole days (e.g. 3 or 5,0)"
+        )
+    };
+    // Bound each number before it is a `u16`, so an out-of-range value reports
+    // what the user typed rather than what it wrapped to.
+    let day = |token: &str| -> anyhow::Result<u16> {
+        let n: u32 = token.trim().parse().map_err(|_| malformed())?;
+        anyhow::ensure!(
+            n <= u32::from(MAX_SNAP_LEEWAY_DAYS),
+            "snap leeway must be between 0 and {MAX_SNAP_LEEWAY_DAYS} days, got {n}"
+        );
+        Ok(n as u16)
+    };
+
+    let trimmed = s.trim();
+    anyhow::ensure!(!trimmed.is_empty(), malformed());
+    let mut parts = trimmed.split(',');
+    let back = day(parts.next().ok_or_else(malformed)?)?;
+    let forward = match parts.next() {
+        Some(token) => day(token)?,
+        None => back,
+    };
+    anyhow::ensure!(parts.next().is_none(), malformed());
+
+    Ok(SnapLeeway {
+        back,
+        forward: Some(forward),
+    })
+}
+
+/// Render a [`SnapLeeway`] back into the spec string [`parse_snap_leeway`]
+/// accepts, so a form or a `show` line can round-trip what is stored.
+///
+/// An unbounded forward has no spelling in the spec grammar — it is what an
+/// absent leeway means — so it is reported as the bare backward number.
+pub fn snap_leeway_to_str(leeway: &SnapLeeway) -> String {
+    match leeway.forward {
+        Some(forward) if forward == leeway.back => leeway.back.to_string(),
+        Some(forward) => format!("{},{forward}", leeway.back),
+        None => leeway.back.to_string(),
+    }
+}
+
 impl Snap {
     /// Whether `date` already sits on a boundary of this snap.
     pub fn qualifies(&self, date: NaiveDate) -> bool {
@@ -1652,6 +1709,47 @@ mod tests {
             snap_leeway: Some(lee),
         });
         task
+    }
+
+    #[test]
+    fn parse_snap_leeway_accepts_both_spellings() {
+        assert_eq!(parse_snap_leeway("3").unwrap(), leeway(3, Some(3)));
+        assert_eq!(parse_snap_leeway("5,0").unwrap(), leeway(5, Some(0)));
+        assert_eq!(parse_snap_leeway(" 0 , 7 ").unwrap(), leeway(0, Some(7)));
+        assert_eq!(parse_snap_leeway("365").unwrap(), leeway(365, Some(365)));
+    }
+
+    #[test]
+    fn parse_snap_leeway_rejects_malformed_specs() {
+        for spec in ["3,-1", "", "abc", "3,4,5", "3.5", "-2", " "] {
+            let err = parse_snap_leeway(spec).unwrap_err().to_string();
+            assert!(
+                err.contains("expected N or BACK,FORWARD in whole days"),
+                "{spec:?} gave {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_snap_leeway_rejects_out_of_range() {
+        let err = parse_snap_leeway("400").unwrap_err().to_string();
+        assert_eq!(err, "snap leeway must be between 0 and 365 days, got 400");
+        // Past u16 too — the error must still name the typed value.
+        let err = parse_snap_leeway("70000").unwrap_err().to_string();
+        assert_eq!(err, "snap leeway must be between 0 and 365 days, got 70000");
+    }
+
+    #[test]
+    fn snap_leeway_spec_round_trips() {
+        for spec in ["0", "3", "5,0", "0,7", "365"] {
+            let parsed = parse_snap_leeway(spec).unwrap();
+            let rendered = snap_leeway_to_str(&parsed);
+            assert_eq!(
+                parse_snap_leeway(&rendered).unwrap(),
+                parsed,
+                "{spec} rendered to {rendered}"
+            );
+        }
     }
 
     /// T1 — the claim that lets an absent `snap_leeway` need no migration.
