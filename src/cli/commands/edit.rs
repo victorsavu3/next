@@ -88,12 +88,11 @@ pub struct Args {
     #[arg(long)]
     pub recur_snap: Option<String>,
 
-    /// Remove the calendar snap, keeping the recurrence rule itself.
+    /// Remove the snap and its leeway, keeping the recurrence rule itself.
     #[arg(long)]
     pub clear_recur_snap: bool,
 
-    /// Tolerance around the snap boundary: N (both directions) or
-    /// BACK,FORWARD. Days.
+    /// N (both directions) or BACK,FORWARD. Days.
     #[arg(long)]
     pub recur_snap_leeway: Option<String>,
 

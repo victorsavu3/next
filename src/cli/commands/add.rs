@@ -68,8 +68,7 @@ pub struct Args {
     #[arg(long)]
     pub recur_snap: Option<String>,
 
-    /// Tolerance around the snap boundary: N (both directions) or
-    /// BACK,FORWARD. Days.
+    /// N (both directions) or BACK,FORWARD. Days.
     #[arg(long)]
     pub recur_snap_leeway: Option<String>,
 
