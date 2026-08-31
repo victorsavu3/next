@@ -480,7 +480,7 @@ impl Store for TomlStore {
 #[cfg(test)]
 mod tests {
 
-    use crate::core::domain::task::{Priority, Recurrence, Status};
+    use crate::core::domain::task::{Priority, Recurrence, Snap, SnapLeeway, Status};
 
     use super::*;
 
@@ -872,5 +872,200 @@ anchor = "2026-06-01"
             task.recurrence,
             Some(Recurrence::Schedule { ref rrule, .. }) if rrule == "FREQ=MONTHLY;BYMONTHDAY=1"
         ));
+    }
+
+    // ── snap leeway persistence (T9, T10) ───────────────────────────────────
+
+    /// Saves `task` and returns the bytes actually written to its file.
+    ///
+    /// The round trip through `Task` proves the value survives; only the file
+    /// proves what a *different* binary — or a `git diff` — will see.
+    fn saved_file(store: &mut TomlStore, task: &Task) -> String {
+        store.save_task(task).unwrap();
+        let path = store
+            .find_task_file(task.id)
+            .unwrap()
+            .expect("the task file must exist after save");
+        fs::read_to_string(path).unwrap()
+    }
+
+    fn rent_task() -> Task {
+        let mut task = Task::new("Pay rent");
+        task.slug = Some("rent".into());
+        task.due = Some(chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap());
+        task
+    }
+
+    #[test]
+    fn a_completion_leeway_is_written_as_its_own_table() {
+        let (_dir, mut store) = temp_store();
+        let mut task = rent_task();
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 30,
+            snap: Some(Snap::DayOfMonth { day: 1 }),
+            snap_leeway: Some(SnapLeeway {
+                back: 3,
+                forward: Some(3),
+            }),
+        });
+
+        // The file from the proposal's data model, verbatim.
+        let expected = format!(
+            "id = \"{}\"\n\
+             title = \"Pay rent\"\n\
+             status = \"open\"\n\
+             priority = \"medium\"\n\
+             due = \"2026-06-01\"\n\
+             slug = \"rent\"\n\
+             \n\
+             [recurrence]\n\
+             type = \"completion\"\n\
+             interval_days = 30\n\
+             \n\
+             [recurrence.snap]\n\
+             type = \"day_of_month\"\n\
+             day = 1\n\
+             \n\
+             [recurrence.snap_leeway]\n\
+             back = 3\n\
+             forward = 3\n",
+            task.id
+        );
+        assert_eq!(saved_file(&mut store, &task), expected);
+
+        assert_eq!(
+            store.get_task(task.id).unwrap().recurrence,
+            task.recurrence,
+            "the rule must round-trip unchanged"
+        );
+    }
+
+    /// The claim D4 rests on: a task that never set a leeway is byte-identical
+    /// to what it was before the field existed, so an older binary reading a
+    /// synced repo sees nothing new.
+    #[test]
+    fn an_absent_leeway_emits_no_table_at_all() {
+        let (_dir, mut store) = temp_store();
+        let mut task = rent_task();
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 30,
+            snap: Some(Snap::DayOfMonth { day: 1 }),
+            snap_leeway: None,
+        });
+
+        let content = saved_file(&mut store, &task);
+        assert!(
+            !content.contains("snap_leeway"),
+            "an unset leeway must not appear in the file:\n{content}"
+        );
+        assert!(content.contains("[recurrence.snap]"));
+        assert_eq!(store.get_task(task.id).unwrap().recurrence, task.recurrence);
+    }
+
+    /// `forward` omitted is the only spelling of "unbounded", so it has to
+    /// survive as an omission rather than being filled in on write.
+    #[test]
+    fn a_leeway_without_a_forward_bound_round_trips_as_an_omission() {
+        let (_dir, mut store) = temp_store();
+        let mut task = rent_task();
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 30,
+            snap: Some(Snap::DayOfMonth { day: 1 }),
+            snap_leeway: Some(SnapLeeway {
+                back: 3,
+                forward: None,
+            }),
+        });
+
+        let content = saved_file(&mut store, &task);
+        assert!(
+            content.contains("[recurrence.snap_leeway]\nback = 3\n"),
+            "{content}"
+        );
+        assert!(
+            !content.contains("forward"),
+            "an unbounded forward must stay absent:\n{content}"
+        );
+        assert_eq!(store.get_task(task.id).unwrap().recurrence, task.recurrence);
+    }
+
+    /// `back = 0` is the default too, so it is skipped — leaving a table that
+    /// carries only the forward bound.
+    #[test]
+    fn a_zero_backward_leeway_is_skipped() {
+        let (_dir, mut store) = temp_store();
+        let mut task = rent_task();
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 30,
+            snap: Some(Snap::DayOfMonth { day: 1 }),
+            snap_leeway: Some(SnapLeeway {
+                back: 0,
+                forward: Some(2),
+            }),
+        });
+
+        let content = saved_file(&mut store, &task);
+        assert!(
+            content.contains("[recurrence.snap_leeway]\nforward = 2\n"),
+            "{content}"
+        );
+        assert_eq!(store.get_task(task.id).unwrap().recurrence, task.recurrence);
+    }
+
+    #[test]
+    fn a_schedule_leeway_round_trips_beside_its_anchor() {
+        let (_dir, mut store) = temp_store();
+        let mut task = Task::new("Weekly review");
+        task.recurrence = Some(Recurrence::Schedule {
+            rrule: "FREQ=WEEKLY;BYDAY=MO".into(),
+            anchor: chrono::NaiveDate::from_ymd_opt(2026, 5, 4).unwrap(),
+            snap: Some(Snap::NextWorkday),
+            snap_leeway: Some(SnapLeeway {
+                back: 2,
+                forward: Some(2),
+            }),
+        });
+
+        let content = saved_file(&mut store, &task);
+        assert!(content.contains("[recurrence.snap_leeway]"), "{content}");
+        assert_eq!(store.get_task(task.id).unwrap().recurrence, task.recurrence);
+    }
+
+    /// T10: a file written by a *newer* binary still loads here.
+    ///
+    /// Nothing uses `deny_unknown_fields`, so an unrecognised key inside
+    /// `snap_leeway` is ignored rather than failing the parse — which is what
+    /// keeps one task file from taking down `list` on every older machine in a
+    /// synced repo. (Refusing to *write* such a file is a separate guard and
+    /// deliberately not part of this change.)
+    #[test]
+    fn a_leeway_carrying_an_unknown_key_still_loads() {
+        let toml = r#"
+id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+title = "From a newer binary"
+status = "open"
+priority = "medium"
+
+[recurrence]
+type = "completion"
+interval_days = 30
+
+[recurrence.snap]
+type = "day_of_month"
+day = 1
+
+[recurrence.snap_leeway]
+back = 3
+forward = 3
+sideways = 7
+"#;
+        let task: Task = toml::from_str(toml).expect("an unknown key must not fail the parse");
+        assert_eq!(
+            task.recurrence.as_ref().and_then(Recurrence::snap_leeway),
+            Some(&SnapLeeway {
+                back: 3,
+                forward: Some(3)
+            })
+        );
     }
 }
