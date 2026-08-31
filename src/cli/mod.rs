@@ -271,8 +271,8 @@ pub struct Cli {
     pub no_progress: bool,
 
     /// Suppress progress bars and the informational notes on stderr (the
-    /// auto-pull note, the sync confirmation). Errors and command results are
-    /// unaffected.
+    /// auto-pull note, the sync confirmation, the snap-leeway hint on add).
+    /// Errors and command results are unaffected.
     #[arg(long, short = 'q', global = true)]
     pub quiet: bool,
 
