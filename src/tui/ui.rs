@@ -655,6 +655,7 @@ mod edit_modal {
                 Constraint::Length(1), // recur rule
                 Constraint::Length(1), // recur completion
                 Constraint::Length(1), // recur snap
+                Constraint::Length(1), // recur snap leeway
                 Constraint::Length(1), // data key
                 Constraint::Length(1), // data value
                 Constraint::Length(1), // data list header
@@ -754,36 +755,44 @@ mod edit_modal {
         text_row(
             frame,
             rows[13],
+            "  Leeway",
+            form.recur_snap_leeway.value(),
+            form.focus == Field::RecurSnapLeeway,
+        );
+        text_row(
+            frame,
+            rows[14],
             "Data key",
             form.data_key.value(),
             form.focus == Field::DataKey,
         );
         text_row(
             frame,
-            rows[14],
+            rows[15],
             "Data val",
             form.data_value.value(),
             form.focus == Field::DataValue,
         );
 
-        // Description / notes textareas.
+        // Description / notes textareas. `rows[16]` is the blank line the data
+        // list once had a header on.
         labelled_textarea(
             frame,
-            rows[16],
+            rows[17],
             "Description",
             &form.description,
             form.focus == Field::Description,
         );
         labelled_textarea(
             frame,
-            rows[17],
+            rows[18],
             "Notes",
             &form.notes,
             form.focus == Field::Notes,
         );
 
         // Summary of committed tags + data entries.
-        draw_summary(frame, rows[18], form);
+        draw_summary(frame, rows[19], form);
     }
 
     /// `Label: value` row, focused row reversed. Single-line text fields.
@@ -950,6 +959,10 @@ mod edit_modal {
             if matches!(form.recur_mode, RecurMode::Schedule | RecurMode::Completion) {
                 lines.push(Line::from(Span::styled(
                     "Snap: blank, next-workday, monday…sunday, dom:N",
+                    Style::default().add_modifier(Modifier::DIM),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "Leeway: blank (never earlier, always later), N, or BACK,FORWARD",
                     Style::default().add_modifier(Modifier::DIM),
                 )));
             }
@@ -1476,6 +1489,80 @@ mod tests {
         let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    }
+
+    /// Every row of a rendered frame, trailing blanks trimmed.
+    fn frame_lines(terminal: &Terminal<TestBackend>) -> Vec<String> {
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    /// The edit modal is laid out by hardcoded `rows[N]` indices against a
+    /// separate constraints list, so inserting a row silently shifts every
+    /// field below it onto the wrong line. Assert the recurrence block reads
+    /// top to bottom with each label beside its own value.
+    #[test]
+    fn the_edit_modal_recurrence_rows_line_up_with_their_values() {
+        let mut task = Task::new("richly populated task");
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 30,
+            snap: Some(crate::core::domain::task::Snap::DayOfMonth { day: 1 }),
+            snap_leeway: Some(crate::core::domain::task::SnapLeeway {
+                back: 5,
+                forward: Some(0),
+            }),
+        });
+        let mut app = app_with_tasks(vec![task]);
+        app.update(Action::OpenEdit);
+        assert_eq!(app.mode(), Mode::Edit);
+
+        let backend = TestBackend::new(100, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let lines = frame_lines(&terminal);
+
+        // The modal is centred, so every row is flanked by the list view's
+        // borders — match on the label anywhere in the line. The first hit is
+        // always the form row; the reminder lines in the summary come later.
+        let row = |label: &str| {
+            lines
+                .iter()
+                .position(|l| l.contains(label))
+                .unwrap_or_else(|| panic!("no {label:?} row in:\n{}", lines.join("\n")))
+        };
+        let interval = row("Interval:");
+        assert!(lines[interval].contains("30"), "{}", lines[interval]);
+        // Snap sits directly under Interval, Leeway directly under Snap.
+        assert_eq!(row("Snap:"), interval + 1);
+        assert!(
+            lines[interval + 1].contains("dom:1"),
+            "{}",
+            lines[interval + 1]
+        );
+        assert_eq!(row("Leeway:"), interval + 2);
+        assert!(
+            lines[interval + 2].contains("5,0"),
+            "{}",
+            lines[interval + 2]
+        );
+        // …and the fields the insertion pushed down still carry their labels
+        // rather than the row above's value.
+        assert_eq!(row("Data key:"), interval + 3);
+        assert_eq!(row("Data val:"), interval + 4);
+        assert!(
+            lines.iter().any(|l| l.contains("Description")),
+            "the description textarea must still be drawn:\n{}",
+            lines.join("\n")
+        );
+        assert!(lines.iter().any(|l| l.contains("Notes")));
     }
 
     #[test]

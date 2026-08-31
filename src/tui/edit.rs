@@ -23,7 +23,7 @@ use tui_textarea::TextArea;
 
 use crate::core::domain::date_parse::parse_date;
 use crate::core::domain::task::{Priority, Recurrence, Task};
-use crate::core::recurrence::parse_recurrence;
+use crate::core::recurrence::{parse_recurrence, snap_leeway_to_str};
 use crate::core::service::EditTaskParams;
 
 /// Which recurrence flavour the sub-form is editing.
@@ -82,6 +82,7 @@ pub enum Field {
     RecurRule,
     RecurCompletion,
     RecurSnap,
+    RecurSnapLeeway,
     Description,
     Notes,
     DataKey,
@@ -90,7 +91,7 @@ pub enum Field {
 
 impl Field {
     /// Field navigation order.
-    const ORDER: [Field; 17] = [
+    const ORDER: [Field; 18] = [
         Field::Title,
         Field::Due,
         Field::Start,
@@ -104,6 +105,7 @@ impl Field {
         Field::RecurRule,
         Field::RecurCompletion,
         Field::RecurSnap,
+        Field::RecurSnapLeeway,
         Field::Description,
         Field::Notes,
         Field::DataKey,
@@ -157,6 +159,7 @@ pub struct EditForm {
     pub recur_rule: Input,
     pub recur_completion: Input,
     pub recur_snap: Input,
+    pub recur_snap_leeway: Input,
 
     pub description: TextArea<'static>,
     pub notes: TextArea<'static>,
@@ -190,6 +193,14 @@ impl EditForm {
     pub fn from_task(task: &Task, known_tags: Vec<String>) -> Self {
         let date_str = |d: Option<NaiveDate>| d.map(|d| d.to_string()).unwrap_or_default();
 
+        // Blank means unset for both snap fields, so a form the user never
+        // touches writes back exactly what it was seeded from.
+        let leeway_str = task
+            .recurrence
+            .as_ref()
+            .and_then(Recurrence::snap_leeway)
+            .map(snap_leeway_to_str)
+            .unwrap_or_default();
         let (recur_mode, recur_rule, recur_completion, recur_snap) = match &task.recurrence {
             Some(Recurrence::Schedule { rrule, snap, .. }) => (
                 RecurMode::Schedule,
@@ -248,6 +259,7 @@ impl EditForm {
             recur_rule: Input::new(recur_rule),
             recur_completion: Input::new(recur_completion),
             recur_snap: Input::new(recur_snap),
+            recur_snap_leeway: Input::new(leeway_str),
             description,
             notes,
             data: data.clone(),
@@ -346,6 +358,9 @@ impl EditForm {
             }
             Field::RecurSnap => {
                 self.recur_snap.handle_event(&ev);
+            }
+            Field::RecurSnapLeeway => {
+                self.recur_snap_leeway.handle_event(&ev);
             }
             Field::Description => {
                 self.description.input(key);
@@ -640,14 +655,10 @@ impl EditForm {
     /// Builds the recurrence update, preserving the existing schedule anchor when
     /// the rule is still schedule-based. Returns `(recurrence, clear_recurrence)`.
     fn build_recurrence(&self, today: NaiveDate) -> anyhow::Result<(Option<Recurrence>, bool)> {
-        let snap = {
-            let s = self.recur_snap.value().trim();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        };
+        let snap = blank_is_unset(self.recur_snap.value());
+        // A blank field is "no leeway", which is also what clearing one means,
+        // so the form has no separate clear flag to pass.
+        let leeway = blank_is_unset(self.recur_snap_leeway.value());
         match self.recur_mode {
             RecurMode::None => Ok((None, true)),
             RecurMode::Schedule => {
@@ -661,7 +672,8 @@ impl EditForm {
                     Some(Recurrence::Schedule { anchor, .. }) => *anchor,
                     _ => self.resolved_anchor_date(today).unwrap_or(today),
                 };
-                let rec = parse_recurrence(Some(rule.to_owned()), None, snap, None, false, anchor)?;
+                let rec =
+                    parse_recurrence(Some(rule.to_owned()), None, snap, leeway, false, anchor)?;
                 Ok((rec, false))
             }
             RecurMode::Completion => {
@@ -669,7 +681,7 @@ impl EditForm {
                 let interval: u32 = raw.parse().map_err(|_| {
                     anyhow::anyhow!("completion interval must be a positive integer")
                 })?;
-                let rec = parse_recurrence(None, Some(interval), snap, None, false, today)?;
+                let rec = parse_recurrence(None, Some(interval), snap, leeway, false, today)?;
                 Ok((rec, false))
             }
         }
@@ -706,6 +718,13 @@ impl EditForm {
         }
         changes
     }
+}
+
+/// A trimmed form field, or `None` when the user left it empty — the form's
+/// spelling of "unset" for the two optional recurrence strings.
+fn blank_is_unset(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 /// Renders a [`Recurrence`] `Snap` back into the CLI snap string the
@@ -772,7 +791,7 @@ fn resolve_optional_text(raw: &str, orig: &Option<String>) -> (Option<String>, b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::domain::task::{Recurrence, Snap, Task};
+    use crate::core::domain::task::{Recurrence, Snap, SnapLeeway, Task};
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
@@ -987,6 +1006,78 @@ mod tests {
             }
             other => panic!("expected completion, got {other:?}"),
         }
+    }
+
+    // ── snap leeway ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn the_leeway_field_round_trips_through_the_form() {
+        let mut task = Task::new("Pay the rent");
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 30,
+            snap: Some(Snap::DayOfMonth { day: 1 }),
+            snap_leeway: Some(SnapLeeway {
+                back: 5,
+                forward: Some(0),
+            }),
+        });
+        let form = EditForm::from_task(&task, vec![]);
+        assert_eq!(form.recur_snap_leeway.value(), "5,0");
+
+        // Saving an untouched form must write back exactly what it was seeded
+        // from — the field is a spec string, not a display rendering.
+        let p = form.to_edit_params(today()).unwrap();
+        assert_eq!(
+            p.recurrence.as_ref().and_then(Recurrence::snap_leeway),
+            Some(&SnapLeeway {
+                back: 5,
+                forward: Some(0)
+            })
+        );
+    }
+
+    #[test]
+    fn a_task_without_a_leeway_seeds_a_blank_field() {
+        let mut task = Task::new("Pay the rent");
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 30,
+            snap: Some(Snap::DayOfMonth { day: 1 }),
+            snap_leeway: None,
+        });
+        let form = EditForm::from_task(&task, vec![]);
+        assert_eq!(form.recur_snap_leeway.value(), "");
+
+        let p = form.to_edit_params(today()).unwrap();
+        assert_eq!(
+            p.recurrence.as_ref().and_then(Recurrence::snap_leeway),
+            None
+        );
+    }
+
+    /// The form inherits the shared validation rather than repeating it, so
+    /// the message is the one the CLI and MCP report.
+    #[test]
+    fn the_form_reports_the_shared_validation_message() {
+        let task = Task::new("Pay the rent");
+        let mut form = EditForm::from_task(&task, vec![]);
+        form.recur_mode = RecurMode::Completion;
+        form.recur_completion = Input::new("30".to_owned());
+        form.recur_snap_leeway = Input::new("3".to_owned());
+        let err = form.to_edit_params(today()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--recur-snap-leeway requires a snap; set --recur-snap first \
+             (e.g. dom:1, monday, next-workday)"
+        );
+    }
+
+    #[test]
+    fn the_leeway_field_follows_the_snap_in_the_tab_order() {
+        assert_eq!(Field::RecurSnap.next(), Field::RecurSnapLeeway);
+        assert_eq!(Field::RecurSnapLeeway.prev(), Field::RecurSnap);
+        assert_eq!(Field::RecurSnapLeeway.next(), Field::Description);
+        // Every variant must be reachable, or Tab strands the user on it.
+        assert_eq!(Field::ORDER.len(), 18);
     }
 
     #[test]
