@@ -4,6 +4,98 @@
 
 ### New
 
+- **Snap leeway: a snap boundary is now a tolerance, not a ratchet.** Set up a
+  rent task the way the docs suggested — `--recur-completion 30 --recur-snap
+  dom:1` — complete it on the 2nd instead of the 1st, and the next instance was
+  due sixty days later rather than thirty. The 1st had gone past, and a snap
+  only ever moved a date *forward*, so it jumped to the month after. Do that
+  every month, as people actually do, and a task configured to fire twelve
+  times a year fires seven. Nothing warned you, and nothing in `next show` let
+  you see why.
+
+  `--recur-snap-leeway <SPEC>` bounds how far the snap may move the date, and
+  makes it two-sided:
+
+  ```sh
+  next add "Pay rent" --slug rent --due 2026-06-01 \
+    --recur-completion 30 --recur-snap dom:1 --recur-snap-leeway 3
+
+  next edit rent --recur-snap-leeway 5,0   # pull back up to 5 days, never push later
+  ```
+
+  `N` sets both directions, `BACK,FORWARD` sets each, in whole days from 0 to
+  365. The rule is one sentence: if a qualifying boundary falls within the
+  tolerance of the computed date, move to it — nearest wins, ties go forward —
+  and otherwise **keep the computed date unsnapped**.
+
+  | Completed | Before | With `--recur-snap-leeway 3` |
+  |-----------|--------|------------------------------|
+  | 2026-06-01 | 2026-07-01 | 2026-07-01 |
+  | 2026-06-02 | 2026-08-01 | 2026-07-01 |
+  | 2026-06-15 | 2026-08-01 | 2026-07-15 |
+
+  That last row is the part worth dwelling on, because it looks like the
+  feature failing. With a leeway of 3 the 1st is out of reach from the 15th, so
+  the date stays on the 15th — off the boundary, but on cadence. Preserving the
+  interval is the property being bought; landing on the boundary was only ever
+  a means to it. Snapping anyway would reintroduce the unbounded move that
+  caused the bug.
+
+  The same reasoning has a consequence you should know before typing a small
+  number. `next-workday` sits one day back from Friday and two days forward to
+  Monday when the computed date is a Saturday, and the mirror for a Sunday. So
+  a Saturday only reaches Monday if the forward tolerance is at least 2, and a
+  Sunday only reaches Friday if the backward one is. With `--recur-snap-leeway
+  0,1` a Saturday simply stands. That is the rule working, but it will read as
+  a bug, so `next show` now prints the leeway next to the snap.
+
+  **Nothing you already have changes.** An absent leeway means back 0, forward
+  unbounded — precisely the old behaviour — so no stored task moves a date, no
+  file is rewritten, and a repository synced between an upgraded and a
+  non-upgraded machine agrees on every date it already had. There is no
+  migration step. The cost of that choice is that the default is still the
+  ratchet, so `next add` prints a hint when you set a `dom:N` or weekday snap
+  without a leeway, rather than silently deciding for you.
+
+  It applies to both recurrence types, reaches `next add`, `next edit`, the MCP
+  `add_task` / `update_task` tools and the TUI edit form, and is stored as a
+  `[recurrence.snap_leeway]` table beside `[recurrence.snap]`.
+
+- **Five recurrence fixes that the leeway work depended on**, each a bug in its
+  own right. The changelog has been silent about recurrence entirely up to now,
+  so they are worth stating rather than folding into the entry above.
+
+  `--recur-completion 0` was accepted. A zero-day interval never advances: every
+  spawned instance is due the day it is created, forever. It is now rejected
+  where the rule is built, alongside the `INTERVAL=0` check RRULEs already had.
+
+  `next edit <id> --recur-completion N` silently destroyed the task's snap.
+  Changing the interval on a snapped task meant re-typing `--recur-snap` or
+  losing it without being told. The snap — and now the leeway — is carried
+  forward across a rule change; `--clear-recur-snap` is the way to drop it, and
+  it drops the leeway with it, since a tolerance without a boundary means
+  nothing.
+
+  The forecast emitted duplicate dates. A snap maps whole runs of computed
+  occurrences onto the same boundary — a daily rule snapped to Monday hits that
+  Monday five times — and every one of them was reported. Each date is now
+  reported once, and the per-series cap counts dates emitted rather than steps
+  taken, so a snapped series reaches as far into the horizon as an unsnapped
+  one.
+
+  The completion-mode forecast walked the wrong series. It documented an
+  assumption — that each instance is completed on its due date — and then
+  advanced on the *un-snapped* date, which under a snap is a different date
+  from the one it had just shown you. The projection drifted off the boundary
+  and ran a period behind what completing on the due date actually produces.
+  It now steps from the date it emitted, so the forecast and `next done` agree.
+
+  `next show` did not display the recurrence configuration. It printed the rule
+  and dropped the snap and the anchor, so there was no way to confirm what you
+  had set — or to notice that the edit above had just deleted it. It now shows
+  the snap and its leeway, including the case where no leeway is set, since an
+  invisible default is what made the original bug so hard to see.
+
 - **Progress reporting.** The operations that used to look like a hang — the
   cache rebuild on a fresh clone, the archive pass, a fetch or push, a tag
   rename across every tier — now draw a spinner or a bar while they run.
