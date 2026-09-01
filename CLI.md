@@ -424,6 +424,31 @@ next show <id> [--json] [--fields <list>]
 There is no `--format` here: `next show` renders one task, and its text form is a
 labelled block rather than a table, so there is no second layout to pick between.
 
+**The recurrence block**
+
+A recurring task gets three lines: the rule, the snap with its leeway, and the date the
+next instance would get if you completed the task today. The last is computed by the same
+function `next done` runs, so it cannot disagree with what completing actually produces.
+
+```
+Recur:    30d after completion
+Snap:     day 1 of month, leeway 3d back / 3d forward
+Next:     2026-07-01  (if completed today)
+```
+
+A schedule rule shows its anchor too, since the anchor decides which dates the rule can
+produce at all and a schedule is not reproducible without it:
+
+```
+Recur:    schedule (FREQ=WEEKLY;BYDAY=MO), anchor 2026-05-04
+Snap:     none
+```
+
+With a snap but no leeway the line reads `day 1 of month, no leeway (always moves later)`.
+The parenthetical is deliberate: the default is a policy, not the absence of one, and it
+is the policy that lengthens a cycle whenever the task is completed late. A rule whose
+`UNTIL` or `COUNT` is spent shows `Next:     none  (the rule is exhausted)`.
+
 Under `--fields`, the computed `score` and `score_breakdown` come back only when
 you name them — they sit *beside* the task rather than inside it, and a projection
 that kept them regardless would contradict itself. `next list` has always behaved
