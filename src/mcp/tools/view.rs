@@ -73,8 +73,9 @@ pub fn get_forecast(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<
             });
         }
 
-        // Project active schedule-type recurrence series forward. Completion-type,
-        // done, and cancelled tasks are skipped inside `project_series`.
+        // Project active recurrence series forward — both kinds. A completion
+        // series is projected on the assumption it is completed on its due
+        // date; done and cancelled tasks are skipped inside `project_series`.
         for date in recurrence::project_series(&st.task, today, cutoff) {
             entries.push(ForecastEntry {
                 date,

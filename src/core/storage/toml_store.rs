@@ -1068,4 +1068,75 @@ sideways = 7
             })
         );
     }
+
+    /// The whole no-migration claim in one test: a file written before the
+    /// field existed is read, written back, and comes out byte-identical.
+    ///
+    /// Nothing about this feature requires a rewrite pass, a `doctor` step or
+    /// a version bump on any existing repository — and if that ever stops
+    /// being true, it stops here rather than in someone's git history.
+    #[test]
+    fn a_pre_leeway_task_file_survives_a_write_unchanged() {
+        let (_dir, mut store) = temp_store();
+        // Exactly what the previous release emitted for this task.
+        let before = "\
+id = \"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\"
+title = \"Pay rent\"
+status = \"open\"
+priority = \"medium\"
+due = \"2026-06-01\"
+slug = \"rent\"
+
+[recurrence]
+type = \"completion\"
+interval_days = 30
+
+[recurrence.snap]
+type = \"day_of_month\"
+day = 1
+";
+        let path = store.tasks_dir().join("rent.toml");
+        fs::write(&path, before).unwrap();
+
+        // Read it through the real store, then save it straight back.
+        let task: Task = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            task.recurrence.as_ref().unwrap().snap_leeway().is_none(),
+            "an absent table must read as absent, not as a default value"
+        );
+        store.save_task(&task).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            before,
+            "rewriting a pre-leeway task must not change one byte of it"
+        );
+    }
+
+    /// And the dates it produces are unchanged too — the serialisation being
+    /// stable would be cold comfort if the schedule moved.
+    #[test]
+    fn a_pre_leeway_rule_spawns_the_same_dates_it_always_did() {
+        use crate::core::recurrence::{apply_snap, spawn_next};
+
+        let mut task = rent_task();
+        let snap = Snap::DayOfMonth { day: 1 };
+        task.recurrence = Some(Recurrence::Completion {
+            interval_days: 30,
+            snap: Some(snap.clone()),
+            snap_leeway: None,
+        });
+
+        let mut completed = chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        for _ in 0..24 {
+            let spawned = spawn_next(&task, completed).unwrap().unwrap();
+            let raw = completed + chrono::Duration::days(30);
+            assert_eq!(
+                spawned.due,
+                Some(apply_snap(raw, &snap)),
+                "an absent leeway must still be the old forward-only snap"
+            );
+            completed = spawned.due.unwrap();
+        }
+    }
 }
