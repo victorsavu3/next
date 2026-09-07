@@ -73,8 +73,9 @@ pub fn get_forecast(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<
             });
         }
 
-        // Project active schedule-type recurrence series forward. Completion-type,
-        // done, and cancelled tasks are skipped inside `project_series`.
+        // Project active recurrence series forward — both kinds. A completion
+        // series is projected on the assumption it is completed on its due
+        // date; done and cancelled tasks are skipped inside `project_series`.
         for date in recurrence::project_series(&st.task, today, cutoff) {
             entries.push(ForecastEntry {
                 date,
@@ -146,6 +147,7 @@ mod tests {
             rrule: "FREQ=WEEKLY".into(),
             anchor: today,
             snap: None,
+            snap_leeway: None,
         });
         let path = storage::task_path(&ctx.repo_root, &task);
         ctx.store.save_task(&task).unwrap();
@@ -177,6 +179,7 @@ mod tests {
         completion.recurrence = Some(Recurrence::Completion {
             interval_days: 7,
             snap: None,
+            snap_leeway: None,
         });
         let p1 = storage::task_path(&ctx.repo_root, &completion);
         ctx.store.save_task(&completion).unwrap();
@@ -190,6 +193,7 @@ mod tests {
             rrule: "FREQ=WEEKLY".into(),
             anchor: today,
             snap: None,
+            snap_leeway: None,
         });
         let p2 = storage::task_path(&ctx.repo_root, &done);
         ctx.store.save_task(&done).unwrap();

@@ -98,6 +98,48 @@ next show launch-blog          # show full details for a single task
 
 ---
 
+## Recurrence
+
+A task recurs either on a **schedule** — an RFC 5545 RRULE, so the dates are fixed
+calendar facts — or a fixed number of days **after completion**. `next done` marks the
+instance done and creates the next one in the same git commit.
+
+```sh
+next add "Daily standup" --recur-schedule "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
+next add "Water plants" --recur-completion 7
+```
+
+A **snap** rounds the computed date to a boundary — a weekday, a workday, a day of the
+month. On its own a snap only ever moves the date *later*, and by however far the next
+boundary happens to be, so a completion-based task finished one day late has its cycle
+stretched by a whole period:
+
+```sh
+# Complete this on the 2nd rather than the 1st and the next one is due 60 days later,
+# not 30 — the 1st has gone past, so the snap jumps to the month after.
+next add "Pay rent" --recur-completion 30 --recur-snap dom:1
+```
+
+`--recur-snap-leeway` bounds that movement, in days, and makes it two-sided. The date
+moves to a boundary only if one is close enough; otherwise it keeps the interval it was
+given:
+
+```sh
+next add "Pay rent" --slug rent --due 2026-06-01 \
+  --recur-completion 30 --recur-snap dom:1 --recur-snap-leeway 3
+```
+
+Now completing on the 2nd pulls back to the 1st of next month instead of jumping the
+month, and completing on the 15th leaves the date on the 15th — off the boundary, but on
+cadence. `N` sets both directions; `BACK,FORWARD` sets them independently (`5,0` never
+pushes a date later) and `BACK,*` leaves the forward direction unbounded. Leaving the flag
+off keeps the old forward-only behaviour exactly, so no existing task changes date.
+
+See [`CLI.md`](CLI.md#recurrence) for the RRULE surface, the snap values, the full leeway
+rule and its validation errors.
+
+---
+
 ## Tag system
 
 All labels on a task are tags, and every tag behaves the same way. The prefix is a
@@ -275,7 +317,7 @@ See [CLI.md](CLI.md#filter-syntax) for the full reference.
 | `next tag [require/exclude/accept/clear-state]` | Set which tags are required, excluded, or pinned to accepted |
 | `next user [set/clear/list]` | Manage user filter |
 | `next plugin [register/watch/unwatch/unregister/set-sync/set-interval/enable/disable/list]` | Manage export plugins and their periodic syncs (see [Plugins](#plugins)) |
-| `next forecast` | Upcoming due dates grouped by time, including projected schedule-recurrence occurrences over the horizon |
+| `next forecast` | Upcoming due dates grouped by time, including projected occurrences of both recurrence modes over the horizon |
 | `next sync` | Pull from remote, auto-archive if due, push local commits, run due plugin syncs |
 | `next maintenance archive` | Move old closed tasks into archive segments now |
 | `next maintenance rebuild-cache` | Drop and rebuild the local `.next.db` read cache |

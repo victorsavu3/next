@@ -81,8 +81,8 @@ next/                             # crate root (also git repo)
       projection.rs               # Fields: which task fields a listing returns (`--fields`); see §7
       scoring.rs                  # ScoredTask, ScoringConfig, TaskDates, score_and_sort()
       service.rs                  # create_task/complete_task/apply_edits; begin/end_mutation
-      recurrence.rs               # next_occurrence(), apply_snap(), spawn_next(), parse_snap()
-      forecast.rs                 # forecast projection shared by cli/mcp/tui
+      recurrence.rs               # parse_recurrence()/validate_recurrence(), SnapEdit (shared edit policy), validate_rrule(), next_occurrence(), snap_with_leeway(), project_series(), spawn_next()
+      forecast.rs                 # build_entries(): forecast rows, shared by cli/tui (MCP builds its own from project_series)
       listing.rs                  # load_candidates() (status pushdown), extend_with_parents()
       archiver.rs                 # run_archive_pass(), resurrect_if_archived(), prune phase
       tag_rename.rs               # rename_tag(): tags across both tiers + metadata files + state
@@ -202,7 +202,7 @@ enabled.
 
 | Module | Contents |
 |--------|----------|
-| `task` | `Task`, `Status` (`Open`/`Started`/`Done`/`Cancelled`), `Priority`, `Recurrence`, `Snap` |
+| `task` | `Task`, `Status` (`Open`/`Started`/`Done`/`Cancelled`), `Priority`, `Recurrence`, `Snap`, `SnapLeeway` (with `SnapLeeway::DEFAULT` — `back: 0, forward: None` — the policy an absent `snap_leeway` stands for, and `Recurrence::effective_snap_leeway()` resolving to it) |
 | `state` | `GlobalState` (per-tag `TagState` map — `Required`/`Excluded`/`Accepted` — plus active users); `state_of` resolves inheritance, `admits` applies the two filtering rules; unreadable entries are dropped on load, and the pre-rename spellings still deserialise |
 | `tag` | `TagKind` (Context / Resource / Freeform); `validate_tag` (allowlist: segments start with letter, contain `a-zA-Z0-9-_`, `/` separator allowed, `..` explicitly rejected); `validate_context_tag` (enforces `@` prefix); `validate_resource_tag` (enforces `#` prefix) |
 | `filter` | `FilterSet`, `fn apply(tasks, filter, state) -> Vec<Task>` |
@@ -214,7 +214,7 @@ enabled.
 |--------|----------|
 | `scoring` | `ScoredTask`, `ScoringConfig`, `TaskDates`, `fn score(task, parent, task_dates, today, weights, tag_metas)`, `fn score_with_breakdown(…)` (same arguments, returns the per-factor rows), `fn score_and_sort(tasks, all_tasks, today, weights, tag_metas, task_dates)` — note `task_dates` sits third in `score` and last in `score_and_sort` |
 | `service` | `CreateTaskParams`, `EditTaskParams`, `create_task()`, `complete_task()`, `apply_edits()`, `validate_slug()`, `validate_url()`, `begin_mutation()`/`end_mutation()` — shared business logic used by the CLI, MCP, and Forgejo handlers |
-| `recurrence` | `fn next_occurrence(rrule, anchor, after)`, `fn apply_snap(date, snap)`, `fn spawn_next(task, today)` |
+| `recurrence` | Rule building: `fn parse_recurrence(schedule, completion, snap, snap_leeway, clear_snap_leeway, anchor)`, `fn validate_recurrence(&Recurrence)` (the V1–V5 checks — interval >= 1, leeway needs a snap, backward leeway < interval), `fn validate_rrule(rrule)`, `fn parse_snap(s)`, `fn parse_snap_leeway(s)`, `fn resolve_snap_leeway(spec, clear)`, `fn snap_leeway_to_str(&SnapLeeway)` (a true inverse of the parser over every leeway the file format admits — `BACK,*` is the spelling of an omitted `forward`, which exists so the TUI edit form cannot rewrite an unbounded forward bound into a bounded one by being opened and saved), `const MAX_SNAP_LEEWAY_DAYS`. Editing a stored rule: `SnapEdit::parse(snap, clear_snap, snap_leeway, clear_snap_leeway, names) -> SnapEdit`, `SnapEdit::is_empty()`, `SnapEdit::apply(existing, replacement) -> Recurrence` (the snap/leeway carry-forward policy `next edit` and MCP `update_task` share), `SnapFlagNames` with the `CLI_SNAP_FLAGS`/`MCP_SNAP_PARAMS` vocabularies, `fn edit_anchor(existing, fallback)`. Date computation: `fn next_occurrence(rrule, anchor, after)`, `fn snap_with_leeway(raw, snap, leeway, floor)`, `fn apply_snap(date, snap)` (the pre-leeway rule, kept as the reference `snap_with_leeway` is measured against), `Snap::qualifies`/`prev_boundary`/`next_boundary`, `fn project_series(task, today, cutoff)`, `fn spawn_next(task, today)`. The schedule arm of the last two shares one private walk — `snap_schedule` (floorless, so the snapped series is a pure function of the RRULE), `schedule_lookback`, `next_schedule_occurrence` — which is what stops a backward leeway spawning the same occurrence twice and keeps the forecast agreeing with `next done`. Both walkers step a private `RawSeries` (one parsed `RRuleSet` and one iterator held open) rather than calling `next_occurrence` per step: that function re-generates the series from its anchor every time, which would make a walk of *k* steps cost O(k²) — seconds per series on a decade-long `forecast --days` |
 | `task_repository` | `TaskRepository` — store + vcs + repo_root + scoring + transactions + plugin events + the progress sink |
 | `progress` | `ProgressSink` (`begin(label, total) -> Box<dyn ProgressTask>`, `is_noop()`), `ProgressTask` (`inc`/`set_total`/`set_message`/`finish`), `NoProgress`, `FinishOnce` — reporting for long operations, with **no** rendering dependency |
 
@@ -253,6 +253,14 @@ Key `Task` fields: `id`, `title`, `status`, `priority`, `due`, `start`, `long_te
 `slug`, `parent_id`, `assignee`, `tags`, `blocked_by`, `score_adjustment`, `description`,
 `url`, `notes`, `data` (arbitrary JSON map; `data["time_log"]` accumulates start/stop events),
 `recurrence`, `recurrence_id`, `completed_at` (date set when marked done).
+
+`Recurrence` carries the rule plus two date-shaping fields, `snap` and `snap_leeway`, on
+both variants. They are reached through accessors (`snap()`, `snap_leeway()`,
+`set_snap()`, `set_snap_leeway()`, `effective_snap_leeway()`) rather than by matching, so
+an edit that replaces only the rule can carry the rest forward without spelling out both
+variants — which is what `next edit --recur-completion N` and MCP `update_task` do.
+`effective_snap_leeway()` resolves an absent leeway to `SnapLeeway::DEFAULT`, so "no
+leeway configured" and "leeway 0/unbounded" are one code path, not two that could drift.
 
 `created_at` and `updated_at` are **not** fields of `Task`. They are derived from git
 history, carried in `scoring::TaskDates` and cached in the SQLite columns of the same
@@ -693,6 +701,13 @@ the `Store` trait; callers box it as `Box<dyn Store>` inside `TaskRepository`.
 - Title slug: lowercase, spaces → `-`, strip non-alphanumeric except `-`
 - Optional fields are omitted rather than written as empty strings or nulls
 - The `[recurrence]` table is only present when the task recurs
+- `[recurrence.snap]` and `[recurrence.snap_leeway]` are sibling sub-tables, each written
+  only when set. `snap_leeway` skips a zero `back` and an absent `forward`, so a task that
+  does not use the tolerance carries no such table at all — which is what makes the absent
+  case mean `SnapLeeway::DEFAULT` and leaves every pre-existing task's dates untouched.
+  It is a new *field*, not a new `Snap` variant, deliberately: an unknown internally-tagged
+  variant is a hard parse error, so a variant would break older binaries repo-wide, while
+  an unknown field parses fine
 - The `[data]` table is only present when at least one key has been set
 
 ### 6.2 Git operations

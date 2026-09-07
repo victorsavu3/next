@@ -69,7 +69,8 @@ with `Tab` (`List → Tree → Forecast → List`). It opens in the **Tree** vie
   startup. Nodes expand/collapse; a tree-local toggle includes done/cancelled tasks. The
   detail pane and per-task actions operate on the highlighted node.
 - **Forecast** (`3`) — the chronological forecast of upcoming due dates, including projected
-  schedule-recurrence occurrences over the horizon (same engine as `next forecast`). It is
+  occurrences of both recurrence modes over the horizon (same engine as `next forecast`;
+  completion-mode dates assume each instance is completed on its due date). It is
   a read-only, full-width list; the horizon is adjustable live.
 
 The List and Tree views share the detail pane and the per-task action/edit keys. The active
@@ -178,8 +179,17 @@ The buffer accepts the same tokens as `next list` (`+tag`, `-tag`, `parent:`, `c
 
 Modal-level keys win; everything else is routed to the focused field. Fields include
 title, due, start, priority, tags, assignee, url, score adjustment, long-term, the
-recurrence fields (mode / rule / completion / snap), description, notes, and a data
-key/value pair.
+recurrence fields (mode / rule / completion / snap / leeway), description, notes, and a
+data key/value pair.
+
+The **Leeway** row follows Snap in the tab order and takes the same spec `next add` does —
+`3` for both directions, `BACK,FORWARD` (`5,0`), or `BACK,*` (`5,*`) to leave the forward
+direction unbounded. Blank means unset, which is the forward-only default: a snap with no
+leeway moves dates later only, however far. The row is seeded from what is stored and
+saved back verbatim, so `*` is what a stored leeway with no forward bound shows. The form
+routes through the same rule builder as the CLI, so the validation messages are identical
+— a leeway with no snap, or a backward tolerance not shorter than the completion interval,
+is refused on save with the modal left open.
 
 | Key | Action |
 |-----|--------|

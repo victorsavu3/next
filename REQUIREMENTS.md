@@ -52,13 +52,29 @@ anchor = "2026-05-26"                          # first instance date; pins inter
 type = "completion"
 interval_days = 7
 
-# Optional snap on either type: round the computed date forward to a boundary
+# Optional snap on either type: move the computed date to a boundary
 [recurrence.snap]
 type = "next_weekday"   # "next_weekday" | "next_workday" | "day_of_month"
 weekday = 5             # 0=Mon…6=Sun; used with next_weekday
+
+# Optional tolerance around that boundary, a sibling table of [recurrence.snap]
+[recurrence.snap_leeway]
+back = 3                # days the snap may pull the date earlier; absent = 0
+forward = 3             # days it may push it later; absent = unbounded
 ```
 
-Supported RRULE fields: `FREQ` (`DAILY`, `WEEKLY`, `MONTHLY`, `YEARLY`), `INTERVAL`, `BYDAY`, `BYMONTHDAY`.
+`snap_leeway` MUST be optional on both recurrence types, and an absent table MUST mean
+`back = 0, forward = unbounded` — the behaviour every task had before the field existed.
+No stored task changes date when the field is introduced and no migration is required.
+`back = 0` MUST NOT be serialised, and neither MUST an absent `forward`, so a task that
+does not use the feature carries no `[recurrence.snap_leeway]` table at all.
+
+The RRULE is parsed by the `rrule` crate, so the whole of that crate's RFC 5545 surface
+is accepted, not a curated subset: `FREQ` (required), `INTERVAL`, `UNTIL`, `COUNT`,
+`BYDAY` — including positional forms such as `1MO` and `-1FR` — `BYMONTHDAY`, including
+negative values (`-1` is the month-end idiom), `BYMONTH`, `BYSETPOS` and `WKST`. `next`
+adds only two rules of its own on top: `INTERVAL` MUST be >= 1 and `BYMONTHDAY` MUST be
+non-zero, both of which the crate would otherwise accept.
 
 ### 1.2 Projects and subtasks
 
@@ -401,34 +417,115 @@ scoring while the project is in progress.
 
 1. Current task is marked `done`
 2. Next task is created with `start` (or `due`) = `today + interval_days`
-3. If a snap is set, the computed date is advanced to the nearest qualifying boundary
+3. If a snap is set, the computed date is moved to a boundary as far as the snap leeway allows (§7.4)
 4. If the original task has both `start` and `due`, the offset between them is preserved
+
+`interval_days` MUST be at least 1. A zero-day interval never advances the series — every
+spawned instance would be due the day it was created — so it MUST be rejected where the
+rule is built, not left to stall silently after the fact.
 
 ### 7.2 Schedule-based
 
 1. Current task is marked `done`
-2. `after = max(task.due, task.start, today)` — never re-uses a date already passed
-3. The RRULE is evaluated from `anchor` to find the first occurrence strictly after `after`
-4. If a snap is set, the resulting date is advanced further
+2. `current = max(task.due, task.start, today)` — never re-uses a date already passed
+3. The RRULE is evaluated from `anchor` to enumerate raw occurrences, and each raw
+   occurrence is moved to a boundary as far as the snap leeway allows (§7.4)
+4. The first occurrence whose **snapped** date is strictly after `current` is the new date
 5. If the original task has both `start` and `due`, the same offset is applied to the new occurrence
+
+Step 4 MUST test the snapped date, not the raw one. The task stores only its snapped date,
+so the raw occurrence it was made from is not recoverable from the store; a backward leeway
+can therefore pull an occurrence to a date at or before the raw occurrence itself, and a
+walk that resumed at the stored date would re-find that same occurrence and spawn it a
+second time — a weekly rule firing twice a week. Stepping over every occurrence whose
+snapped date fails to beat `current` is what makes each raw occurrence spawn exactly one
+instance.
+
+The walk MUST therefore begin *before* `current`, far enough back that no occurrence whose
+snapped date could still be in the future is missed: `min(leeway.forward, the snap's own
+period)` days, which is zero whenever `leeway.back` is zero. That zero is load-bearing —
+with an absent leeway the walk reduces to a single "first occurrence after `current`, then
+snap" step, which is exactly the pre-leeway rule.
 
 The `anchor` is set once (on `next add`) to the task's `start` or `due` date, falling back to today. All future instances carry the same `anchor` so INTERVAL calculations stay aligned.
 
-For `MONTHLY`/`YEARLY` rules, a target day that does not exist in a given month is CLAMPED to that month's last day rather than skipping the month/year: the 31st becomes the month's last day (e.g. Apr 30, Feb 28), and Feb 29 becomes Feb 28 in non-leap years. When several `BYMONTHDAY` values clamp to the same date (e.g. 30 and 31 both → Feb 28), the occurrence is counted once.
+For `MONTHLY`/`YEARLY` rules, a target day that does not exist in a given month is SKIPPED, per RFC 5545 — it is not clamped to that month's last day. `FREQ=MONTHLY;BYMONTHDAY=31` runs Jan 31, Mar 31, May 31 … and simply has no February occurrence; `BYMONTHDAY=29` has none in a non-leap February. A rule that wants the last day of *every* month MUST say so with the negative form, `BYMONTHDAY=-1`.
 
-A schedule RRULE MUST be validated when it is set (on `next add`/`next edit`, and via the MCP `add_task`/`update_task` tools): the rule is parsed with the same parser used to compute occurrences, and an invalid or unsupported rule (missing `FREQ`, `INTERVAL` < 1, non-positive `BYMONTHDAY`, unknown `FREQ`, positional `BYDAY`, etc.) is rejected with a clear error at set time. A malformed rule MUST NOT be stored and MUST NOT be deferred to fail later on `next done`.
+A schedule RRULE MUST be validated when it is set (on `next add`/`next edit`, and via the MCP `add_task`/`update_task` tools): the rule is parsed with the same parser used to compute occurrences, and an invalid rule is rejected with a clear error at set time. Rejected are a missing or unknown `FREQ`, `INTERVAL` < 1, `BYMONTHDAY=0`, an unparseable `UNTIL`, and anything the `rrule` crate refuses. Positional `BYDAY` (`1MO`, `-1FR`) and negative `BYMONTHDAY` are valid and MUST NOT be rejected. A malformed rule MUST NOT be stored and MUST NOT be deferred to fail later on `next done`.
 
 ### 7.3 Snap values
 
-After computing the raw next date, an optional snap advances it to a boundary:
+After computing the raw next date, an optional snap moves it to a boundary:
 
-| Snap type | TOML | Description |
-|-----------|------|-------------|
-| Next weekday | `type = "next_weekday"; weekday = N` | 0=Mon…6=Sun; keep the date if already there |
-| Next workday | `type = "next_workday"` | Advance to the next Mon–Fri |
-| Day of month | `type = "day_of_month"; day = N` | Day 1–28; use current month if not yet passed, else next |
+| Snap type | TOML | Boundary |
+|-----------|------|----------|
+| Next weekday | `type = "next_weekday"; weekday = N` | Every occurrence of weekday N (0=Mon…6=Sun) |
+| Next workday | `type = "next_workday"` | Every Mon–Fri |
+| Day of month | `type = "day_of_month"; day = N` | Day N of each month; N MUST be 1–28 so the day exists in every month |
 
-### 7.4 Series identity
+The 1–28 bound on `day_of_month` is load-bearing, not conservatism: it is what makes
+"the boundary before this date" and "the boundary after it" total functions, which §7.4
+depends on.
+
+### 7.4 Snap leeway
+
+A snap on its own is a ratchet: it rounds the computed date *up* to the next boundary
+however far away that is, so completing a 30-day task with a `dom:1` snap one day late
+pushes the next instance a full month out and doubles the realised period. `snap_leeway`
+turns the boundary into a tolerance.
+
+Given the raw date, the snap, the leeway, and `floor` — the date the raw was computed from,
+which is the completion date for a completion rule and is *absent* for a schedule rule
+(§7.2 bounds that arm by discarding whole occurrences instead, which is strictly stronger)
+— the result MUST be determined as follows:
+
+1. If the raw date already sits on a boundary, it is returned unchanged.
+2. Otherwise let `back` be the greatest boundary `<= raw` and `fwd` the least boundary
+   `>= raw`. `back` is a candidate iff `raw - back <= leeway.back` **and** `back > floor`;
+   `fwd` is a candidate iff `fwd - raw <= leeway.forward`, where an absent `forward` is
+   unbounded.
+3. If both are candidates, the nearer wins; a tie MUST resolve **forward**.
+4. If exactly one is a candidate, it is used.
+5. If neither is, the **raw date MUST be returned unsnapped**, preserving the interval
+   exactly. This is the required behaviour, not a fallback.
+
+The `back > floor` guard MUST be enforced at computation time, so that a hand-edited or
+git-merged rule cannot produce an instance due on or before the one just completed. The
+forward candidate and the raw date are always `> floor`, so the chain is total.
+
+For a schedule rule the snapped date MUST be a pure function of the raw occurrence, with no
+floor. That purity is what lets §7.2 and §7.5 recompute the snapped series from the rule
+alone, which is the only way the two can agree without the store keeping a per-instance raw
+date. Nothing is lost: both walks discard every occurrence that does not land strictly
+after the date they are stepping from, which is the guarantee the floor was there to give.
+
+With `back = 0, forward = unbounded` this MUST reproduce the pre-leeway rule exactly:
+the backward branch requires `raw - back <= 0`, which step 1 has already returned on.
+
+**Validation.** A leeway MUST be rejected when it has no snap to qualify; when its `back`
+is not strictly less than a completion rule's `interval_days` (a schedule rule has no
+static period, so §7.2's "must beat the current date" test carries it alone); when either number falls
+outside 0–365; when the spec string is not `N`, `BACK,FORWARD` or `BACK,*` in whole days;
+and when a set and a clear are requested together. These checks MUST live where every
+surface builds a rule, so the CLI, MCP and TUI report them identically.
+
+**The spec grammar.** `N` sets both directions, `BACK,FORWARD` sets them independently,
+and `BACK,*` leaves `forward` unbounded. `*` MUST be accepted in the forward position
+only: `back` has no unbounded value to hold.
+
+The grammar MUST be able to spell **every** leeway the file format admits, and rendering a
+stored leeway into it MUST round-trip — for all `back` in 0–365 and every `forward`,
+present or absent, parsing the rendering MUST give back the stored value. This is a
+correctness requirement, not a convenience: the TUI edit form seeds its Leeway row from
+that rendering and passes the row's text straight back to the rule builder, so a shape the
+grammar cannot spell would be silently rewritten by opening a task and saving it
+untouched. `*` exists for the one such shape, an omitted `forward`, which §5's on-disk
+format explicitly supports.
+
+**Clearing.** Clearing the snap MUST clear the leeway with it. Clearing the leeway alone
+MUST restore the default rather than setting `0,0`.
+
+### 7.5 Series identity
 
 All instances of a series share the same `recurrence_id` UUID (equal to the first instance's `id`). Slugs are not propagated to spawned instances.
 
@@ -436,17 +533,36 @@ All instances of a series share the same `recurrence_id` UUID (equal to the firs
 upcoming due dates for all matching recurrence series over a configurable horizon
 (`forecast_horizon_days`, default 90, overridable with `--days`).
 
-For each active (open/started) schedule-type recurring task, the forecast MUST project
-the series forward: starting after the current instance's date (`max(due, start, today)`),
-it repeatedly evaluates the RRULE (`next_occurrence`, then any snap) to enumerate the
-successive occurrences up to and including `today + horizon`. These projected,
-not-yet-spawned occurrences MUST be shown distinctly from concrete existing tasks (a
-`(projected)` marker in text output; a `projected: true` flag in `--json`).
+For each active (open/started) recurring task — **both** recurrence types — the forecast
+MUST project the series forward, starting after the current instance's date
+(`max(due, start, today)`) and running up to and including `today + horizon`. These
+projected, not-yet-spawned occurrences MUST be shown distinctly from concrete existing
+tasks (a `(projected)` marker in text output; a `projected: true` flag in `--json`).
 
-Completion-type recurrence is NOT projected: its next date is `completion_date +
-interval_days`, and future completion dates are unknown, so only the current instance is
-shown. Done/cancelled recurring tasks are not projected. Non-recurring tasks with a due
-date within the horizon appear unchanged.
+- **Schedule-type**: the RRULE is evaluated repeatedly (`next_occurrence`) to enumerate
+  the raw series, and any snap is applied to each emitted date. The walk steps on the raw
+  date, because the RRULE defines the series and the snap is a transform over it — but it
+  MUST emit a date only when that date beats the one it emitted last, exactly as §7.2 step
+  4 does. Otherwise a backward leeway makes the forecast report the occurrences §7.2 steps
+  over, and a monthly series is forecast twice a month.
+- **Completion-type**: future completion dates are unknown, so the projection assumes each
+  instance is completed on its due date — a best case, not a prediction. The next date is
+  therefore `previous_due + interval_days`, snapped. The walk MUST step from the *snapped*
+  date it emitted, not from an un-snapped shadow series, because the snapped date is what
+  `spawn_next` writes and what the user then completes; stepping on the raw value drifts
+  off the boundary and runs a whole period behind reality.
+
+The returned dates MUST be strictly increasing: when a snap lands several raw occurrences
+on the same boundary, that boundary is reported once. A single series MUST NOT contribute
+more than a bounded number of dates, so one daily rule cannot fill a long forecast alone.
+
+**The invariant over both bullets**: for a punctual user — one who completes every instance
+on its due date, which is what the projection assumes — the projected dates MUST equal the
+dates `next done` really spawns, for both recurrence types and with or without a leeway. A
+forecast that disagrees with the spawner is worse than no forecast.
+
+Done/cancelled recurring tasks are not projected. Non-recurring tasks with a due date
+within the horizon appear unchanged.
 
 This projection logic lives in a single shared core helper (`recurrence::project_series`)
 used by both `next forecast` and the MCP `get_forecast` tool (§12.5), so the two
@@ -496,8 +612,9 @@ next add <title> [options]
 | `--url <url>` | URL associated with this task (must be http or https) |
 | `--notes <text>` | Free-text notes |
 | `--recur-schedule <rule>` | Creates a schedule-based recurring task; `rule` is an RRULE string |
-| `--recur-completion <days>` | Creates a completion-based recurring task |
+| `--recur-completion <days>` | Creates a completion-based recurring task; the interval MUST be >= 1 |
 | `--recur-snap <snap>` | Optional snap applied after the next-date computation; see §7.3 |
+| `--recur-snap-leeway <spec>` | Optional tolerance around that snap: `N`, `BACK,FORWARD` or `BACK,*`, whole days 0–365; see §7.4. Requires `--recur-snap` |
 | `--long-term` | Sets `long_term = true` |
 | `--adjust <float>` | Sets `score_adjustment` |
 | `--assignee <name>` | Sets `assignee` |
@@ -562,6 +679,16 @@ All `<id-or-slug>` arguments MUST accept a full UUID, an unambiguous UUID prefix
 defaults to today; `--completed-at <date>` overrides it. The same date is the base date for
 recurrence scheduling (completion-based: `completed_at + interval_days`; schedule-based:
 `max(task.due, task.start, completed_at)`). Accepts ISO 8601 or natural-language dates.
+
+`next show` MUST display the whole recurrence configuration, not just the rule: the snap
+and, when a snap is set, its leeway. A leeway that is not set MUST be displayed as the
+default it stands for rather than omitted, since an invisible default is exactly what
+makes the forward-only ratchet (§7.4) hard to diagnose.
+
+`next edit` MUST carry the snap and the snap leeway forward across a change to the rule
+alone: `next edit <id> --recur-completion N` MUST NOT wipe either. Replacing them requires
+`--recur-snap` / `--recur-snap-leeway`; dropping them requires `--clear-recur-snap` (both)
+or `--clear-recur-snap-leeway` (the tolerance alone).
 
 `next open` MUST fail with an error when the task has no `url` field set.
 
@@ -682,7 +809,7 @@ being contacted, upgraded to a determinate bar once the transfer announces its s
 next forecast [filters...] [--days N]
 ```
 
-See §7.4.
+See §7.5.
 
 ### 8.11 Config
 
@@ -1022,7 +1149,7 @@ filters and pagination apply, scoring does not). The result is
 
 **Input validation (data keys):** The `key` field in `manage_task_data` MUST be validated: non-empty, at most 256 characters, and contain only ASCII letters (`a-z`, `A-Z`), digits (`0-9`), hyphens (`-`), and underscores (`_`). Dots, slashes, and spaces MUST be rejected.
 
-**`get_forecast` projection:** The `get_forecast` tool MUST have the same projection behaviour as `next forecast` (§7): in addition to concrete tasks due within the horizon, it MUST project active (open/started) schedule-type recurrence series forward to `today + horizon` using the shared core helper (`recurrence::project_series`), so the two implementations cannot drift. The horizon defaults to `DEFAULT_FORECAST_HORIZON_DAYS` (90) and is overridable via the `horizon_days` parameter. Each returned entry is `{ date, id, title, score, projected }`; projected (not-yet-spawned) occurrences MUST carry `projected: true` and concrete tasks `projected: false`. Completion-type recurrence and done/cancelled tasks MUST NOT be projected.
+**`get_forecast` projection:** The `get_forecast` tool MUST have the same projection behaviour as `next forecast` (§7): in addition to concrete tasks due within the horizon, it MUST project active (open/started) recurrence series of **both** types forward to `today + horizon` using the shared core helper (`recurrence::project_series`), so the two implementations cannot drift on the dates. (The helper is all they share: `get_forecast` assembles its own entries rather than calling `core::forecast::build_entries`, which the CLI and TUI use.) The horizon defaults to `DEFAULT_FORECAST_HORIZON_DAYS` (90) and is overridable via the `horizon_days` parameter. Each returned entry is `{ date, id, title, score, projected }`; projected (not-yet-spawned) occurrences MUST carry `projected: true` and concrete tasks `projected: false`. Done/cancelled tasks MUST NOT be projected.
 
 ### 12.6 Sync mechanisms
 

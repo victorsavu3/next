@@ -216,14 +216,62 @@ next add "Weekly chore" --recur-completion 7 --recur-snap saturday
 # Snap values: monday…sunday, next-workday, dom:N (day of month 1–28)
 ```
 
+**Snap leeway** — how far the snap is allowed to move the date.
+
+This matters more than it sounds. On its own a snap only ever moves a date *later*, and by
+as much as it takes to reach the next boundary. So this rent task, completed on the 2nd
+rather than the 1st, is next due 60 days later instead of 30 — the 1st has gone past, so
+the snap jumps to the month after:
+
+```sh
+next add "Pay rent" --recur-completion 30 --recur-snap dom:1
+```
+
+`--recur-snap-leeway` bounds the movement and makes it two-sided. The date moves to a
+boundary only if one falls within that many days; otherwise it stays put and keeps the
+interval:
+
+```sh
+next add "Pay rent" --slug rent --due 2026-06-01 \
+  --recur-completion 30 --recur-snap dom:1 --recur-snap-leeway 3
+```
+
+| Completed | Without leeway | With `--recur-snap-leeway 3` |
+|-----------|----------------|------------------------------|
+| 2026-06-01 | 2026-07-01 | 2026-07-01 |
+| 2026-06-02 | 2026-08-01 | 2026-07-01 |
+| 2026-06-15 | 2026-08-01 | 2026-07-15 |
+
+The last row is the point: with a leeway of 3 the 1st is out of reach, so the date stays
+on the 15th. Off the boundary, but on cadence — which is usually what you wanted.
+
+Use `N` for both directions or `BACK,FORWARD` for each, in whole days. A `*` in the
+forward slot means "as far as it takes", which is what a snap does with no leeway at all:
+
+```sh
+next add "Weekly review" --recur-completion 7 --recur-snap monday --recur-snap-leeway 2
+next edit rent --recur-snap-leeway 5,0   # pull back up to 5 days, never push later
+next edit rent --recur-snap-leeway '5,*' # pull back up to 5 days, push later however far
+```
+
+Quote the `*` — it is a spec character, not a shell glob.
+
+Leaving the flag off keeps the original forward-only behaviour, so nothing you already
+have changes. `next add` prints a hint when you set a snap without one.
+
 When a task has both `start` and `due` dates the offset is preserved — a task starting the 1st and due the 3rd will always have that 2-day window.
 
 **Editing recurrence** — change or remove the rule after creation:
 
 ```sh
 next edit standup --recur-snap monday    # change snap; rule and anchor unchanged
+next edit rent --clear-recur-snap-leeway # drop the tolerance, keep the snap
+next edit standup --clear-recur-snap     # drop the snap and its leeway
 next edit standup --clear-recurrence     # remove recurrence entirely
 ```
+
+Changing the rule keeps the snap and its leeway: `next edit rent --recur-completion 31`
+leaves both in place.
 
 ---
 

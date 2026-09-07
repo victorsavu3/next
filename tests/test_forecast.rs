@@ -21,6 +21,8 @@ fn add_args(title: &str) -> add::Args {
         recur_schedule: None,
         recur_completion: None,
         recur_snap: None,
+        recur_snap_leeway: None,
+        quiet: false,
         long_term: false,
         adjust: None,
         json: false,
@@ -194,6 +196,7 @@ fn schedule_task(title: &str, rrule: &str, due_offset: i64, snap: Option<Snap>) 
         rrule: rrule.into(),
         anchor: due,
         snap,
+        snap_leeway: None,
     });
     t
 }
@@ -238,6 +241,7 @@ fn monthly_schedule_projects_monthly_dates_in_horizon() {
         rrule: "FREQ=MONTHLY;BYMONTHDAY=1".into(),
         anchor: due,
         snap: None,
+        snap_leeway: None,
     });
     save(&mut env, &task);
 
@@ -286,6 +290,7 @@ fn completion_recurring_task_is_projected_assuming_done_asap() {
     task.recurrence = Some(Recurrence::Completion {
         interval_days: 7,
         snap: None,
+        snap_leeway: None,
     });
     save(&mut env, &task);
 

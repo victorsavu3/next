@@ -38,6 +38,43 @@ pub enum Snap {
     DayOfMonth { day: u8 },
 }
 
+fn is_zero_u16(n: &u16) -> bool {
+    *n == 0
+}
+
+/// How far a [`Snap`] may move a date to reach a boundary.
+///
+/// A snap on its own is a ratchet: it rounds the computed date *up* to the next
+/// boundary however far away that is, so completing a monthly task one day late
+/// pushes the next instance a whole month out. Leeway turns the boundary into a
+/// tolerance instead — the date moves only if a boundary is close enough, and
+/// otherwise keeps the interval it was given.
+///
+/// The default (`back: 0`, `forward: None`) is the pre-leeway behaviour
+/// exactly: never pull a date earlier, always push it later. That is what lets
+/// an absent `snap_leeway` leave every existing task's dates untouched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SnapLeeway {
+    /// Days the snap may pull the date earlier. Absent = 0.
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub back: u16,
+    /// Days the snap may push the date later. Absent = unbounded, which is the
+    /// pre-leeway behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward: Option<u16>,
+}
+
+impl SnapLeeway {
+    /// The policy an absent `snap_leeway` stands for: never earlier, always
+    /// later. Holding it as a constant means the "no leeway" path and the
+    /// "leeway 0/unbounded" path are the same code, not two branches that have
+    /// to be kept in agreement.
+    pub const DEFAULT: SnapLeeway = SnapLeeway {
+        back: 0,
+        forward: None,
+    };
+}
+
 /// Recurrence rule attached to a task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -52,6 +89,9 @@ pub enum Recurrence {
         anchor: chrono::NaiveDate,
         #[serde(skip_serializing_if = "Option::is_none")]
         snap: Option<Snap>,
+        /// Tolerance around the snap boundary. Absent means [`SnapLeeway::DEFAULT`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        snap_leeway: Option<SnapLeeway>,
     },
 
     /// Next instance is `interval_days` after completion, then optionally snapped.
@@ -59,7 +99,60 @@ pub enum Recurrence {
         interval_days: u32,
         #[serde(skip_serializing_if = "Option::is_none")]
         snap: Option<Snap>,
+        /// Tolerance around the snap boundary. Absent means [`SnapLeeway::DEFAULT`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        snap_leeway: Option<SnapLeeway>,
     },
+}
+
+impl Recurrence {
+    /// The calendar snap this rule applies to its computed dates, if any.
+    ///
+    /// Both variants carry the same date-shaping fields alongside the rule
+    /// itself. Reading them through one accessor is what lets an edit that
+    /// only replaces the rule carry the rest forward without matching on the
+    /// variant twice.
+    pub fn snap(&self) -> Option<&Snap> {
+        match self {
+            Recurrence::Schedule { snap, .. } | Recurrence::Completion { snap, .. } => {
+                snap.as_ref()
+            }
+        }
+    }
+
+    /// Replace the calendar snap, leaving the rule itself untouched.
+    pub fn set_snap(&mut self, value: Option<Snap>) {
+        match self {
+            Recurrence::Schedule { snap, .. } | Recurrence::Completion { snap, .. } => {
+                *snap = value
+            }
+        }
+    }
+
+    /// The tolerance configured around the snap boundary, if any.
+    pub fn snap_leeway(&self) -> Option<&SnapLeeway> {
+        match self {
+            Recurrence::Schedule { snap_leeway, .. }
+            | Recurrence::Completion { snap_leeway, .. } => snap_leeway.as_ref(),
+        }
+    }
+
+    /// Replace the snap leeway, leaving the rule itself untouched.
+    pub fn set_snap_leeway(&mut self, value: Option<SnapLeeway>) {
+        match self {
+            Recurrence::Schedule { snap_leeway, .. }
+            | Recurrence::Completion { snap_leeway, .. } => *snap_leeway = value,
+        }
+    }
+
+    /// The leeway to apply, resolving an absent one to [`SnapLeeway::DEFAULT`].
+    ///
+    /// Every date-computing path goes through here rather than reading the
+    /// field, so "no leeway configured" and "leeway 0/unbounded" cannot drift
+    /// apart.
+    pub fn effective_snap_leeway(&self) -> &SnapLeeway {
+        self.snap_leeway().unwrap_or(&SnapLeeway::DEFAULT)
+    }
 }
 
 /// A single task — the central domain object.

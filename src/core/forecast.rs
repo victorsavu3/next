@@ -148,6 +148,7 @@ mod tests {
             rrule: "FREQ=WEEKLY".to_owned(),
             anchor: date(2026, 6, 8),
             snap: None,
+            snap_leeway: None,
         });
 
         let all = vec![task];
@@ -185,6 +186,7 @@ mod tests {
         task.recurrence = Some(crate::core::domain::task::Recurrence::Completion {
             interval_days: 7,
             snap: None,
+            snap_leeway: None,
         });
 
         let all = vec![task];

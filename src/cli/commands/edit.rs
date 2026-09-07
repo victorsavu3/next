@@ -1,6 +1,5 @@
 use crate::core::domain::{date_parse::parse_date, tag, task::Recurrence};
-use crate::core::recurrence::parse_recurrence;
-use crate::core::recurrence::parse_snap;
+use crate::core::recurrence::{edit_anchor, parse_recurrence, SnapEdit, CLI_SNAP_FLAGS};
 use crate::core::service::{apply_edits, validate_url, EditTaskParams};
 use chrono::Local;
 
@@ -87,6 +86,19 @@ pub struct Args {
     /// Values: next-workday, monday … sunday, dom:N (day-of-month).
     #[arg(long)]
     pub recur_snap: Option<String>,
+
+    /// Remove the snap and its leeway, keeping the recurrence rule itself.
+    #[arg(long)]
+    pub clear_recur_snap: bool,
+
+    /// N (both directions), BACK,FORWARD, or BACK,* for unbounded forward. Days.
+    #[arg(long)]
+    pub recur_snap_leeway: Option<String>,
+
+    /// Remove only the leeway, restoring the default (never pull back, always
+    /// push forward).
+    #[arg(long)]
+    pub clear_recur_snap_leeway: bool,
 
     /// Remove the recurrence rule from this task.
     #[arg(long)]
@@ -184,36 +196,35 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     // Build the recurrence update if any recurrence flags are set.
     //
     // We need the current task's anchor to preserve it when editing an existing
-    // Schedule rule — so load the task here just for that.
+    // Schedule rule, and its snap to carry forward — so load the task here just
+    // for that.
+    let snap_edit = SnapEdit::parse(
+        args.recur_snap.as_deref(),
+        args.clear_recur_snap,
+        args.recur_snap_leeway.as_deref(),
+        args.clear_recur_snap_leeway,
+        CLI_SNAP_FLAGS,
+    )?;
+    let rule_edit = args.recur_schedule.is_some() || args.recur_completion.is_some();
+
     let recurrence: Option<Recurrence> = if args.clear_recurrence {
         None // handled via clear_recurrence flag
-    } else if args.recur_schedule.is_some() || args.recur_completion.is_some() {
+    } else if rule_edit || !snap_edit.is_empty() {
         let existing = ctx.repo.store.get_task(id)?;
-        let anchor = match &existing.recurrence {
-            Some(Recurrence::Schedule { anchor, .. }) => *anchor,
-            _ => existing.start.or(existing.due).unwrap_or(today),
-        };
-        parse_recurrence(
+        // The rule the flags on this command line describe, snap still empty:
+        // `SnapEdit::apply` decides what snap it ends up carrying.
+        let replacement = parse_recurrence(
             args.recur_schedule,
             args.recur_completion,
-            args.recur_snap.as_deref(),
-            anchor,
-        )?
-    } else if let Some(ref snap_str) = args.recur_snap {
-        // Standalone --recur-snap: update the snap on an existing recurrence rule.
-        let snap = Some(parse_snap(snap_str)?);
-        let existing = ctx.repo.store.get_task(id)?;
-        match existing.recurrence {
-            Some(Recurrence::Schedule { rrule, anchor, .. }) => {
-                Some(Recurrence::Schedule { rrule, anchor, snap })
-            }
-            Some(Recurrence::Completion { interval_days, .. }) => {
-                Some(Recurrence::Completion { interval_days, snap })
-            }
-            None => anyhow::bail!(
-                "--recur-snap requires an existing recurrence rule; use --recur-schedule or --recur-completion first"
+            None,
+            None,
+            false,
+            edit_anchor(
+                existing.recurrence.as_ref(),
+                existing.start.or(existing.due).unwrap_or(today),
             ),
-        }
+        )?;
+        Some(snap_edit.apply(existing.recurrence, replacement)?)
     } else {
         None
     };

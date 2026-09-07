@@ -6,7 +6,10 @@ use crate::core::domain::{
     filter,
     task::{Recurrence, Task},
 };
-use crate::core::recurrence::{parse_snap, validate_rrule};
+use crate::core::recurrence::{
+    edit_anchor, parse_snap, resolve_snap_leeway, validate_recurrence, validate_rrule, SnapEdit,
+    MCP_SNAP_PARAMS,
+};
 use crate::core::resolve::resolve_task_id;
 use crate::core::scoring;
 use crate::core::service::{
@@ -21,6 +24,31 @@ fn str_param<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
 
 fn bool_param(params: &Value, key: &str) -> bool {
     params.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// The `recur_completion` interval, as the `u32` the domain stores.
+///
+/// JSON has no integer width, so `as_u64` happily accepts a value no `u32` can
+/// hold and `as u32` then wraps it without a word — `5000000000` became
+/// `705032704`, a rule nobody asked for. A negative or fractional value is
+/// rejected here too rather than read as "no recurrence at all", which is what
+/// a bare `as_u64()` silently did.
+fn completion_interval(params: &Value) -> anyhow::Result<Option<u32>> {
+    let value = match params.get("recur_completion") {
+        None => return Ok(None),
+        Some(v) if v.is_null() => return Ok(None),
+        Some(v) => v,
+    };
+    let days = value
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "recur_completion must be a whole number of days between 1 and {}, got {value}",
+                u32::MAX
+            )
+        })?;
+    Ok(Some(days))
 }
 
 fn strings_param(params: &Value, key: &str) -> Vec<String> {
@@ -62,6 +90,9 @@ const EDIT_PARAM_KEYS: &[&str] = &[
     "recur_schedule",
     "recur_completion",
     "recur_snap",
+    "clear_recur_snap",
+    "recur_snap_leeway",
+    "clear_recur_snap_leeway",
     "clear_recurrence",
     "long_term",
     "score_adjustment",
@@ -239,29 +270,42 @@ pub fn add_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
         .map(|expr| parse_date(expr, today))
         .transpose()?;
 
+    let snap = str_param(params, "recur_snap")
+        .map(parse_snap)
+        .transpose()?;
+    let snap_leeway = resolve_snap_leeway(str_param(params, "recur_snap_leeway"), false)?;
     let recurrence = if let Some(rule) = str_param(params, "recur_schedule") {
         validate_rrule(rule)
             .map_err(|e| anyhow::anyhow!("invalid recurrence rule {rule:?}: {e}"))?;
         let anchor = start.or(due).unwrap_or(today);
-        let snap = str_param(params, "recur_snap")
-            .map(parse_snap)
-            .transpose()?;
         Some(Recurrence::Schedule {
             rrule: rule.to_owned(),
             anchor,
             snap,
+            snap_leeway,
         })
-    } else if let Some(days) = params.get("recur_completion").and_then(|v| v.as_u64()) {
-        let snap = str_param(params, "recur_snap")
-            .map(parse_snap)
-            .transpose()?;
+    } else if let Some(days) = completion_interval(params)? {
         Some(Recurrence::Completion {
-            interval_days: days as u32,
+            interval_days: days,
             snap,
+            snap_leeway,
         })
     } else {
+        // No rule to hang a leeway on. `recur_snap` alone has always been
+        // dropped here; the leeway says so instead of vanishing.
+        anyhow::ensure!(
+            snap_leeway.is_none(),
+            "--recur-snap-leeway requires a snap; set --recur-snap first \
+             (e.g. dom:1, monday, next-workday)"
+        );
         None
     };
+    // Built directly rather than through `parse_recurrence` — MCP takes the two
+    // rule kinds as separate parameters and prefers the schedule — so the shared
+    // semantic checks have to be invoked explicitly.
+    if let Some(rule) = &recurrence {
+        validate_recurrence(rule)?;
+    }
 
     let service_params = CreateTaskParams {
         due,
@@ -302,6 +346,64 @@ pub fn add_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Valu
 
 // ── update_task ───────────────────────────────────────────────────────────────
 
+/// Builds the recurrence rule an `update_task` call leaves behind, or `None`
+/// when the call does not replace one.
+///
+/// Loading the stored task is what makes the edit additive: a schedule change
+/// keeps the series anchor, and any rule change keeps the snap unless the call
+/// sets a new one (`recur_snap`) or drops it (`clear_recur_snap`). Without the
+/// carry-forward, `recur_completion: 31` on its own silently wiped the snap.
+fn recurrence_edit(
+    params: &Value,
+    id: uuid::Uuid,
+    ctx: &mut TaskRepository,
+    today: chrono::NaiveDate,
+) -> anyhow::Result<Option<Recurrence>> {
+    let snap_edit = SnapEdit::parse(
+        str_param(params, "recur_snap"),
+        bool_param(params, "clear_recur_snap"),
+        str_param(params, "recur_snap_leeway"),
+        bool_param(params, "clear_recur_snap_leeway"),
+        MCP_SNAP_PARAMS,
+    )?;
+
+    let schedule = str_param(params, "recur_schedule");
+    let completion = completion_interval(params)?;
+    let rule_edit = schedule.is_some() || completion.is_some();
+    // `clear_recurrence` drops the rule wholesale through its own flag, so
+    // nothing needs building here.
+    if bool_param(params, "clear_recurrence") || !(rule_edit || !snap_edit.is_empty()) {
+        return Ok(None);
+    }
+
+    let existing = ctx.store.get_task(id)?;
+    // The rule these parameters describe, snap still empty: `SnapEdit::apply`
+    // decides what snap it ends up carrying. Built here rather than through
+    // `parse_recurrence` because MCP takes the two rule kinds as separate
+    // parameters and prefers the schedule.
+    let replacement = if let Some(rule) = schedule {
+        validate_rrule(rule)
+            .map_err(|e| anyhow::anyhow!("invalid recurrence rule {rule:?}: {e}"))?;
+        Some(Recurrence::Schedule {
+            rrule: rule.to_owned(),
+            anchor: edit_anchor(
+                existing.recurrence.as_ref(),
+                existing.start.or(existing.due).unwrap_or(today),
+            ),
+            snap: None,
+            snap_leeway: None,
+        })
+    } else {
+        completion.map(|days| Recurrence::Completion {
+            interval_days: days,
+            snap: None,
+            snap_leeway: None,
+        })
+    };
+
+    Ok(Some(snap_edit.apply(existing.recurrence, replacement)?))
+}
+
 pub fn update_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<Value> {
     let today = Local::now().date_naive();
     let id_str = params
@@ -328,51 +430,7 @@ pub fn update_task(params: &Value, ctx: &mut TaskRepository) -> anyhow::Result<V
     let mut edited: Option<Task> = None;
     if has_edit_params(params) || matches!(action, None | Some("move")) {
         // Build recurrence update from params.
-        let recurrence: Option<Recurrence> = if bool_param(params, "clear_recurrence") {
-            None // handled via clear_recurrence flag
-        } else if let Some(rule) = str_param(params, "recur_schedule") {
-            validate_rrule(rule)
-                .map_err(|e| anyhow::anyhow!("invalid recurrence rule {rule:?}: {e}"))?;
-            let existing = ctx.store.get_task(id)?;
-            let anchor = match &existing.recurrence {
-                Some(Recurrence::Schedule { anchor, .. }) => *anchor,
-                _ => existing.start.or(existing.due).unwrap_or(today),
-            };
-            let snap = str_param(params, "recur_snap")
-                .map(parse_snap)
-                .transpose()?;
-            Some(Recurrence::Schedule {
-                rrule: rule.to_owned(),
-                anchor,
-                snap,
-            })
-        } else if let Some(days) = params.get("recur_completion").and_then(|v| v.as_u64()) {
-            let snap = str_param(params, "recur_snap")
-                .map(parse_snap)
-                .transpose()?;
-            Some(Recurrence::Completion {
-                interval_days: days as u32,
-                snap,
-            })
-        } else if let Some(snap_str) = str_param(params, "recur_snap") {
-            // Standalone recur_snap: update the snap on the existing rule
-            // (mirrors the CLI's `next edit --recur-snap`).
-            let snap = Some(parse_snap(snap_str)?);
-            let existing = ctx.store.get_task(id)?;
-            match existing.recurrence {
-                Some(Recurrence::Schedule { rrule, anchor, .. }) => {
-                    Some(Recurrence::Schedule { rrule, anchor, snap })
-                }
-                Some(Recurrence::Completion { interval_days, .. }) => {
-                    Some(Recurrence::Completion { interval_days, snap })
-                }
-                None => anyhow::bail!(
-                    "recur_snap requires an existing recurrence rule; set recur_schedule or recur_completion first"
-                ),
-            }
-        } else {
-            None
-        };
+        let recurrence: Option<Recurrence> = recurrence_edit(params, id, ctx, today)?;
 
         let due = if bool_param(params, "clear_due") {
             None
@@ -782,5 +840,389 @@ mod tests {
                 .contains("recur_snap requires an existing recurrence"),
             "unexpected error: {err}"
         );
+    }
+
+    /// A recurring task with a `dom:1` snap, returning its id.
+    fn snapped_task(ctx: &mut TaskRepository) -> String {
+        let task = add_task(
+            &json!({ "title": "Pay the rent", "recur_completion": 7, "recur_snap": "dom:1" }),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(task["recurrence"]["snap"]["day"], 1);
+        task["id"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn update_task_recur_completion_keeps_existing_snap() {
+        // Changing only the interval must not wipe the snap (UX-2).
+        let (_dir, mut ctx) = make_ctx();
+        let id = snapped_task(&mut ctx);
+
+        let updated = update_task(&json!({ "id": id, "recur_completion": 31 }), &mut ctx).unwrap();
+        assert_eq!(updated["recurrence"]["interval_days"], 31);
+        assert_eq!(
+            updated["recurrence"]["snap"]["day"], 1,
+            "the snap must survive a bare recur_completion: {updated}"
+        );
+    }
+
+    #[test]
+    fn update_task_recur_schedule_keeps_existing_snap() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = snapped_task(&mut ctx);
+
+        let updated = update_task(
+            &json!({ "id": id, "recur_schedule": "FREQ=MONTHLY;BYMONTHDAY=28" }),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(updated["recurrence"]["rrule"], "FREQ=MONTHLY;BYMONTHDAY=28");
+        assert_eq!(updated["recurrence"]["snap"]["day"], 1);
+    }
+
+    #[test]
+    fn update_task_recur_snap_overrides_the_carried_one() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = snapped_task(&mut ctx);
+
+        let updated = update_task(
+            &json!({ "id": id, "recur_completion": 14, "recur_snap": "monday" }),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(updated["recurrence"]["interval_days"], 14);
+        assert_eq!(updated["recurrence"]["snap"]["type"], "next_weekday");
+    }
+
+    #[test]
+    fn update_task_clear_recur_snap_keeps_the_rule() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = snapped_task(&mut ctx);
+
+        let updated =
+            update_task(&json!({ "id": id, "clear_recur_snap": true }), &mut ctx).unwrap();
+        assert_eq!(
+            updated["recurrence"]["interval_days"], 7,
+            "the rule itself must be untouched"
+        );
+        assert!(
+            updated["recurrence"]["snap"].is_null(),
+            "clear_recur_snap must drop the snap: {updated}"
+        );
+    }
+
+    #[test]
+    fn update_task_clear_recur_snap_alongside_a_rule_change() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = snapped_task(&mut ctx);
+
+        let updated = update_task(
+            &json!({ "id": id, "recur_completion": 31, "clear_recur_snap": true }),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(updated["recurrence"]["interval_days"], 31);
+        assert!(updated["recurrence"]["snap"].is_null());
+    }
+
+    #[test]
+    fn update_task_recur_snap_and_clear_recur_snap_conflict() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = snapped_task(&mut ctx);
+
+        let err = update_task(
+            &json!({ "id": id, "recur_snap": "monday", "clear_recur_snap": true }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("recur_snap and clear_recur_snap are mutually exclusive"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn update_task_clear_recur_snap_without_recurrence_errors() {
+        let (_dir, mut ctx) = make_ctx();
+        let task = add_task(&json!({ "title": "No recurrence" }), &mut ctx).unwrap();
+        let id = task["id"].as_str().unwrap();
+        let err =
+            update_task(&json!({ "id": id, "clear_recur_snap": true }), &mut ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("clear_recur_snap requires an existing recurrence rule"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // ── snap leeway ─────────────────────────────────────────────────────────
+
+    /// The worked example: 30 days after completion, snapped to the 1st, three
+    /// days of tolerance either way.
+    fn leeway_task(ctx: &mut TaskRepository) -> String {
+        let task = add_task(
+            &json!({
+                "title": "Pay the rent",
+                "recur_completion": 30,
+                "recur_snap": "dom:1",
+                "recur_snap_leeway": "3",
+            }),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(task["recurrence"]["snap_leeway"]["back"], 3);
+        assert_eq!(task["recurrence"]["snap_leeway"]["forward"], 3);
+        task["id"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn add_task_stores_an_asymmetric_leeway() {
+        let (_dir, mut ctx) = make_ctx();
+        let task = add_task(
+            &json!({
+                "title": "Pay the rent",
+                "recur_completion": 30,
+                "recur_snap": "dom:1",
+                "recur_snap_leeway": "5,0",
+            }),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(task["recurrence"]["snap_leeway"]["back"], 5);
+        assert_eq!(task["recurrence"]["snap_leeway"]["forward"], 0);
+    }
+
+    /// T13, MCP half: `add_task` builds its rule by hand, so this is what
+    /// proves it still reaches the shared checks.
+    #[test]
+    fn add_task_rejects_a_leeway_with_no_snap_to_qualify() {
+        let (_dir, mut ctx) = make_ctx();
+        let err = add_task(
+            &json!({
+                "title": "Pay the rent",
+                "recur_completion": 30,
+                "recur_snap_leeway": "3",
+            }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--recur-snap-leeway requires a snap; set --recur-snap first \
+             (e.g. dom:1, monday, next-workday)"
+        );
+    }
+
+    #[test]
+    fn add_task_rejects_a_backward_leeway_the_interval_cannot_absorb() {
+        let (_dir, mut ctx) = make_ctx();
+        let err = add_task(
+            &json!({
+                "title": "Pay the rent",
+                "recur_completion": 3,
+                "recur_snap": "dom:1",
+                "recur_snap_leeway": "5,0",
+            }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "backward leeway (5d) must be less than the completion interval (3d), \
+             or the series would not advance"
+        );
+    }
+
+    #[test]
+    fn add_task_rejects_a_zero_day_interval() {
+        // The CLI has always refused this; MCP built the rule directly and let
+        // it through, producing a series that never advances.
+        let (_dir, mut ctx) = make_ctx();
+        let err = add_task(
+            &json!({ "title": "Stuck", "recur_completion": 0 }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "completion interval must be >= 1 day, got 0"
+        );
+    }
+
+    #[test]
+    fn add_task_rejects_an_interval_no_u32_can_hold() {
+        // `as u32` used to wrap this into 705032704 without a word.
+        let (_dir, mut ctx) = make_ctx();
+        let err = add_task(
+            &json!({ "title": "Wrapped", "recur_completion": 5000000000u64 }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "recur_completion must be a whole number of days between 1 and 4294967295, \
+             got 5000000000"
+        );
+    }
+
+    #[test]
+    fn update_task_recur_completion_keeps_the_leeway_too() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let updated = update_task(&json!({ "id": id, "recur_completion": 31 }), &mut ctx).unwrap();
+        assert_eq!(updated["recurrence"]["interval_days"], 31);
+        assert_eq!(updated["recurrence"]["snap"]["day"], 1);
+        assert_eq!(
+            updated["recurrence"]["snap_leeway"]["back"], 3,
+            "the leeway must survive a bare recur_completion: {updated}"
+        );
+    }
+
+    #[test]
+    fn update_task_standalone_recur_snap_leeway_replaces_it() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let updated =
+            update_task(&json!({ "id": id, "recur_snap_leeway": "5,0" }), &mut ctx).unwrap();
+        assert_eq!(updated["recurrence"]["interval_days"], 30);
+        assert_eq!(updated["recurrence"]["snap"]["day"], 1);
+        assert_eq!(updated["recurrence"]["snap_leeway"]["back"], 5);
+        assert_eq!(updated["recurrence"]["snap_leeway"]["forward"], 0);
+    }
+
+    #[test]
+    fn update_task_clear_recur_snap_leeway_keeps_the_snap() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let updated = update_task(
+            &json!({ "id": id, "clear_recur_snap_leeway": true }),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(updated["recurrence"]["snap"]["day"], 1);
+        assert!(
+            updated["recurrence"]["snap_leeway"].is_null(),
+            "clear_recur_snap_leeway must drop only the leeway: {updated}"
+        );
+    }
+
+    #[test]
+    fn update_task_clear_recur_snap_takes_the_leeway_with_it() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let updated =
+            update_task(&json!({ "id": id, "clear_recur_snap": true }), &mut ctx).unwrap();
+        assert!(updated["recurrence"]["snap"].is_null());
+        assert!(
+            updated["recurrence"]["snap_leeway"].is_null(),
+            "a leeway with no snap is not a rule anyone can act on: {updated}"
+        );
+    }
+
+    /// T13, MCP half: the carry-forward path. `back = 3` was stored days ago
+    /// and never passes through a parser on this call.
+    #[test]
+    fn update_task_rejects_an_interval_the_carried_leeway_would_stall() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let err = update_task(&json!({ "id": id, "recur_completion": 3 }), &mut ctx).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "backward leeway (3d) must be less than the completion interval (3d), \
+             or the series would not advance"
+        );
+    }
+
+    #[test]
+    fn update_task_recur_snap_leeway_and_clear_conflict() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let err = update_task(
+            &json!({ "id": id, "recur_snap_leeway": "3", "clear_recur_snap_leeway": true }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--recur-snap-leeway and --clear-recur-snap-leeway are mutually exclusive"
+        );
+    }
+
+    #[test]
+    fn update_task_recur_snap_leeway_without_recurrence_errors() {
+        let (_dir, mut ctx) = make_ctx();
+        let task = add_task(&json!({ "title": "No recurrence" }), &mut ctx).unwrap();
+        let id = task["id"].as_str().unwrap();
+        let err =
+            update_task(&json!({ "id": id, "recur_snap_leeway": "3" }), &mut ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("recur_snap_leeway requires an existing recurrence rule"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// V1 on the edit path, MCP half: the rule exists, so the "make a rule
+    /// first" branch does not fire, and the assembled rule is valid — which
+    /// is exactly why the request used to be discarded in silence.
+    #[test]
+    fn update_task_recur_snap_leeway_needs_a_snap() {
+        let (_dir, mut ctx) = make_ctx();
+        let task = add_task(
+            &json!({ "title": "Water the plants", "recur_completion": 7 }),
+            &mut ctx,
+        )
+        .unwrap();
+        let id = task["id"].as_str().unwrap().to_owned();
+        assert!(task["recurrence"]["snap"].is_null());
+
+        let err =
+            update_task(&json!({ "id": id, "recur_snap_leeway": "3" }), &mut ctx).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--recur-snap-leeway requires a snap; set --recur-snap first \
+             (e.g. dom:1, monday, next-workday)"
+        );
+
+        let stored = get_task(&json!({ "id": id }), &mut ctx).unwrap();
+        assert!(
+            stored["recurrence"]["snap_leeway"].is_null(),
+            "a rejected edit must store nothing: {stored}"
+        );
+    }
+
+    /// Dropping the snap and setting a leeway in the same call leaves the
+    /// leeway nothing to qualify, so it is the same V1 mistake.
+    #[test]
+    fn update_task_cannot_clear_the_snap_and_set_a_leeway_at_once() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let err = update_task(
+            &json!({ "id": id, "clear_recur_snap": true, "recur_snap_leeway": "5" }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--recur-snap-leeway requires a snap; set --recur-snap first \
+             (e.g. dom:1, monday, next-workday)"
+        );
+    }
+
+    /// A leeway edit that is not registered in `EDIT_PARAM_KEYS` is dropped on
+    /// the floor whenever the call carries no other edit field.
+    #[test]
+    fn the_leeway_params_count_as_edits() {
+        assert!(has_edit_params(&json!({ "recur_snap_leeway": "3" })));
+        assert!(has_edit_params(&json!({ "clear_recur_snap_leeway": true })));
     }
 }

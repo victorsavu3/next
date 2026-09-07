@@ -1,6 +1,7 @@
 mod common;
 
 use next::cli::commands::add;
+use next::core::domain::task::{Recurrence, SnapLeeway};
 
 fn args(title: &str) -> add::Args {
     add::Args {
@@ -19,6 +20,8 @@ fn args(title: &str) -> add::Args {
         recur_schedule: None,
         recur_completion: None,
         recur_snap: None,
+        recur_snap_leeway: None,
+        quiet: false,
         long_term: false,
         adjust: None,
         json: false,
@@ -274,5 +277,105 @@ fn add_no_auto_apply_when_no_active_context() {
     assert!(
         task.tags.iter().all(|t| !t.starts_with('@')),
         "no context tags should be added when no active context is set"
+    );
+}
+
+// ── snap leeway ──────────────────────────────────────────────────────────────
+
+#[test]
+fn add_stores_the_snap_leeway() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            recur_completion: Some(30),
+            recur_snap: Some("dom:1".to_owned()),
+            recur_snap_leeway: Some("5,0".to_owned()),
+            ..args("Pay the rent")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
+    assert_eq!(
+        task.recurrence.as_ref().and_then(Recurrence::snap_leeway),
+        Some(&SnapLeeway {
+            back: 5,
+            forward: Some(0)
+        })
+    );
+}
+
+/// The `BACK,*` spelling, end to end: it must reach the store as an *omitted*
+/// forward bound, since that omission is what the on-disk format uses for
+/// "unbounded" and what the TUI edit form has to be able to render back.
+#[test]
+fn add_stores_an_unbounded_forward_leeway() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            recur_completion: Some(30),
+            recur_snap: Some("dom:1".to_owned()),
+            recur_snap_leeway: Some("5,*".to_owned()),
+            ..args("Pay the rent")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
+    assert_eq!(
+        task.recurrence.as_ref().and_then(Recurrence::snap_leeway),
+        Some(&SnapLeeway {
+            back: 5,
+            forward: None
+        })
+    );
+}
+
+/// T13, CLI half: `add` reaches the shared checks, so the message a user sees
+/// is the one `parse_recurrence` was tested on — verbatim, not paraphrased.
+#[test]
+fn add_rejects_a_leeway_with_no_snap_to_qualify() {
+    let mut env = common::setup();
+    let err = add::run(
+        add::Args {
+            recur_completion: Some(30),
+            recur_snap_leeway: Some("3".to_owned()),
+            ..args("Pay the rent")
+        },
+        &mut env.ctx,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "--recur-snap-leeway requires a snap; set --recur-snap first \
+         (e.g. dom:1, monday, next-workday)"
+    );
+    assert!(
+        env.ctx.repo.store.list_tasks().unwrap().is_empty(),
+        "a rejected rule must not leave a task behind"
+    );
+}
+
+#[test]
+fn add_rejects_a_backward_leeway_the_interval_cannot_absorb() {
+    let mut env = common::setup();
+    let err = add::run(
+        add::Args {
+            recur_completion: Some(3),
+            recur_snap: Some("dom:1".to_owned()),
+            recur_snap_leeway: Some("5,0".to_owned()),
+            ..args("Pay the rent")
+        },
+        &mut env.ctx,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "backward leeway (5d) must be less than the completion interval (3d), \
+         or the series would not advance"
     );
 }
