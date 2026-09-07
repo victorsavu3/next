@@ -423,6 +423,169 @@ pub fn parse_recurrence(
     Ok(Some(rule))
 }
 
+// ─── editing the snap of a rule that already exists ────────────────────────
+
+/// What one surface calls the four snap-editing flags.
+///
+/// The policy in [`SnapEdit`] is the same on `next edit` and on MCP
+/// `update_task`; only the vocabulary differs (`--recur-snap` against
+/// `recur_snap`), and an error naming the other surface's spelling is not
+/// something a user can act on. Parameterising the names is what lets both
+/// surfaces run the one implementation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SnapFlagNames {
+    /// Sets the snap.
+    pub snap: &'static str,
+    /// Drops the snap.
+    pub clear_snap: &'static str,
+    /// Sets the leeway.
+    pub snap_leeway: &'static str,
+    /// Drops the leeway.
+    pub clear_snap_leeway: &'static str,
+    /// How this surface says "make a rule first", e.g.
+    /// `use --recur-schedule or --recur-completion first`.
+    pub set_a_rule: &'static str,
+}
+
+/// The `next edit` spelling of [`SnapFlagNames`].
+pub const CLI_SNAP_FLAGS: SnapFlagNames = SnapFlagNames {
+    snap: "--recur-snap",
+    clear_snap: "--clear-recur-snap",
+    snap_leeway: "--recur-snap-leeway",
+    clear_snap_leeway: "--clear-recur-snap-leeway",
+    set_a_rule: "use --recur-schedule or --recur-completion first",
+};
+
+/// The MCP `update_task` spelling of [`SnapFlagNames`].
+pub const MCP_SNAP_PARAMS: SnapFlagNames = SnapFlagNames {
+    snap: "recur_snap",
+    clear_snap: "clear_recur_snap",
+    snap_leeway: "recur_snap_leeway",
+    clear_snap_leeway: "clear_recur_snap_leeway",
+    set_a_rule: "set recur_schedule or recur_completion first",
+};
+
+/// A parsed request to change the snap and/or its leeway of a stored task.
+///
+/// Both editing surfaces used to carry their own copy of this policy, which is
+/// how the leeway came to be discarded on one of them and not the other. The
+/// request is parsed once by [`SnapEdit::parse`] and applied once by
+/// [`SnapEdit::apply`]; a surface supplies only its flag names and the rule
+/// its own recurrence arguments built.
+#[derive(Clone, Debug)]
+pub struct SnapEdit {
+    names: SnapFlagNames,
+    snap: Option<Snap>,
+    clear_snap: bool,
+    leeway: Option<SnapLeeway>,
+    clear_leeway: bool,
+}
+
+impl SnapEdit {
+    /// Parse the four flags, rejecting a set/clear pair that contradict.
+    ///
+    /// The leeway pair is left to [`resolve_snap_leeway`], which spells its
+    /// message in CLI flags on every surface.
+    pub fn parse(
+        snap: Option<&str>,
+        clear_snap: bool,
+        snap_leeway: Option<&str>,
+        clear_snap_leeway: bool,
+        names: SnapFlagNames,
+    ) -> anyhow::Result<Self> {
+        let parsed_snap = snap.map(parse_snap).transpose()?;
+        anyhow::ensure!(
+            !(parsed_snap.is_some() && clear_snap),
+            "{} and {} are mutually exclusive",
+            names.snap,
+            names.clear_snap
+        );
+        let leeway = resolve_snap_leeway(snap_leeway, clear_snap_leeway)?;
+        Ok(Self {
+            names,
+            snap: parsed_snap,
+            clear_snap,
+            leeway,
+            clear_leeway: clear_snap_leeway,
+        })
+    }
+
+    /// Whether the call says anything about the snap at all.
+    ///
+    /// A call that does not, and does not replace the rule either, has no
+    /// recurrence edit to make and must not load the task to discover that.
+    pub fn is_empty(&self) -> bool {
+        self.snap.is_none() && !self.clear_snap && self.leeway.is_none() && !self.clear_leeway
+    }
+
+    /// The rule the edit leaves behind.
+    ///
+    /// `replacement` is the rule the caller's own recurrence arguments built,
+    /// with its snap fields still empty, or `None` when the call changes only
+    /// the snap. `existing` is what the task has stored now.
+    pub fn apply(
+        self,
+        existing: Option<Recurrence>,
+        replacement: Option<Recurrence>,
+    ) -> anyhow::Result<Recurrence> {
+        let snap_requested = self.snap.is_some();
+        // The snap belongs to the series, not to the rule being replaced: a
+        // bare --recur-completion must keep it, or it would silently vanish.
+        // Only a set (replace) or a clear (drop) changes it.
+        let snap = if snap_requested || self.clear_snap {
+            self.snap
+        } else {
+            existing.as_ref().and_then(Recurrence::snap).cloned()
+        };
+        // The leeway qualifies the snap, so it survives a rule change on the
+        // same terms — and goes with the snap when that is dropped, since a
+        // leeway without a snap is not a rule anyone can act on.
+        let snap_leeway = if snap.is_none() {
+            None
+        } else if self.leeway.is_some() || self.clear_leeway {
+            self.leeway
+        } else {
+            existing.as_ref().and_then(Recurrence::snap_leeway).cloned()
+        };
+
+        let Some(mut rule) = replacement.or(existing) else {
+            // Nothing to hang the snap on, and the call did not make one.
+            let name = if self.clear_snap {
+                self.names.clear_snap
+            } else if snap_requested {
+                self.names.snap
+            } else if self.clear_leeway {
+                self.names.clear_snap_leeway
+            } else {
+                self.names.snap_leeway
+            };
+            anyhow::bail!(
+                "{name} requires an existing recurrence rule; {}",
+                self.names.set_a_rule
+            )
+        };
+        rule.set_snap(snap);
+        rule.set_snap_leeway(snap_leeway);
+        // The rule and the leeway have never been checked against each other:
+        // `--recur-completion 3` on a task carrying `back = 5` is only invalid
+        // once the two are put together.
+        validate_recurrence(&rule)?;
+        Ok(rule)
+    }
+}
+
+/// The anchor a re-specified schedule rule keeps.
+///
+/// Re-anchoring on every edit would shift the whole series, so an existing
+/// schedule's anchor wins. `fallback` is what the task itself suggests —
+/// usually its start or due date, or today.
+pub fn edit_anchor(existing: Option<&Recurrence>, fallback: NaiveDate) -> NaiveDate {
+    match existing {
+        Some(Recurrence::Schedule { anchor, .. }) => *anchor,
+        _ => fallback,
+    }
+}
+
 /// Validate a schedule recurrence rule (RRULE) string.
 ///
 /// Parses the rule via the RFC 5545 `rrule` crate, returning an error if the

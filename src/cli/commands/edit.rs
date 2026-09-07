@@ -1,6 +1,5 @@
 use crate::core::domain::{date_parse::parse_date, tag, task::Recurrence};
-use crate::core::recurrence::parse_snap;
-use crate::core::recurrence::{parse_recurrence, resolve_snap_leeway, validate_recurrence};
+use crate::core::recurrence::{edit_anchor, parse_recurrence, SnapEdit, CLI_SNAP_FLAGS};
 use crate::core::service::{apply_edits, validate_url, EditTaskParams};
 use chrono::Local;
 
@@ -199,97 +198,33 @@ pub fn run(args: Args, ctx: &mut AppContext) -> anyhow::Result<()> {
     // We need the current task's anchor to preserve it when editing an existing
     // Schedule rule, and its snap to carry forward — so load the task here just
     // for that.
-    let requested_snap = args.recur_snap.as_deref().map(parse_snap).transpose()?;
-    anyhow::ensure!(
-        !(requested_snap.is_some() && args.clear_recur_snap),
-        "--recur-snap and --clear-recur-snap are mutually exclusive"
-    );
-    let requested_leeway = resolve_snap_leeway(
+    let snap_edit = SnapEdit::parse(
+        args.recur_snap.as_deref(),
+        args.clear_recur_snap,
         args.recur_snap_leeway.as_deref(),
         args.clear_recur_snap_leeway,
+        CLI_SNAP_FLAGS,
     )?;
     let rule_edit = args.recur_schedule.is_some() || args.recur_completion.is_some();
-    let snap_edit = requested_snap.is_some() || args.clear_recur_snap;
-    let leeway_edit = requested_leeway.is_some() || args.clear_recur_snap_leeway;
 
     let recurrence: Option<Recurrence> = if args.clear_recurrence {
         None // handled via clear_recurrence flag
-    } else if rule_edit || snap_edit || leeway_edit {
+    } else if rule_edit || !snap_edit.is_empty() {
         let existing = ctx.repo.store.get_task(id)?;
-        // The snap belongs to the series, not to the rule being replaced: a
-        // bare --recur-completion must keep it, or it would silently vanish.
-        // Only --recur-snap (replace) or --clear-recur-snap (drop) change it.
-        let snap = if snap_edit {
-            requested_snap
-        } else {
-            existing
-                .recurrence
-                .as_ref()
-                .and_then(Recurrence::snap)
-                .cloned()
-        };
-        // The leeway qualifies the snap, so it survives a rule change on the
-        // same terms — and goes with the snap when that is dropped, since a
-        // leeway without a snap is not a rule anyone can act on.
-        let snap_leeway = if snap.is_none() {
-            None
-        } else if leeway_edit {
-            requested_leeway
-        } else {
-            existing
-                .recurrence
-                .as_ref()
-                .and_then(Recurrence::snap_leeway)
-                .cloned()
-        };
-
-        if rule_edit {
-            let anchor = match &existing.recurrence {
-                Some(Recurrence::Schedule { anchor, .. }) => *anchor,
-                _ => existing.start.or(existing.due).unwrap_or(today),
-            };
-            let mut rule = parse_recurrence(
-                args.recur_schedule,
-                args.recur_completion,
-                None,
-                None,
-                false,
-                anchor,
-            )?;
-            if let Some(rule) = rule.as_mut() {
-                rule.set_snap(snap);
-                rule.set_snap_leeway(snap_leeway);
-                // The rule and the carried-forward leeway were never checked
-                // against each other — `--recur-completion 3` on a task with
-                // `back = 5` is only invalid once the two are put together.
-                validate_recurrence(rule)?;
-            }
-            rule
-        } else {
-            // Standalone snap edit: keep the rule, change only what it snaps to.
-            match existing.recurrence {
-                Some(mut rule) => {
-                    rule.set_snap(snap);
-                    rule.set_snap_leeway(snap_leeway);
-                    validate_recurrence(&rule)?;
-                    Some(rule)
-                }
-                None => {
-                    let flag = if args.clear_recur_snap {
-                        "--clear-recur-snap"
-                    } else if args.recur_snap.is_some() {
-                        "--recur-snap"
-                    } else if args.clear_recur_snap_leeway {
-                        "--clear-recur-snap-leeway"
-                    } else {
-                        "--recur-snap-leeway"
-                    };
-                    anyhow::bail!(
-                        "{flag} requires an existing recurrence rule; use --recur-schedule or --recur-completion first"
-                    )
-                }
-            }
-        }
+        // The rule the flags on this command line describe, snap still empty:
+        // `SnapEdit::apply` decides what snap it ends up carrying.
+        let replacement = parse_recurrence(
+            args.recur_schedule,
+            args.recur_completion,
+            None,
+            None,
+            false,
+            edit_anchor(
+                existing.recurrence.as_ref(),
+                existing.start.or(existing.due).unwrap_or(today),
+            ),
+        )?;
+        Some(snap_edit.apply(existing.recurrence, replacement)?)
     } else {
         None
     };
