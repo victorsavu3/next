@@ -647,24 +647,69 @@ pub fn validate_rrule(rrule: &str) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
+/// One left-to-right walk over a rule's raw (un-snapped) occurrences.
+///
+/// The `rrule` crate has no way to resume a series from a date, so every
+/// [`next_occurrence`] call re-parses the rule and re-generates the whole
+/// series from `DTSTART`. That is fine for a single question and quadratic for
+/// a walk: asking it *k* times in a row costs O(k²) generated dates. A daily
+/// rule collapsed onto a monthly boundary needs ~30 raw steps per emitted date,
+/// so a decade of forecast took seconds and a century took the better part of a
+/// minute — per series, on a horizon the user sets with an unbounded `--days`.
+///
+/// This holds the parsed set's iterator open across the whole walk instead, so
+/// *k* steps generate *k* dates. It is a type rather than a bare
+/// [`rrule::RRuleSetIter`] to make the one thing a caller must respect
+/// unmissable: the walk only moves forward, so each query must pass a date no
+/// earlier than the one before. Both callers satisfy that by construction —
+/// each sets its `after` to the raw date it was just handed.
+struct RawSeries {
+    dates: rrule::RRuleSetIter,
+}
+
+impl RawSeries {
+    /// Parses `rrule` anchored at `anchor` and positions the walk at its start.
+    ///
+    /// This is where the whole cost of parsing lives; stepping is cheap.
+    fn new(rrule: &str, anchor: NaiveDate) -> anyhow::Result<Self> {
+        let set: rrule::RRuleSet = build_rrule_str(rrule, anchor)
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid RRULE: {e}"))?;
+        Ok(Self {
+            // `RRuleSetIter` owns everything it needs, so it outlives `set`.
+            dates: (&set).into_iter(),
+        })
+    }
+
+    /// The first remaining occurrence strictly after `after`.
+    ///
+    /// `None` means the rule is exhausted (`UNTIL`/`COUNT`). Occurrences the
+    /// walk has already passed are gone, which is why `after` must never move
+    /// backwards.
+    fn next_after(&mut self, after: NaiveDate) -> Option<NaiveDate> {
+        self.dates
+            .by_ref()
+            .map(|dt| dt.naive_utc().date())
+            .find(|d| *d > after)
+    }
+}
+
 /// Returns the first occurrence of the rule strictly after `after`.
 ///
 /// Per RFC 5545 months/years that have no matching day (e.g. `BYMONTHDAY=31`
 /// in February) are **skipped**, not clamped. `UNTIL` and `COUNT` clauses are
 /// fully honoured; if the rule is exhausted before a date `> after` is found
 /// an error is returned.
+///
+/// This answers one question and throws the series away. Anything asking
+/// repeatedly must walk a [`RawSeries`] instead, or pay O(k²).
 pub fn next_occurrence(
     rrule: &str,
     anchor: NaiveDate,
     after: NaiveDate,
 ) -> anyhow::Result<NaiveDate> {
-    let set: rrule::RRuleSet = build_rrule_str(rrule, anchor)
-        .parse()
-        .map_err(|e| anyhow::anyhow!("invalid RRULE: {e}"))?;
-
-    set.into_iter()
-        .find(|dt| dt.naive_utc().date() > after)
-        .map(|dt| dt.naive_utc().date())
+    RawSeries::new(rrule, anchor)?
+        .next_after(after)
         .ok_or_else(|| anyhow::anyhow!("RRULE has no occurrence after {after}"))
 }
 
@@ -736,16 +781,17 @@ fn next_schedule_occurrence(
     leeway: &SnapLeeway,
     current: NaiveDate,
 ) -> Option<NaiveDate> {
+    let mut series = RawSeries::new(rrule, anchor).ok()?;
     let mut after = current - Duration::days(schedule_lookback(snap, leeway));
     // The bound is a backstop for a rule no parser would accept, never reached
     // by the ~130 steps the argument above allows.
     for _ in 0..MAX_SERIES_STEPS {
-        let raw = next_occurrence(rrule, anchor, after).ok()?;
+        let raw = series.next_after(after)?;
         let occurrence = snap_schedule(raw, snap, leeway);
         if occurrence > current {
             return Some(occurrence);
         }
-        // `next_occurrence` guarantees `raw > after`, so the walk advances.
+        // `next_after` guarantees `raw > after`, so the walk advances.
         after = raw;
     }
     None
@@ -768,10 +814,15 @@ const MAX_PROJECTED_PER_SERIES: usize = 366;
 /// snapping can collapse arbitrarily many raw occurrences onto one date, so a
 /// walk could keep stepping without ever emitting its 366th date. Every step
 /// strictly advances the raw date instead, so the walk covers at most this many
-/// occurrences of the series and then stops regardless of the horizon. It sits
-/// far above the emitted cap so only a pathological rule-and-horizon pair —
-/// a daily rule snapped to a monthly boundary, forecast decades out — ever
-/// reaches it.
+/// occurrences of the series and then stops regardless of the horizon.
+///
+/// It sits far above the emitted cap because a collapsing snap needs many raw
+/// steps per emitted date — a daily rule snapped to a monthly boundary spends
+/// about thirty — and only such a pair, forecast decades out, reaches it. That
+/// is affordable only because a step is cheap: the schedule walk holds one
+/// [`RawSeries`] open, so reaching this bound generates this many dates, not
+/// this many squared. Raising the cap without that would have made a long
+/// horizon quadratic.
 const MAX_SERIES_STEPS: usize = 10_000;
 
 /// Appends `date` unless it repeats the one before it.
@@ -844,6 +895,9 @@ pub fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<N
             // that skip the forecast reports the raw occurrences a backward
             // leeway pulls onto a date already held, and shows a monthly series
             // twice a month.
+            let Ok(mut series) = RawSeries::new(rrule, *anchor) else {
+                return Vec::new();
+            };
             let mut prev = base;
             let mut after = base - Duration::days(schedule_lookback(snap.as_ref(), leeway));
             let mut dates = Vec::new();
@@ -851,11 +905,10 @@ pub fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<N
                 if dates.len() >= MAX_PROJECTED_PER_SERIES {
                     break;
                 }
-                let raw = match next_occurrence(rrule, *anchor, after) {
-                    Ok(d) => d,
-                    Err(_) => break,
+                let Some(raw) = series.next_after(after) else {
+                    break;
                 };
-                // `next_occurrence` guarantees raw > after, so the walk terminates.
+                // `next_after` guarantees raw > after, so the walk terminates.
                 after = raw;
                 let occurrence = snap_schedule(raw, snap.as_ref(), leeway);
                 // Skipping on `prev` subsumes both the "strictly future" filter
@@ -2191,6 +2244,47 @@ mod tests {
             dates.len()
         );
         assert!(dates.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn project_series_collapsing_snap_on_a_schedule_rule_stays_cheap() {
+        // The same pathological case on the *schedule* arm, which is the branch
+        // MAX_SERIES_STEPS was raised for and the one the sibling test above
+        // cannot reach: its Completion rule steps by arithmetic, so it is cheap
+        // however the cap is set.
+        //
+        // Here every step consults the RRULE, and the only thing keeping the
+        // walk affordable is that it consults *one* open series rather than
+        // re-generating the rule from its anchor each time. So this asserts a
+        // budget, not just termination: the bound is orders of magnitude above
+        // what a linear walk needs (single-digit milliseconds in release, tens
+        // in debug) and far below the minutes a quadratic one takes.
+        let today = d(2026, 5, 4);
+        let mut task = Task::new("Daily schedule, snapped to the 1st");
+        task.due = Some(today);
+        task.recurrence = Some(Recurrence::Schedule {
+            rrule: "FREQ=DAILY".into(),
+            anchor: today,
+            snap: Some(Snap::DayOfMonth { day: 1 }),
+            snap_leeway: None,
+        });
+
+        let started = std::time::Instant::now();
+        let dates = project_series(&task, today, d(2126, 1, 1));
+        let elapsed = started.elapsed();
+
+        assert!(
+            !dates.is_empty() && dates.len() <= MAX_PROJECTED_PER_SERIES,
+            "expected a bounded non-empty projection, got {}",
+            dates.len()
+        );
+        assert!(dates.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(dates[0], d(2026, 6, 1), "the snap collapses onto the 1st");
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "a century of a collapsing schedule series took {elapsed:?}; \
+             the walk is re-generating the rule instead of stepping one series"
+        );
     }
 
     #[test]
