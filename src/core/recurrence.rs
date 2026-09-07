@@ -538,12 +538,20 @@ impl SnapEdit {
             existing.as_ref().and_then(Recurrence::snap).cloned()
         };
         // The leeway qualifies the snap, so it survives a rule change on the
-        // same terms — and goes with the snap when that is dropped, since a
-        // leeway without a snap is not a rule anyone can act on.
-        let snap_leeway = if snap.is_none() {
-            None
-        } else if self.leeway.is_some() || self.clear_leeway {
+        // same terms — and a leeway merely *carried forward* goes with the
+        // snap when that is dropped, since a leeway without a snap is not a
+        // rule anyone can act on.
+        //
+        // A leeway the call actually asked for is kept even with no snap, so
+        // `validate_recurrence` below reports V1. Testing the snap first threw
+        // the request away before anything could complain about it, and
+        // `next edit <id> --recur-snap-leeway 3` on a snapless rule exited 0
+        // having changed nothing — the very silent drop this flag exists to
+        // stop repeating.
+        let snap_leeway = if self.leeway.is_some() || self.clear_leeway {
             self.leeway
+        } else if snap.is_none() {
+            None
         } else {
             existing.as_ref().and_then(Recurrence::snap_leeway).cloned()
         };
@@ -2569,5 +2577,223 @@ mod tests {
                 date += Duration::days(1);
             }
         }
+    }
+
+    // ── SnapEdit: the policy `next edit` and MCP `update_task` share ────────
+
+    /// A completion rule with the given snap and leeway, as a stored task
+    /// would hold it.
+    fn stored(snap: Option<Snap>, leeway: Option<SnapLeeway>) -> Recurrence {
+        Recurrence::Completion {
+            interval_days: 30,
+            snap,
+            snap_leeway: leeway,
+        }
+    }
+
+    fn dom1() -> Snap {
+        Snap::DayOfMonth { day: 1 }
+    }
+
+    /// One edit run through the policy, described the way a surface spells it.
+    struct Case {
+        what: &'static str,
+        snap: Option<&'static str>,
+        clear_snap: bool,
+        leeway: Option<&'static str>,
+        clear_leeway: bool,
+        existing: Option<Recurrence>,
+        replacement: Option<Recurrence>,
+    }
+
+    /// The outcome of `case`, with `names` doing the talking — the rule it
+    /// leaves behind, or the message it refuses with.
+    fn outcome(case: &Case, names: SnapFlagNames) -> Result<Recurrence, String> {
+        SnapEdit::parse(
+            case.snap,
+            case.clear_snap,
+            case.leeway,
+            case.clear_leeway,
+            names,
+        )
+        .and_then(|edit| edit.apply(case.existing.clone(), case.replacement.clone()))
+        .map_err(|e| e.to_string())
+    }
+
+    /// An edit that asks for nothing, for the cases below to vary from.
+    fn base() -> Case {
+        Case {
+            what: "",
+            snap: None,
+            clear_snap: false,
+            leeway: None,
+            clear_leeway: false,
+            existing: None,
+            replacement: None,
+        }
+    }
+
+    fn edit_cases() -> Vec<Case> {
+        vec![
+            Case {
+                what: "a rule change carries the snap and its leeway",
+                existing: Some(stored(Some(dom1()), Some(leeway(3, Some(3))))),
+                replacement: Some(stored(None, None)),
+                ..base()
+            },
+            Case {
+                what: "a standalone leeway replaces only the leeway",
+                leeway: Some("5,0"),
+                existing: Some(stored(Some(dom1()), Some(leeway(3, Some(3))))),
+                ..base()
+            },
+            Case {
+                what: "clearing the snap takes the carried leeway with it",
+                clear_snap: true,
+                existing: Some(stored(Some(dom1()), Some(leeway(3, Some(3))))),
+                ..base()
+            },
+            Case {
+                what: "a leeway with no snap to qualify is V1",
+                leeway: Some("3"),
+                existing: Some(stored(None, None)),
+                ..base()
+            },
+            Case {
+                what: "clearing the snap while setting a leeway is V1 too",
+                clear_snap: true,
+                leeway: Some("5"),
+                existing: Some(stored(Some(dom1()), Some(leeway(3, Some(3))))),
+                ..base()
+            },
+            Case {
+                what: "a carried leeway is checked against the new interval",
+                existing: Some(stored(Some(dom1()), Some(leeway(3, Some(3))))),
+                replacement: Some(Recurrence::Completion {
+                    interval_days: 3,
+                    snap: None,
+                    snap_leeway: None,
+                }),
+                ..base()
+            },
+            Case {
+                what: "there is no rule to snap",
+                leeway: Some("3"),
+                ..base()
+            },
+            Case {
+                what: "the snap and its clear contradict",
+                snap: Some("dom:1"),
+                clear_snap: true,
+                existing: Some(stored(None, None)),
+                ..base()
+            },
+        ]
+    }
+
+    /// The two surfaces are the same policy in two vocabularies. Anything that
+    /// succeeds must succeed identically on both, and anything that fails must
+    /// fail on both — differing at most by the flag spellings, which is the one
+    /// thing `SnapFlagNames` is allowed to change.
+    ///
+    /// The duplicated copies of this policy are what let the leeway be silently
+    /// dropped on `edit` while `add` rejected it; this is the test that would
+    /// have caught the two drifting apart.
+    #[test]
+    fn both_surfaces_run_the_same_snap_edit_policy() {
+        for case in edit_cases() {
+            let cli = outcome(&case, CLI_SNAP_FLAGS);
+            let mcp = outcome(&case, MCP_SNAP_PARAMS);
+            match (cli, mcp) {
+                (Ok(cli), Ok(mcp)) => assert_eq!(cli, mcp, "{}", case.what),
+                (Err(cli), Err(mcp)) => {
+                    let translated = cli
+                        .replace("--clear-recur-snap-leeway", "clear_recur_snap_leeway")
+                        .replace("--recur-snap-leeway", "recur_snap_leeway")
+                        .replace("--clear-recur-snap", "clear_recur_snap")
+                        .replace("--recur-snap", "recur_snap")
+                        .replace("use --recur-schedule", "set recur_schedule")
+                        .replace("or --recur-completion", "or recur_completion");
+                    // V5 spells CLI flags on both surfaces on purpose, so a
+                    // translated message is allowed to be either form.
+                    assert!(
+                        translated == mcp || cli == mcp,
+                        "{}: CLI said {cli:?}, MCP said {mcp:?}",
+                        case.what
+                    );
+                }
+                (cli, mcp) => panic!("{}: CLI got {cli:?}, MCP got {mcp:?}", case.what),
+            }
+        }
+    }
+
+    /// V1 reaches the edit path, not just `add`. A requested leeway must
+    /// outlive the snap check that used to discard it, or nothing downstream
+    /// ever sees the value to complain about it.
+    #[test]
+    fn an_asked_for_leeway_survives_to_be_rejected() {
+        let case = Case {
+            what: "",
+            snap: None,
+            clear_snap: false,
+            leeway: Some("3"),
+            clear_leeway: false,
+            existing: Some(stored(None, None)),
+            replacement: None,
+        };
+        assert_eq!(
+            outcome(&case, CLI_SNAP_FLAGS),
+            Err(
+                "--recur-snap-leeway requires a snap; set --recur-snap first \
+                 (e.g. dom:1, monday, next-workday)"
+                    .to_owned()
+            )
+        );
+    }
+
+    /// Clearing a leeway on a snapless rule asks for nothing, so it stays the
+    /// no-op it has always been rather than becoming a V1 error.
+    #[test]
+    fn clearing_a_leeway_without_a_snap_is_not_an_error() {
+        let edit = SnapEdit::parse(None, false, None, true, CLI_SNAP_FLAGS).unwrap();
+        assert_eq!(
+            edit.apply(Some(stored(None, None)), None).unwrap(),
+            stored(None, None)
+        );
+    }
+
+    /// An edit that says nothing about the snap must not send the caller to
+    /// the store to find that out.
+    #[test]
+    fn an_empty_snap_edit_knows_it_is_empty() {
+        assert!(SnapEdit::parse(None, false, None, false, CLI_SNAP_FLAGS)
+            .unwrap()
+            .is_empty());
+        for edit in [
+            SnapEdit::parse(Some("dom:1"), false, None, false, CLI_SNAP_FLAGS).unwrap(),
+            SnapEdit::parse(None, true, None, false, CLI_SNAP_FLAGS).unwrap(),
+            SnapEdit::parse(None, false, Some("3"), false, CLI_SNAP_FLAGS).unwrap(),
+            SnapEdit::parse(None, false, None, true, CLI_SNAP_FLAGS).unwrap(),
+        ] {
+            assert!(!edit.is_empty(), "{edit:?} touches the snap");
+        }
+    }
+
+    /// An existing schedule keeps its anchor, or every edit would shift the
+    /// whole series; anything else falls back to what the task suggests.
+    #[test]
+    fn edit_anchor_keeps_an_existing_schedule_pinned() {
+        let anchored = Recurrence::Schedule {
+            rrule: "FREQ=WEEKLY".to_owned(),
+            anchor: d(2026, 1, 5),
+            snap: None,
+            snap_leeway: None,
+        };
+        assert_eq!(edit_anchor(Some(&anchored), d(2026, 5, 1)), d(2026, 1, 5));
+        assert_eq!(
+            edit_anchor(Some(&stored(None, None)), d(2026, 5, 1)),
+            d(2026, 5, 1)
+        );
+        assert_eq!(edit_anchor(None, d(2026, 5, 1)), d(2026, 5, 1));
     }
 }

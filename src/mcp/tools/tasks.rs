@@ -1170,6 +1170,54 @@ mod tests {
         );
     }
 
+    /// V1 on the edit path, MCP half: the rule exists, so the "make a rule
+    /// first" branch does not fire, and the assembled rule is valid — which
+    /// is exactly why the request used to be discarded in silence.
+    #[test]
+    fn update_task_recur_snap_leeway_needs_a_snap() {
+        let (_dir, mut ctx) = make_ctx();
+        let task = add_task(
+            &json!({ "title": "Water the plants", "recur_completion": 7 }),
+            &mut ctx,
+        )
+        .unwrap();
+        let id = task["id"].as_str().unwrap().to_owned();
+        assert!(task["recurrence"]["snap"].is_null());
+
+        let err =
+            update_task(&json!({ "id": id, "recur_snap_leeway": "3" }), &mut ctx).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--recur-snap-leeway requires a snap; set --recur-snap first \
+             (e.g. dom:1, monday, next-workday)"
+        );
+
+        let stored = get_task(&json!({ "id": id }), &mut ctx).unwrap();
+        assert!(
+            stored["recurrence"]["snap_leeway"].is_null(),
+            "a rejected edit must store nothing: {stored}"
+        );
+    }
+
+    /// Dropping the snap and setting a leeway in the same call leaves the
+    /// leeway nothing to qualify, so it is the same V1 mistake.
+    #[test]
+    fn update_task_cannot_clear_the_snap_and_set_a_leeway_at_once() {
+        let (_dir, mut ctx) = make_ctx();
+        let id = leeway_task(&mut ctx);
+
+        let err = update_task(
+            &json!({ "id": id, "clear_recur_snap": true, "recur_snap_leeway": "5" }),
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--recur-snap-leeway requires a snap; set --recur-snap first \
+             (e.g. dom:1, monday, next-workday)"
+        );
+    }
+
     /// A leeway edit that is not registered in `EDIT_PARAM_KEYS` is dropped on
     /// the floor whenever the call carries no other edit field.
     #[test]

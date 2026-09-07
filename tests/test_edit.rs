@@ -963,3 +963,108 @@ fn edit_recur_snap_leeway_without_recurrence_errors() {
         "unexpected error: {err}"
     );
 }
+
+/// V1 on the edit path, CLI half: the task *has* a rule, so the "make a rule
+/// first" branch never fires, and the rule the edit assembles is perfectly
+/// valid once the leeway has been dropped — which is why the request used to
+/// vanish with an exit status of 0 and nothing changed.
+#[test]
+fn edit_recur_snap_leeway_without_a_snap_errors() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            slug: Some("plants".to_owned()),
+            recur_completion: Some(7),
+            ..add_args("Water the plants")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let err = edit::run(
+        edit::Args {
+            recur_snap_leeway: Some("3".to_owned()),
+            ..base_edit("plants")
+        },
+        &mut env.ctx,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "--recur-snap-leeway requires a snap; set --recur-snap first \
+         (e.g. dom:1, monday, next-workday)"
+    );
+    assert_eq!(
+        recurrence_of(&mut env, "plants"),
+        Some(Recurrence::Completion {
+            interval_days: 7,
+            snap: None,
+            snap_leeway: None,
+        }),
+        "a rejected edit must leave the stored rule untouched"
+    );
+}
+
+/// The same mistake spelled with a rule change alongside it: the leeway still
+/// has no boundary to sit around, so the new interval must not be stored.
+#[test]
+fn edit_recur_snap_leeway_without_a_snap_errors_on_a_rule_change_too() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            slug: Some("plants-rule".to_owned()),
+            recur_completion: Some(7),
+            ..add_args("Water the plants")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let err = edit::run(
+        edit::Args {
+            recur_completion: Some(14),
+            recur_snap_leeway: Some("3".to_owned()),
+            ..base_edit("plants-rule")
+        },
+        &mut env.ctx,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "--recur-snap-leeway requires a snap; set --recur-snap first \
+         (e.g. dom:1, monday, next-workday)"
+    );
+    assert_eq!(
+        recurrence_of(&mut env, "plants-rule").map(|r| matches!(
+            r,
+            Recurrence::Completion {
+                interval_days: 7,
+                ..
+            }
+        )),
+        Some(true)
+    );
+}
+
+/// Dropping the snap and setting a leeway in the same command leaves the
+/// leeway nothing to qualify, so it is the same V1 mistake.
+#[test]
+fn edit_cannot_clear_the_snap_and_set_a_leeway_at_once() {
+    let mut env = common::setup();
+    let slug = add_leeway_task(&mut env, "rent-clear-and-set");
+
+    let err = edit::run(
+        edit::Args {
+            clear_recur_snap: true,
+            recur_snap_leeway: Some("5".to_owned()),
+            ..base_edit(&slug)
+        },
+        &mut env.ctx,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "--recur-snap-leeway requires a snap; set --recur-snap first \
+         (e.g. dom:1, monday, next-workday)"
+    );
+}
