@@ -1192,7 +1192,7 @@ Whole days only, each between 0 and 365. `0` means the corresponding direction n
 **The rule**, in the order it is applied:
 
 1. If the raw date already sits on a boundary, keep it.
-2. If a boundary is within `BACK` days *and* stays after the date the series stepped from, pull back to it.
+2. If a boundary is within `BACK` days, pull back to it. (For a completion rule it must also stay after the date you completed on; a schedule rule handles that further down, by discarding whole occurrences.)
 3. If a boundary is within `FORWARD` days, push forward to it.
 4. If both are in range, the nearer wins; a tie goes forward.
 5. If neither is in range, keep the raw date.
@@ -1226,7 +1226,9 @@ A weekend date that simply stands is the rule working as designed — no boundar
 | Malformed | `invalid snap leeway "3,-1" — expected N or BACK,FORWARD in whole days (e.g. 3 or 5,0)` |
 | Set and clear together | `--recur-snap-leeway and --clear-recur-snap-leeway are mutually exclusive` |
 
-The backward bound applies to completion rules, where the interval is known. A schedule rule has no static period to compare against, so it is guarded at computation time instead: a backward pull that would reach the date the series stepped from is discarded and the forward boundary or the raw date is used.
+The backward bound applies to completion rules, where the interval is known. A schedule rule has no static period to compare against, so it is guarded differently: the RRULE's occurrences are snapped one by one and the first date that lands strictly *after* the current instance's is the one used. An occurrence that a backward pull moves onto a date already held is stepped over, not spawned again — so a weekly rule spawns once a week however wide the tolerance, and the pull can only ever shorten a single cycle.
+
+The same walk drives `next forecast`, so what the forecast shows for a schedule series is what `next done` will really spawn.
 
 ```sh
 # The rent fix, end to end

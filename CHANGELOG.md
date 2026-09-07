@@ -61,6 +61,12 @@
   `add_task` / `update_task` tools and the TUI edit form, and is stored as a
   `[recurrence.snap_leeway]` table beside `[recurrence.snap]`.
 
+  On a schedule (`RRULE`) rule each occurrence is spent once. A backward
+  tolerance can pull a Monday onto the Friday before it, and the next `next
+  done` steps over that Monday rather than offering it again, so a weekly rule
+  still fires weekly however wide the tolerance. `next forecast` walks the same
+  series, so what it shows is what `next done` will produce.
+
 - **Five recurrence fixes that the leeway work depended on**, each a bug in its
   own right. The changelog has been silent about recurrence entirely up to now,
   so they are worth stating rather than folding into the entry above.

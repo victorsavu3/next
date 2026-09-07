@@ -427,10 +427,25 @@ rule is built, not left to stall silently after the fact.
 ### 7.2 Schedule-based
 
 1. Current task is marked `done`
-2. `after = max(task.due, task.start, today)` — never re-uses a date already passed
-3. The RRULE is evaluated from `anchor` to find the first occurrence strictly after `after`
-4. If a snap is set, the resulting date is moved to a boundary as far as the snap leeway allows (§7.4)
+2. `current = max(task.due, task.start, today)` — never re-uses a date already passed
+3. The RRULE is evaluated from `anchor` to enumerate raw occurrences, and each raw
+   occurrence is moved to a boundary as far as the snap leeway allows (§7.4)
+4. The first occurrence whose **snapped** date is strictly after `current` is the new date
 5. If the original task has both `start` and `due`, the same offset is applied to the new occurrence
+
+Step 4 MUST test the snapped date, not the raw one. The task stores only its snapped date,
+so the raw occurrence it was made from is not recoverable from the store; a backward leeway
+can therefore pull an occurrence to a date at or before the raw occurrence itself, and a
+walk that resumed at the stored date would re-find that same occurrence and spawn it a
+second time — a weekly rule firing twice a week. Stepping over every occurrence whose
+snapped date fails to beat `current` is what makes each raw occurrence spawn exactly one
+instance.
+
+The walk MUST therefore begin *before* `current`, far enough back that no occurrence whose
+snapped date could still be in the future is missed: `min(leeway.forward, the snap's own
+period)` days, which is zero whenever `leeway.back` is zero. That zero is load-bearing —
+with an absent leeway the walk reduces to a single "first occurrence after `current`, then
+snap" step, which is exactly the pre-leeway rule.
 
 The `anchor` is set once (on `next add`) to the task's `start` or `due` date, falling back to today. All future instances carry the same `anchor` so INTERVAL calculations stay aligned.
 
@@ -459,9 +474,10 @@ however far away that is, so completing a 30-day task with a `dom:1` snap one da
 pushes the next instance a full month out and doubles the realised period. `snap_leeway`
 turns the boundary into a tolerance.
 
-Given the raw date, the snap, the leeway, and `floor` — the date the raw was computed from
-(the completion date for a completion rule, the `after` bound for a schedule rule) — the
-result MUST be determined as follows:
+Given the raw date, the snap, the leeway, and `floor` — the date the raw was computed from,
+which is the completion date for a completion rule and is *absent* for a schedule rule
+(§7.2 bounds that arm by discarding whole occurrences instead, which is strictly stronger)
+— the result MUST be determined as follows:
 
 1. If the raw date already sits on a boundary, it is returned unchanged.
 2. Otherwise let `back` be the greatest boundary `<= raw` and `fwd` the least boundary
@@ -477,12 +493,18 @@ The `back > floor` guard MUST be enforced at computation time, so that a hand-ed
 git-merged rule cannot produce an instance due on or before the one just completed. The
 forward candidate and the raw date are always `> floor`, so the chain is total.
 
+For a schedule rule the snapped date MUST be a pure function of the raw occurrence, with no
+floor. That purity is what lets §7.2 and §7.5 recompute the snapped series from the rule
+alone, which is the only way the two can agree without the store keeping a per-instance raw
+date. Nothing is lost: both walks discard every occurrence that does not land strictly
+after the date they are stepping from, which is the guarantee the floor was there to give.
+
 With `back = 0, forward = unbounded` this MUST reproduce the pre-leeway rule exactly:
 the backward branch requires `raw - back <= 0`, which step 1 has already returned on.
 
 **Validation.** A leeway MUST be rejected when it has no snap to qualify; when its `back`
 is not strictly less than a completion rule's `interval_days` (a schedule rule has no
-static period, so the `back > floor` guard carries it alone); when either number falls
+static period, so §7.2's "must beat the current date" test carries it alone); when either number falls
 outside 0–365; when the spec string is not `N` or `BACK,FORWARD` in whole days; and when a
 set and a clear are requested together. These checks MUST live where every surface builds
 a rule, so the CLI, MCP and TUI report them identically.
@@ -506,7 +528,10 @@ tasks (a `(projected)` marker in text output; a `projected: true` flag in `--jso
 
 - **Schedule-type**: the RRULE is evaluated repeatedly (`next_occurrence`) to enumerate
   the raw series, and any snap is applied to each emitted date. The walk steps on the raw
-  date, because the RRULE defines the series and the snap is a transform over it.
+  date, because the RRULE defines the series and the snap is a transform over it — but it
+  MUST emit a date only when that date beats the one it emitted last, exactly as §7.2 step
+  4 does. Otherwise a backward leeway makes the forecast report the occurrences §7.2 steps
+  over, and a monthly series is forecast twice a month.
 - **Completion-type**: future completion dates are unknown, so the projection assumes each
   instance is completed on its due date — a best case, not a prediction. The next date is
   therefore `previous_due + interval_days`, snapped. The walk MUST step from the *snapped*
@@ -517,6 +542,11 @@ tasks (a `(projected)` marker in text output; a `projected: true` flag in `--jso
 The returned dates MUST be strictly increasing: when a snap lands several raw occurrences
 on the same boundary, that boundary is reported once. A single series MUST NOT contribute
 more than a bounded number of dates, so one daily rule cannot fill a long forecast alone.
+
+**The invariant over both bullets**: for a punctual user — one who completes every instance
+on its due date, which is what the projection assumes — the projected dates MUST equal the
+dates `next done` really spawns, for both recurrence types and with or without a leeway. A
+forecast that disagrees with the spawner is worse than no forecast.
 
 Done/cancelled recurring tasks are not projected. Non-recurring tasks with a due date
 within the horizon appear unchanged.
