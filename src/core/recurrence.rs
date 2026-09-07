@@ -165,6 +165,23 @@ impl Snap {
         }
     }
 
+    /// The furthest [`Snap::next_boundary`] or [`Snap::prev_boundary`] can move
+    /// a date, in days.
+    ///
+    /// A leeway wider than this is indistinguishable from one exactly this
+    /// wide, which is what lets [`schedule_lookback`] bound its walk however
+    /// large a number the user typed. `DayOfMonth` is bounded by two whole
+    /// months rather than one: both boundary functions look in the current
+    /// month and then in exactly one neighbouring month, and a hand-edited
+    /// `dom:31` can miss the near one entirely.
+    fn max_shift(&self) -> u16 {
+        match self {
+            Snap::NextWeekday { .. } => 6,
+            Snap::NextWorkday => 2,
+            Snap::DayOfMonth { .. } => 62,
+        }
+    }
+
     /// The greatest qualifying date `<= date`. The mirror of [`Snap::next_boundary`].
     pub fn prev_boundary(&self, date: NaiveDate) -> NaiveDate {
         match self {
@@ -651,6 +668,89 @@ pub fn next_occurrence(
         .ok_or_else(|| anyhow::anyhow!("RRULE has no occurrence after {after}"))
 }
 
+// ─── the snapped schedule series ────────────────────────────────────────────
+
+/// The date a schedule occurrence is due on.
+///
+/// Unlike the completion arm this is a *pure function of the raw occurrence*:
+/// there is no floor, because the RRULE — not the instance last spawned —
+/// defines where the series steps next. That purity is the whole fix for the
+/// double-spawn: it makes the snapped schedule series recomputable from the
+/// rule alone, so [`next_schedule_occurrence`] and [`project_series`] can walk
+/// the same series without either of them having to remember the raw
+/// occurrence a stored task was made from (the store does not keep it).
+///
+/// Dropping the floor costs nothing that the floor was buying. It existed to
+/// stop a backward pull landing on or before the date the series stepped from;
+/// here the callers enforce something stricter, discarding every occurrence
+/// that does not land strictly *after* that date.
+///
+/// With [`SnapLeeway::DEFAULT`] — an absent leeway — this is [`apply_snap`],
+/// since a zero backward tolerance never consults the floor either way.
+fn snap_schedule(raw: NaiveDate, snap: Option<&Snap>, leeway: &SnapLeeway) -> NaiveDate {
+    // `NaiveDate::MIN` is a floor no boundary can breach, so `snap_with_leeway`
+    // decides on the tolerances alone.
+    snap.map_or(raw, |s| snap_with_leeway(raw, s, leeway, NaiveDate::MIN))
+}
+
+/// How many days before the current instance the raw walk has to start.
+///
+/// A snap moves a date forward by at most `leeway.forward`, and never further
+/// than the snap's own period, so a raw occurrence more than that far before
+/// the current date cannot map to anything after it. Starting there is what
+/// lets the walk re-examine — and step over — the occurrence the current
+/// instance was itself made from.
+///
+/// `back = 0` needs no lookback at all, and must not have one: a forward-only
+/// snap can only ever have carried an earlier raw occurrence *past* the current
+/// date, and the pre-leeway rule has always let those be swallowed. Keeping the
+/// lookback at zero there is what makes the walk reduce to a single
+/// `next_occurrence` call, exactly as before this function existed.
+fn schedule_lookback(snap: Option<&Snap>, leeway: &SnapLeeway) -> i64 {
+    let Some(snap) = snap else { return 0 };
+    if leeway.back == 0 {
+        return 0;
+    }
+    i64::from(leeway.forward.unwrap_or(u16::MAX).min(snap.max_shift()))
+}
+
+/// The date a schedule series is next due on after `current`.
+///
+/// Walks the raw RRULE series from [`schedule_lookback`] days before `current`
+/// and returns the first occurrence whose *snapped* date is strictly later.
+/// Testing the snapped date is what stops a backward leeway spawning the same
+/// occurrence twice: the raw occurrence the current instance was pulled back
+/// from maps to `current` itself, which is not `> current`, so it is stepped
+/// over rather than emitted again.
+///
+/// Returns `None` when the rule is exhausted (`UNTIL`/`COUNT`).
+///
+/// The walk is short by construction. It stops as soon as `raw` clears
+/// `current` by more than the snap can pull back — at most 62 days — and it
+/// started at most 62 days early, so it visits the occurrences of a window
+/// under four months wide, one per day at the very most.
+fn next_schedule_occurrence(
+    rrule: &str,
+    anchor: NaiveDate,
+    snap: Option<&Snap>,
+    leeway: &SnapLeeway,
+    current: NaiveDate,
+) -> Option<NaiveDate> {
+    let mut after = current - Duration::days(schedule_lookback(snap, leeway));
+    // The bound is a backstop for a rule no parser would accept, never reached
+    // by the ~130 steps the argument above allows.
+    for _ in 0..MAX_SERIES_STEPS {
+        let raw = next_occurrence(rrule, anchor, after).ok()?;
+        let occurrence = snap_schedule(raw, snap, leeway);
+        if occurrence > current {
+            return Some(occurrence);
+        }
+        // `next_occurrence` guarantees `raw > after`, so the walk advances.
+        after = raw;
+    }
+    None
+}
+
 // ─── project_series ──────────────────────────────────────────────────────────
 
 /// Hard cap on the number of dates a single series contributes to a forecast.
@@ -679,18 +779,15 @@ const MAX_SERIES_STEPS: usize = 10_000;
 /// Snapping maps whole runs of raw dates onto the same boundary — a daily rule
 /// snapped to Monday hits that Monday five times over — and a forecast wants
 /// each date once. Comparing against the last entry removes exactly what
-/// `Vec::dedup` would remove at the end of the walk, because both walks emit a
+/// `Vec::dedup` would remove at the end of the walk, because the walk emits a
 /// non-decreasing series. Doing it as dates are added is what lets
 /// [`MAX_PROJECTED_PER_SERIES`] count emitted dates rather than raw steps.
 ///
-/// Leeway does not cost us that ordering, even though it can now pull a date
-/// *backward*. The completion walk steps from what it emitted, so it is
-/// strictly increasing by construction. In the schedule walk each step's floor
-/// is the previous raw date, so a backward pull can only reach a boundary
-/// *above* that date — and any such boundary is at or after the forward
-/// boundary the previous step could have chosen. Either way the result never
-/// goes below its predecessor. `snap_is_monotone_over_the_sweep` checks the
-/// underlying property directly.
+/// Only the completion walk needs this. It steps from the date it emitted, so
+/// it is non-decreasing by construction, and leeway does not cost it that
+/// ordering even though a backward pull can now shorten a step. The schedule
+/// walk keeps its own `prev` and skips anything that fails to beat it, which
+/// deduplicates and orders in one test.
 fn push_deduped(dates: &mut Vec<NaiveDate>, date: NaiveDate) {
     if dates.last() != Some(&date) {
         dates.push(date);
@@ -739,11 +836,16 @@ pub fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<N
             snap,
             ..
         }) => {
-            // Walk the raw (un-snapped) series so each call strictly advances;
-            // snap is applied only to the emitted date. The RRULE *defines* the
-            // raw series here, so snapping is a display transform over it — the
-            // completion branch below is the one that has to walk what it emits.
-            let mut after = base;
+            // Step on the raw date, because the RRULE defines the series and
+            // the snap is a transform over it — but emit only what `spawn_next`
+            // would emit. `spawn_next` takes the first occurrence whose snapped
+            // date beats the one it is stepping from, so this walk carries the
+            // same `prev` and skips everything that does not beat it. Without
+            // that skip the forecast reports the raw occurrences a backward
+            // leeway pulls onto a date already held, and shows a monthly series
+            // twice a month.
+            let mut prev = base;
+            let mut after = base - Duration::days(schedule_lookback(snap.as_ref(), leeway));
             let mut dates = Vec::new();
             for _ in 0..MAX_SERIES_STEPS {
                 if dates.len() >= MAX_PROJECTED_PER_SERIES {
@@ -754,17 +856,19 @@ pub fn project_series(task: &Task, today: NaiveDate, cutoff: NaiveDate) -> Vec<N
                     Err(_) => break,
                 };
                 // `next_occurrence` guarantees raw > after, so the walk terminates.
-                let occurrence = snap
-                    .as_ref()
-                    .map_or(raw, |s| snap_with_leeway(raw, s, leeway, after));
                 after = raw;
+                let occurrence = snap_schedule(raw, snap.as_ref(), leeway);
+                // Skipping on `prev` subsumes both the "strictly future" filter
+                // — `base >= today` — and the deduplication a collapsing snap
+                // needs, so the emitted dates are strictly increasing.
+                if occurrence <= prev {
+                    continue;
+                }
                 if occurrence > cutoff {
                     break;
                 }
-                // Snapping can move a date backwards; only keep strictly-future dates.
-                if occurrence > today {
-                    push_deduped(&mut dates, occurrence);
-                }
+                prev = occurrence;
+                dates.push(occurrence);
             }
             dates
         }
@@ -820,19 +924,6 @@ pub fn spawn_next(task: &Task, today: NaiveDate) -> anyhow::Result<Option<Task>>
         None => return Ok(None),
     };
 
-    // For fixed schedule, don't go back before the current task's due/start date.
-    let after = match recurrence {
-        Recurrence::Schedule { .. } => [task.due, task.start, Some(today)]
-            .iter()
-            .filter_map(|d| *d)
-            .max()
-            .unwrap_or(today),
-        Recurrence::Completion { .. } => today,
-    };
-
-    // `after` is also the floor the snap may not pull the new date back to or
-    // past: for a completion rule it is the completion date, for a schedule
-    // rule the current instance's own date.
     let leeway = recurrence.effective_snap_leeway();
 
     let occurrence = match recurrence {
@@ -842,23 +933,30 @@ pub fn spawn_next(task: &Task, today: NaiveDate) -> anyhow::Result<Option<Task>>
             snap,
             ..
         } => {
-            // A "no occurrence" error means the rule is exhausted (UNTIL/COUNT),
-            // not a programming error — treat as "nothing to spawn".
-            let raw = match next_occurrence(rrule, *anchor, after) {
-                Ok(d) => d,
-                Err(_) => return Ok(None),
-            };
-            snap.as_ref()
-                .map_or(raw, |s| snap_with_leeway(raw, s, leeway, after))
+            // The date the series is stepping from: never re-use one already
+            // passed, and never land on or before the instance being completed.
+            let current = [task.due, task.start, Some(today)]
+                .iter()
+                .filter_map(|d| *d)
+                .max()
+                .unwrap_or(today);
+            // `None` means the rule is exhausted (UNTIL/COUNT), not a
+            // programming error — treat it as "nothing to spawn".
+            match next_schedule_occurrence(rrule, *anchor, snap.as_ref(), leeway, current) {
+                Some(d) => d,
+                None => return Ok(None),
+            }
         }
         Recurrence::Completion {
             interval_days,
             snap,
             ..
         } => {
+            // Here the completion date is both the base and the floor the snap
+            // may not pull the new date back to or past.
             let raw = today + Duration::days(*interval_days as i64);
             snap.as_ref()
-                .map_or(raw, |s| snap_with_leeway(raw, s, leeway, after))
+                .map_or(raw, |s| snap_with_leeway(raw, s, leeway, today))
         }
     };
 
@@ -2163,6 +2261,42 @@ mod tests {
         task
     }
 
+    /// A schedule-based task with a snap and an optional leeway, due on `due`.
+    fn schedule_task(
+        rrule: &str,
+        anchor: NaiveDate,
+        snap: Snap,
+        lee: Option<SnapLeeway>,
+        due: NaiveDate,
+    ) -> Task {
+        let mut task = Task::new("Weekly review");
+        task.due = Some(due);
+        task.recurrence = Some(Recurrence::Schedule {
+            rrule: rrule.into(),
+            anchor,
+            snap: Some(snap),
+            snap_leeway: lee,
+        });
+        task
+    }
+
+    /// Drives a series through `spawn_next` for real, completing every instance
+    /// on its own due date, and returns the dates spawned in order.
+    fn drive(task: &Task, rounds: usize) -> Vec<NaiveDate> {
+        let mut task = task.clone();
+        let mut due = task.due.expect("the driver needs a due date to step from");
+        let mut spawned = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let next = spawn_next(&task, due)
+                .unwrap()
+                .expect("the rule should not be exhausted");
+            due = next.due.unwrap();
+            spawned.push(due);
+            task = next;
+        }
+        spawned
+    }
+
     #[test]
     fn parse_snap_leeway_accepts_both_spellings() {
         assert_eq!(parse_snap_leeway("3").unwrap(), leeway(3, Some(3)));
@@ -2483,18 +2617,220 @@ mod tests {
         let spawned = spawn_next(&task, d(2026, 6, 25)).unwrap().unwrap();
         assert_eq!(spawned.due, Some(d(2026, 7, 1)), "within two days → snaps");
 
-        task.due = Some(d(2026, 6, 29));
-        let spawned = spawn_next(&task, d(2026, 6, 29)).unwrap().unwrap();
+        // Carry the instance it really spawned, not an invented one: Jul 1 is
+        // the date the Monday Jun 29 maps to, so the next spawn must step over
+        // that Monday rather than snap it a second time.
+        task = spawned;
+        let spawned = spawn_next(&task, d(2026, 7, 1)).unwrap().unwrap();
         assert_eq!(
             spawned.due,
             Some(d(2026, 7, 6)),
             "five days from a boundary → the raw Monday stands"
         );
 
+        // The backward branch, which the forward cases above never reach:
+        // Nov 1 2026 is a Sunday, so the Monday Nov 2 is one day past a
+        // boundary and is pulled back onto it.
+        task.due = Some(d(2026, 10, 26)); // a Monday, on no boundary
+        let spawned = spawn_next(&task, d(2026, 10, 26)).unwrap().unwrap();
+        assert_eq!(
+            spawned.due,
+            Some(d(2026, 11, 1)),
+            "one day past a boundary → pulled back"
+        );
+
+        // …and the Monday that was pulled back is spent. Re-finding it here is
+        // exactly the double-spawn this arm used to suffer.
+        task = spawned;
+        let spawned = spawn_next(&task, d(2026, 11, 1)).unwrap().unwrap();
+        assert_eq!(
+            spawned.due,
+            Some(d(2026, 11, 9)),
+            "the pulled-back Monday must not be spawned again"
+        );
+
         // The anchor is carried unchanged, so INTERVAL parity is untouched.
         match spawned.recurrence {
             Some(Recurrence::Schedule { anchor: a, .. }) => assert_eq!(a, anchor),
             other => panic!("expected a schedule rule, got {other:?}"),
+        }
+    }
+
+    /// T1, for the schedule arm: the walk that fixes the double-spawn must
+    /// still return, date for date, what the single pre-leeway
+    /// `next_occurrence` + `apply_snap` call returned. An absent leeway has
+    /// `back = 0`, which leaves the walk no lookback and no reason to step
+    /// past its first occurrence.
+    #[test]
+    fn absent_leeway_spawns_the_pre_leeway_schedule_date() {
+        let rrules = [
+            "FREQ=DAILY",
+            "FREQ=WEEKLY;BYDAY=MO",
+            "FREQ=WEEKLY;INTERVAL=2;BYDAY=TU,TH",
+            "FREQ=MONTHLY;BYMONTHDAY=15",
+            "FREQ=MONTHLY;BYMONTHDAY=1,20",
+            "FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=15",
+        ];
+        let anchor = d(2026, 1, 1);
+
+        let mut cases = 0usize;
+        for rrule in rrules {
+            for snap in every_snap() {
+                // Jan–Mar covers a 31-, a 28- and a 31-day month, which is the
+                // variety `dom:N` needs; a longer sweep only costs time.
+                let mut current = d(2026, 1, 1);
+                while current < d(2026, 4, 1) {
+                    let task = schedule_task(rrule, anchor, snap.clone(), None, current);
+                    let got = spawn_next(&task, current).unwrap().unwrap().due.unwrap();
+                    let want = apply_snap(next_occurrence(rrule, anchor, current).unwrap(), &snap);
+                    assert_eq!(
+                        got, want,
+                        "{rrule} / {snap:?} from {current}: walk gave {got}, \
+                         the pre-leeway rule gave {want}"
+                    );
+                    cases += 1;
+                    current += Duration::days(1);
+                }
+            }
+        }
+        assert_eq!(cases, rrules.len() * 36 * 90);
+    }
+
+    /// T8b — the bug T8 alone did not catch: a schedule series driven for real
+    /// must keep the period its RRULE states, whatever the leeway allows.
+    ///
+    /// `FREQ=WEEKLY;BYDAY=MO` snapped to Friday spawns a Friday a week apart
+    /// under every leeway shape. Before the raw walk was made to skip
+    /// occurrences that map onto the date already held, a backward leeway
+    /// re-found the Monday it had just pulled back from and spawned it a second
+    /// time, so twelve spawns spanned 39 days instead of 77 and the gaps ran
+    /// 4, 3, 4, 3 …
+    #[test]
+    fn schedule_cadence_holds_for_every_leeway_shape() {
+        let anchor = d(2026, 5, 4); // Monday
+        let shapes = [
+            ("unset", None),
+            ("0,3", Some(leeway(0, Some(3)))),
+            ("3,0", Some(leeway(3, Some(0)))),
+            ("3,3", Some(leeway(3, Some(3)))),
+        ];
+
+        for (name, lee) in shapes {
+            let task = schedule_task(
+                "FREQ=WEEKLY;BYDAY=MO",
+                anchor,
+                Snap::NextWeekday { weekday: 4 }, // Friday
+                lee,
+                d(2026, 5, 8),
+            );
+            let spawned = drive(&task, 12);
+
+            let gaps: Vec<i64> = spawned
+                .windows(2)
+                .map(|w| (w[1] - w[0]).num_days())
+                .collect();
+            assert!(
+                gaps.iter().all(|g| *g == 7),
+                "leeway {name}: a weekly rule spawned {gaps:?} — {spawned:?}"
+            );
+            assert_eq!(
+                (spawned[11] - spawned[0]).num_days(),
+                77,
+                "leeway {name}: twelve weekly spawns must span 77 days, got {spawned:?}"
+            );
+        }
+    }
+
+    /// T8c — the same property at a monthly period, where a backward pull
+    /// crosses a month boundary and the raw series is sparse.
+    #[test]
+    fn monthly_schedule_cadence_holds_under_a_backward_leeway() {
+        let anchor = d(2026, 6, 15); // Monday
+        let task = schedule_task(
+            "FREQ=MONTHLY;BYMONTHDAY=15",
+            anchor,
+            Snap::NextWeekday { weekday: 0 }, // Monday
+            Some(leeway(3, Some(3))),
+            anchor,
+        );
+        let spawned = drive(&task, 10);
+        assert_eq!(
+            spawned,
+            vec![
+                d(2026, 7, 13),
+                d(2026, 8, 17),
+                d(2026, 9, 14),
+                d(2026, 10, 12),
+                d(2026, 11, 16),
+                d(2026, 12, 14),
+                d(2027, 1, 18),
+                d(2027, 2, 15),
+                d(2027, 3, 15),
+                d(2027, 4, 12),
+            ],
+            "one Monday per month, never two for the same 15th"
+        );
+        assert!(
+            spawned.windows(2).all(|w| (w[1] - w[0]).num_days() >= 25),
+            "a monthly rule must not spawn twice within a month: {spawned:?}"
+        );
+    }
+
+    /// T12b — D9's invariant, now for the schedule arm: the forecast must
+    /// predict the dates `spawn_next` really produces, leeway or not.
+    #[test]
+    fn schedule_projection_agrees_with_spawning() {
+        let cutoff = d(2027, 6, 1);
+        let cases: [(&str, NaiveDate, Snap, Option<SnapLeeway>); 5] = [
+            (
+                "FREQ=MONTHLY;BYMONTHDAY=15",
+                d(2026, 6, 15),
+                Snap::NextWeekday { weekday: 0 },
+                Some(leeway(3, Some(3))),
+            ),
+            (
+                "FREQ=MONTHLY;BYMONTHDAY=15",
+                d(2026, 6, 15),
+                Snap::NextWeekday { weekday: 0 },
+                None,
+            ),
+            (
+                "FREQ=WEEKLY;BYDAY=MO",
+                d(2026, 5, 4),
+                Snap::NextWeekday { weekday: 4 },
+                Some(leeway(3, Some(3))),
+            ),
+            (
+                "FREQ=WEEKLY;BYDAY=MO",
+                d(2026, 5, 4),
+                Snap::NextWeekday { weekday: 4 },
+                Some(leeway(2, Some(0))),
+            ),
+            (
+                "FREQ=MONTHLY;BYMONTHDAY=1",
+                d(2026, 6, 1),
+                Snap::NextWorkday,
+                Some(leeway(2, Some(2))),
+            ),
+        ];
+
+        for (rrule, anchor, snap, lee) in cases {
+            let label = format!("{rrule} / {snap:?} / {lee:?}");
+            let task = schedule_task(rrule, anchor, snap, lee, anchor);
+            let projected = project_series(&task, anchor, cutoff);
+            assert!(
+                projected.len() >= 5,
+                "{label}: the case needs a few dates to compare, got {projected:?}"
+            );
+
+            let spawned: Vec<NaiveDate> = drive(&task, projected.len() + 2)
+                .into_iter()
+                .take_while(|d| *d <= cutoff)
+                .collect();
+            assert_eq!(
+                projected, spawned,
+                "{label}: the forecast must match what spawning produces"
+            );
         }
     }
 
