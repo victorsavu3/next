@@ -245,12 +245,16 @@ next add "Pay rent" --slug rent --due 2026-06-01 \
 The last row is the point: with a leeway of 3 the 1st is out of reach, so the date stays
 on the 15th. Off the boundary, but on cadence — which is usually what you wanted.
 
-Use `N` for both directions or `BACK,FORWARD` for each, in whole days:
+Use `N` for both directions or `BACK,FORWARD` for each, in whole days. A `*` in the
+forward slot means "as far as it takes", which is what a snap does with no leeway at all:
 
 ```sh
 next add "Weekly review" --recur-completion 7 --recur-snap monday --recur-snap-leeway 2
 next edit rent --recur-snap-leeway 5,0   # pull back up to 5 days, never push later
+next edit rent --recur-snap-leeway '5,*' # pull back up to 5 days, push later however far
 ```
+
+Quote the `*` — it is a spec character, not a shell glob.
 
 Leaving the flag off keeps the original forward-only behaviour, so nothing you already
 have changes. `next add` prints a hint when you set a snap without one.

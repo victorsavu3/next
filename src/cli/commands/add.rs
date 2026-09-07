@@ -68,7 +68,7 @@ pub struct Args {
     #[arg(long)]
     pub recur_snap: Option<String>,
 
-    /// N (both directions) or BACK,FORWARD. Days.
+    /// N (both directions), BACK,FORWARD, or BACK,* for unbounded forward. Days.
     #[arg(long)]
     pub recur_snap_leeway: Option<String>,
 

@@ -962,7 +962,7 @@ mod edit_modal {
                     Style::default().add_modifier(Modifier::DIM),
                 )));
                 lines.push(Line::from(Span::styled(
-                    "Leeway: blank (never earlier, always later), N, or BACK,FORWARD",
+                    "Leeway: blank (never earlier, always later), N, BACK,FORWARD or BACK,*",
                     Style::default().add_modifier(Modifier::DIM),
                 )));
             }

@@ -306,6 +306,33 @@ fn add_stores_the_snap_leeway() {
     );
 }
 
+/// The `BACK,*` spelling, end to end: it must reach the store as an *omitted*
+/// forward bound, since that omission is what the on-disk format uses for
+/// "unbounded" and what the TUI edit form has to be able to render back.
+#[test]
+fn add_stores_an_unbounded_forward_leeway() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            recur_completion: Some(30),
+            recur_snap: Some("dom:1".to_owned()),
+            recur_snap_leeway: Some("5,*".to_owned()),
+            ..args("Pay the rent")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let task = env.ctx.repo.store.list_tasks().unwrap().remove(0);
+    assert_eq!(
+        task.recurrence.as_ref().and_then(Recurrence::snap_leeway),
+        Some(&SnapLeeway {
+            back: 5,
+            forward: None
+        })
+    );
+}
+
 /// T13, CLI half: `add` reaches the shared checks, so the message a user sees
 /// is the one `parse_recurrence` was tested on — verbatim, not paraphrased.
 #[test]

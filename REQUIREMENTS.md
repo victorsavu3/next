@@ -505,9 +505,22 @@ the backward branch requires `raw - back <= 0`, which step 1 has already returne
 **Validation.** A leeway MUST be rejected when it has no snap to qualify; when its `back`
 is not strictly less than a completion rule's `interval_days` (a schedule rule has no
 static period, so §7.2's "must beat the current date" test carries it alone); when either number falls
-outside 0–365; when the spec string is not `N` or `BACK,FORWARD` in whole days; and when a
-set and a clear are requested together. These checks MUST live where every surface builds
-a rule, so the CLI, MCP and TUI report them identically.
+outside 0–365; when the spec string is not `N`, `BACK,FORWARD` or `BACK,*` in whole days;
+and when a set and a clear are requested together. These checks MUST live where every
+surface builds a rule, so the CLI, MCP and TUI report them identically.
+
+**The spec grammar.** `N` sets both directions, `BACK,FORWARD` sets them independently,
+and `BACK,*` leaves `forward` unbounded. `*` MUST be accepted in the forward position
+only: `back` has no unbounded value to hold.
+
+The grammar MUST be able to spell **every** leeway the file format admits, and rendering a
+stored leeway into it MUST round-trip — for all `back` in 0–365 and every `forward`,
+present or absent, parsing the rendering MUST give back the stored value. This is a
+correctness requirement, not a convenience: the TUI edit form seeds its Leeway row from
+that rendering and passes the row's text straight back to the rule builder, so a shape the
+grammar cannot spell would be silently rewritten by opening a task and saving it
+untouched. `*` exists for the one such shape, an omitted `forward`, which §5's on-disk
+format explicitly supports.
 
 **Clearing.** Clearing the snap MUST clear the leeway with it. Clearing the leeway alone
 MUST restore the default rather than setting `0,0`.
@@ -601,7 +614,7 @@ next add <title> [options]
 | `--recur-schedule <rule>` | Creates a schedule-based recurring task; `rule` is an RRULE string |
 | `--recur-completion <days>` | Creates a completion-based recurring task; the interval MUST be >= 1 |
 | `--recur-snap <snap>` | Optional snap applied after the next-date computation; see §7.3 |
-| `--recur-snap-leeway <spec>` | Optional tolerance around that snap: `N` or `BACK,FORWARD`, whole days 0–365; see §7.4. Requires `--recur-snap` |
+| `--recur-snap-leeway <spec>` | Optional tolerance around that snap: `N`, `BACK,FORWARD` or `BACK,*`, whole days 0–365; see §7.4. Requires `--recur-snap` |
 | `--long-term` | Sets `long_term = true` |
 | `--adjust <float>` | Sets `score_adjustment` |
 | `--assignee <name>` | Sets `assignee` |

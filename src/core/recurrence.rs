@@ -48,14 +48,24 @@ pub fn parse_snap(s: &str) -> anyhow::Result<Snap> {
 /// [`snap_with_leeway`] nowhere near an overflow.
 pub const MAX_SNAP_LEEWAY_DAYS: u16 = 365;
 
+/// The spelling of an unbounded forward bound in a leeway spec.
+///
+/// Only the forward half accepts it: `back` is a `u16` with no way to say
+/// "unbounded", and an unbounded backward pull is not a tolerance anyway.
+const UNBOUNDED_FORWARD: &str = "*";
+
 /// Parse a CLI snap-leeway string into a [`SnapLeeway`].
 ///
-/// `N` sets both directions; `BACK,FORWARD` sets them independently. Days
-/// only — a tolerance finer than the dates it applies to has nothing to mean.
+/// `N` sets both directions; `BACK,FORWARD` sets them independently, and
+/// `BACK,*` leaves the forward direction unbounded — the pre-leeway behaviour,
+/// kept spellable so every leeway the on-disk format allows has a spec string
+/// (see [`snap_leeway_to_str`]). Days only — a tolerance finer than the dates
+/// it applies to has nothing to mean.
 pub fn parse_snap_leeway(s: &str) -> anyhow::Result<SnapLeeway> {
     let malformed = || {
         anyhow::anyhow!(
-            "invalid snap leeway {s:?} — expected N or BACK,FORWARD in whole days (e.g. 3 or 5,0)"
+            "invalid snap leeway {s:?} — expected N, BACK,FORWARD or BACK,* \
+             in whole days (e.g. 3, 5,0 or 5,*)"
         )
     };
     // Bound each number before it is a `u16`, so an out-of-range value reports
@@ -74,15 +84,15 @@ pub fn parse_snap_leeway(s: &str) -> anyhow::Result<SnapLeeway> {
     let mut parts = trimmed.split(',');
     let back = day(parts.next().ok_or_else(malformed)?)?;
     let forward = match parts.next() {
-        Some(token) => day(token)?,
-        None => back,
+        Some(token) if token.trim() == UNBOUNDED_FORWARD => None,
+        Some(token) => Some(day(token)?),
+        // A bare `N` is symmetric. `*` is not accepted here: it would have to
+        // mean an unbounded *backward* pull too, which `back` cannot hold.
+        None => Some(back),
     };
     anyhow::ensure!(parts.next().is_none(), malformed());
 
-    Ok(SnapLeeway {
-        back,
-        forward: Some(forward),
-    })
+    Ok(SnapLeeway { back, forward })
 }
 
 /// Resolve the "set" and "clear" leeway flags into the leeway they ask for.
@@ -106,15 +116,21 @@ pub fn resolve_snap_leeway(
 }
 
 /// Render a [`SnapLeeway`] back into the spec string [`parse_snap_leeway`]
-/// accepts, so a form or a `show` line can round-trip what is stored.
+/// accepts, so a form can round-trip what is stored.
 ///
-/// An unbounded forward has no spelling in the spec grammar — it is what an
-/// absent leeway means — so it is reported as the bare backward number.
+/// This is a true inverse over every leeway the on-disk format allows, not
+/// just the ones the spec parser produces. An absent `forward` is a shape a
+/// hand-written or merged file can carry, and rendering it as the bare
+/// backward number used to be a lie the parser then believed: the TUI edit form
+/// seeds this field and passes it straight back, so opening a task with
+/// `forward` omitted and saving it untouched rewrote an unbounded forward bound
+/// into a bounded one — and turned `{back: 0, forward: none}`, the default
+/// spelled out, into `0,0`, a snap that never fires.
 pub fn snap_leeway_to_str(leeway: &SnapLeeway) -> String {
     match leeway.forward {
         Some(forward) if forward == leeway.back => leeway.back.to_string(),
         Some(forward) => format!("{},{forward}", leeway.back),
-        None => leeway.back.to_string(),
+        None => format!("{},{UNBOUNDED_FORWARD}", leeway.back),
     }
 }
 
@@ -1317,7 +1333,8 @@ mod tests {
     fn v4_malformed_leeway_spec_is_rejected() {
         assert_eq!(
             parse_err(Some(30), Some("dom:1"), Some("3,-1"), false),
-            "invalid snap leeway \"3,-1\" — expected N or BACK,FORWARD in whole days (e.g. 3 or 5,0)"
+            "invalid snap leeway \"3,-1\" — expected N, BACK,FORWARD or BACK,* \
+             in whole days (e.g. 3, 5,0 or 5,*)"
         );
     }
 
@@ -2400,11 +2417,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_snap_leeway_accepts_an_unbounded_forward() {
+        assert_eq!(parse_snap_leeway("3,*").unwrap(), leeway(3, None));
+        assert_eq!(parse_snap_leeway(" 5 , * ").unwrap(), leeway(5, None));
+        // `SnapLeeway::DEFAULT` spelled out. It is what an absent leeway means,
+        // and a stored file may say it explicitly.
+        assert_eq!(parse_snap_leeway("0,*").unwrap(), SnapLeeway::DEFAULT);
+    }
+
+    #[test]
     fn parse_snap_leeway_rejects_malformed_specs() {
-        for spec in ["3,-1", "", "abc", "3,4,5", "3.5", "-2", " "] {
+        // `*` is a forward-only spelling: a bare one, or one in the backward
+        // slot, is as malformed as any other non-number.
+        for spec in ["3,-1", "", "abc", "3,4,5", "3.5", "-2", " ", "*", "*,3"] {
             let err = parse_snap_leeway(spec).unwrap_err().to_string();
             assert!(
-                err.contains("expected N or BACK,FORWARD in whole days"),
+                err.contains("expected N, BACK,FORWARD or BACK,* in whole days"),
                 "{spec:?} gave {err}"
             );
         }
@@ -2421,7 +2449,7 @@ mod tests {
 
     #[test]
     fn snap_leeway_spec_round_trips() {
-        for spec in ["0", "3", "5,0", "0,7", "365"] {
+        for spec in ["0", "3", "5,0", "0,7", "365", "5,*", "0,*"] {
             let parsed = parse_snap_leeway(spec).unwrap();
             let rendered = snap_leeway_to_str(&parsed);
             assert_eq!(
@@ -2429,6 +2457,30 @@ mod tests {
                 parsed,
                 "{spec} rendered to {rendered}"
             );
+        }
+    }
+
+    /// The round trip that matters is over *stored* shapes, not over the ones
+    /// the parser happens to produce.
+    ///
+    /// Starting from a spec string can only ever exercise leeways with a
+    /// `forward` set, because that is all the parser used to build — which is
+    /// exactly how `snap_leeway_to_str` came to render `forward: None` as a
+    /// bare number that parsed back as a bounded one. So this starts from the
+    /// value side and covers every `SnapLeeway` the file format admits.
+    #[test]
+    fn every_storable_leeway_round_trips_through_its_spec() {
+        let forwards = (0..=MAX_SNAP_LEEWAY_DAYS).map(Some).chain([None]);
+        for forward in forwards {
+            for back in 0..=MAX_SNAP_LEEWAY_DAYS {
+                let stored = SnapLeeway { back, forward };
+                let rendered = snap_leeway_to_str(&stored);
+                assert_eq!(
+                    parse_snap_leeway(&rendered).unwrap(),
+                    stored,
+                    "{stored:?} rendered to {rendered:?}"
+                );
+            }
         }
     }
 

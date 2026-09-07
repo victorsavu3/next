@@ -187,7 +187,7 @@ next add <title> [options]
 | `--recur-schedule <rule>` | RRULE string | none | Schedule-based recurrence. The rule is an RFC 5545 RRULE string (without the `RRULE:` prefix). See [Recurrence](#recurrence) below. |
 | `--recur-completion <days>` | positive integer | none | Completion-based recurrence. The next instance is created `<days>` after the task is marked done. Must be at least 1. |
 | `--recur-snap <snap>` | snap value | none | Move the computed next date to a qualifying date. See [Snap values](#snap-values) below. Applies to both schedule and completion modes. |
-| `--recur-snap-leeway <spec>` | `N` or `BACK,FORWARD` | none | How far the snap may move the date, in whole days (0–365). Without it a snap only ever moves dates **later**, however far. Requires `--recur-snap`. See [Snap leeway](#snap-leeway---recur-snap-leeway) below. |
+| `--recur-snap-leeway <spec>` | `N`, `BACK,FORWARD` or `BACK,*` | none | How far the snap may move the date, in whole days (0–365); `*` leaves the forward direction unbounded. Without it a snap only ever moves dates **later**, however far. Requires `--recur-snap`. See [Snap leeway](#snap-leeway---recur-snap-leeway) below. |
 | `--long-term` | flag | false | Disables the age factor from scoring. Suitable for background or long-running tasks. |
 | `--adjust <value>` | float | 0.0 | Manual score adjustment added directly to the computed urgency score. Positive boosts, negative penalises. |
 | `--assignee <name>` | string | none | Assign the task to a user. Used by the user filter. |
@@ -1186,8 +1186,11 @@ Read the third and fourth rows: with a leeway of 3 the 1st is out of reach, so t
 |------|---------|
 | `N` | Both directions. `--recur-snap-leeway 3` is back 3, forward 3. |
 | `BACK,FORWARD` | Independent. `--recur-snap-leeway 5,0` pulls back up to 5 days and never pushes later. |
+| `BACK,*` | Forward unbounded. `--recur-snap-leeway '5,*'` pulls back up to 5 days and pushes later however far it takes — the default's forward behaviour, with a backward tolerance added. Quote it: the `*` belongs to the spec, not to the shell. |
 
-Whole days only, each between 0 and 365. `0` means the corresponding direction never moves the date; `0,0` never snaps at all.
+Whole days only, each between 0 and 365, or `*` for an unbounded forward direction. `0` means the corresponding direction never moves the date; `0,0` never snaps at all, and `0,*` is exactly the default (which you would normally spell by leaving the flag off).
+
+`*` exists so that every leeway the file format can hold has a spec string. A hand-written `[recurrence.snap_leeway]` may omit `forward`, and the TUI edit form renders a stored leeway back into this grammar to seed its Leeway row — without a spelling for "unbounded" the form would read such a task back as bounded and quietly rewrite it on save. (`next show` describes the leeway in prose instead, so it was never affected.)
 
 **The rule**, in the order it is applied:
 

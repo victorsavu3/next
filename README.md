@@ -132,8 +132,8 @@ next add "Pay rent" --slug rent --due 2026-06-01 \
 Now completing on the 2nd pulls back to the 1st of next month instead of jumping the
 month, and completing on the 15th leaves the date on the 15th — off the boundary, but on
 cadence. `N` sets both directions; `BACK,FORWARD` sets them independently (`5,0` never
-pushes a date later). Leaving the flag off keeps the old forward-only behaviour exactly,
-so no existing task changes date.
+pushes a date later) and `BACK,*` leaves the forward direction unbounded. Leaving the flag
+off keeps the old forward-only behaviour exactly, so no existing task changes date.
 
 See [`CLI.md`](CLI.md#recurrence) for the RRULE surface, the snap values, the full leeway
 rule and its validation errors.

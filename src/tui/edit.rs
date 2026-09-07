@@ -1036,6 +1036,40 @@ mod tests {
         );
     }
 
+    /// An omitted `forward` is a shape the on-disk format supports (see
+    /// `a_leeway_without_a_forward_bound_round_trips_as_an_omission` in the
+    /// TOML store), so the form has to carry it through untouched. It used to
+    /// seed as a bare `3`, which the parser reads as both directions — opening
+    /// the task and saving nothing silently bounded the forward direction.
+    #[test]
+    fn an_unbounded_forward_survives_an_untouched_form() {
+        for stored in [
+            SnapLeeway {
+                back: 3,
+                forward: None,
+            },
+            // The default spelled out: `0` seeded a field that parsed back as
+            // `0,0`, a leeway wide enough for nothing, so the snap stopped
+            // firing at all.
+            SnapLeeway::DEFAULT,
+        ] {
+            let mut task = Task::new("Pay the rent");
+            task.recurrence = Some(Recurrence::Completion {
+                interval_days: 30,
+                snap: Some(Snap::DayOfMonth { day: 1 }),
+                snap_leeway: Some(stored.clone()),
+            });
+            let form = EditForm::from_task(&task, vec![]);
+            let p = form.to_edit_params(today()).unwrap();
+            assert_eq!(
+                p.recurrence.as_ref().and_then(Recurrence::snap_leeway),
+                Some(&stored),
+                "seeded field was {:?}",
+                form.recur_snap_leeway.value()
+            );
+        }
+    }
+
     #[test]
     fn a_task_without_a_leeway_seeds_a_blank_field() {
         let mut task = Task::new("Pay the rent");

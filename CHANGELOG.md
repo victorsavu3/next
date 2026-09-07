@@ -24,7 +24,8 @@
   ```
 
   `N` sets both directions, `BACK,FORWARD` sets each, in whole days from 0 to
-  365. The rule is one sentence: if a qualifying boundary falls within the
+  365, and `BACK,*` leaves the forward direction unbounded. The rule is one
+  sentence: if a qualifying boundary falls within the
   tolerance of the computed date, move to it — nearest wins, ties go forward —
   and otherwise **keep the computed date unsnapped**.
 
