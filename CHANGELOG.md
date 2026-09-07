@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.6.0 — snap leeway and progress reporting
 
 ### New
 
