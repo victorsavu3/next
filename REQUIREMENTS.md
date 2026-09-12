@@ -281,7 +281,7 @@ not silently discard a user's state; nothing writes them.
 CLI: `next tag require|exclude|accept <tag>...` / `next tag clear-state [<tag>...]`
 MCP: `set_tag_state` with `tags` and `state` (`required`/`excluded`/`accepted`/`clear`).
 
-### 3.3 User filtering
+### 3.2 User filtering
 
 When one or more usernames are present in `active_users`:
 - Tasks with **no** `assignee` MUST always be included (unassigned = shared backlog)
