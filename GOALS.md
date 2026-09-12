@@ -1,6 +1,8 @@
 # Task Manager — Goals
 
-This file captures rough goals and ideas to be refined into structured documentation later.
+This file is the durable philosophy/vision doc: the "why" behind the tool, kept alongside
+the structured documentation (`README.md`, `REQUIREMENTS.md`, `ARCHITECTURE.md`, `CLI.md`,
+`TUI.md`, `TUTORIAL.md`) rather than superseded by it.
 
 ## What I want to build
 
