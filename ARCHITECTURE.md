@@ -1396,6 +1396,7 @@ Optional, pulled in by a feature:
 | Crate | Feature(s) | Purpose |
 |-------|------------|---------|
 | `clap` | `cli`, `forgejo` | CLI argument parsing |
+| `indicatif` | `cli` | progress bars/spinners (`src/cli/progress.rs`) |
 | `tracing-subscriber` | all four | log subscriber — the binaries install it; the library only emits |
 | `tokio` | `mcp`, `forgejo` | async runtime |
 | `axum` | `mcp` | HTTP server, middleware, `DefaultBodyLimit` |
@@ -1411,3 +1412,4 @@ compile for every test run while the code using them stays feature-gated):
 | `tempfile` | throwaway git repos for store and CLI tests |
 | `reqwest` | HTTP client for the MCP integration tests |
 | `testcontainers` | starts the real container image in `tests/test_container.rs` |
+| `tokio` (`test-util`) | async runtime for `#[tokio::test]` in MCP integration tests |
