@@ -1368,6 +1368,7 @@ impl App {
             &*self.repo.vcs,
         )?;
         self.repo.record_task_event("edit", task.id);
+        self.notify_plugins();
 
         // Apply data set/unset edits the way the CLI `data` command does: mutate
         // `task.data` and commit, one transaction per change.
@@ -1388,6 +1389,7 @@ impl App {
                 Ok(())
             })?;
             self.repo.record_task_event("data", task_id);
+            self.notify_plugins();
         }
         Ok(())
     }
@@ -1399,6 +1401,27 @@ impl App {
     // or git conflict) the status line carries the message and no state is lost;
     // on success a brief status is set, the list reloads, and the selection
     // follows the task by id where it still exists.
+
+    /// Drains buffered task events and dispatches them to subscribed plugins,
+    /// pruning the plugin registry of any deleted task — the same
+    /// post-mutation chokepoint the CLI (`src/cli/main.rs`) and the MCP server
+    /// (`src/mcp/tools/mod.rs`) run after every successful mutation. Unlike
+    /// those two, the TUI has no single per-command dispatch point (it's an
+    /// interactive loop, not one command per process), so every mutating
+    /// action calls this itself right after `record_task_event`.
+    fn notify_plugins(&mut self) {
+        let events = self.repo.take_task_events();
+        if events.is_empty() {
+            return;
+        }
+        let repo_root = self.repo.repo_root.clone();
+        crate::core::plugin::notify(&repo_root, &events, self.repo.plugin_origin());
+        for ev in &events {
+            if ev.verb == "delete" {
+                let _ = crate::core::plugin::registry::prune_task(&repo_root, ev.task_id);
+            }
+        }
+    }
 
     /// Reloads after a mutation and re-selects the task with `keep_id` if it is
     /// still visible; otherwise clamps to the nearest remaining row. Reports
@@ -1438,6 +1461,7 @@ impl App {
         match result {
             Ok(_) => {
                 self.repo.record_task_event("done", id);
+                self.notify_plugins();
                 let msg = if had_recurrence {
                     "completed; spawned next occurrence".to_owned()
                 } else {
@@ -1474,6 +1498,7 @@ impl App {
         match result {
             Ok(()) => {
                 self.repo.record_task_event("cancel", id);
+                self.notify_plugins();
                 self.reload_keep(id, "cancelled".to_owned());
             }
             Err(e) => self.status = Some(format!("cancel error: {e}")),
@@ -1509,6 +1534,7 @@ impl App {
         match result {
             Ok(()) => {
                 self.repo.record_task_event(verb, id);
+                self.notify_plugins();
                 self.reload_keep(id, ok_msg.to_owned());
             }
             Err(e) => self.status = Some(format!("{verb} error: {e}")),
@@ -1582,6 +1608,7 @@ impl App {
         match result {
             Ok(()) => {
                 self.repo.record_task_event("delete", id);
+                self.notify_plugins();
                 match self.reload() {
                     Ok(()) => {
                         self.clamp_selection();
@@ -1744,6 +1771,7 @@ impl App {
         match result {
             Ok(()) => {
                 self.repo.record_task_event("move", task_id);
+                self.notify_plugins();
                 self.reload_keep(task_id, "moved".to_owned());
             }
             Err(e) => self.status = Some(format!("move error: {e}")),
