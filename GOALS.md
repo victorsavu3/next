@@ -88,6 +88,11 @@ Urgency score computed per task from:
   `start` date, in which case the age factor is zeroed out
 - **User adjustment** — a manual numeric boost or penalty the user can apply
 
+These are the factors, not fixed numbers: the weights behind them live in a committed
+`config/scoring.toml` (seeded by `next init`), so every consumer — CLI, MCP server,
+Forgejo plugin — scores from the same repository-tracked values, and a user can retune
+them without a code change.
+
 The default `next` / `list` command ranks tasks by score descending, after filtering out
 blocked tasks, tasks with unavailable `#` tags, and tasks not matching the active `@`
 contexts. Tasks with a `start` date in the future are hidden entirely until that date.
