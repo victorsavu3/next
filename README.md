@@ -179,6 +179,10 @@ tag hides a task even if another of its tags is required. State is inherited by
 descendants, and `next tag accept <tag>` pins a tag to neither, so it can opt out of
 its parent's:
 
+`next add` also reads this state: a new task with no `@context` tag of its own picks up
+whatever `@context` tag is currently required, so a task captured while working in a
+context lands in it automatically.
+
 ```sh
 next tag exclude @home           # not doing home tasks…
 next tag accept @home/kitchen    # …except in the kitchen
