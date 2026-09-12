@@ -162,7 +162,7 @@ pub fn run_with_writer(args: Args, ctx: &AppContext, out: &mut dyn Write) -> any
     } else {
         all_tasks
             .iter()
-            .filter(|t| t.is_active())
+            .filter(|t| t.is_active() && !t.is_hidden(today))
             .map(|t| t.id)
             .collect()
     };

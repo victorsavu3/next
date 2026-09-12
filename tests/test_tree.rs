@@ -855,6 +855,85 @@ fn named_sections_are_sorted_alphabetically() {
     );
 }
 
+/// A task whose `start` date is in the future must not show up in the default
+/// `next tree` view — the same implicit gate that hides it from `next list`
+/// must hide it here too, or the two surfaces disagree about what "not yet
+/// active" means.
+#[test]
+fn tree_hides_a_future_start_task_by_default() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            start: Some("tomorrow".into()),
+            ..add_args("Starts tomorrow")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+    add::run(add_args("Active today"), &mut env.ctx).unwrap();
+
+    let out = capture_tree(&env, false);
+    assert!(
+        !out.contains("Starts tomorrow"),
+        "a future-start task must not appear by default:\n{out}"
+    );
+    assert!(
+        out.contains("Active today"),
+        "an ordinary task must still appear:\n{out}"
+    );
+}
+
+/// The same future-start gate applies when a filter query is given: a
+/// future-start task matching the query tokens still must not leak into the
+/// tree, even though the query-match branch computes hits with the implicit
+/// gate otherwise disabled (to keep ancestors around for shape).
+#[test]
+fn tree_hides_a_future_start_task_even_when_it_matches_the_query() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            start: Some("tomorrow".into()),
+            tags: vec!["#rust".into()],
+            ..add_args("Future rust task")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let out = capture_tree_args(
+        &env,
+        tree::Args {
+            tokens: vec!["+#rust".into()],
+            ..tree_args(false)
+        },
+    );
+    assert!(
+        !out.contains("Future rust task"),
+        "a future-start task must not leak through a matching query:\n{out}"
+    );
+}
+
+/// `--all` still reveals a future-start task — it means "every status and
+/// gate", the same as it does for done/cancelled tasks.
+#[test]
+fn tree_all_still_shows_a_future_start_task() {
+    let mut env = common::setup();
+    add::run(
+        add::Args {
+            start: Some("tomorrow".into()),
+            ..add_args("Starts tomorrow")
+        },
+        &mut env.ctx,
+    )
+    .unwrap();
+
+    let out = capture_tree(&env, true);
+    assert!(
+        out.contains("Starts tomorrow"),
+        "--all must still show a future-start task:\n{out}"
+    );
+}
+
 /// `tree --count` and `list --count` do not agree in general — the two commands
 /// gate on different things, and the docs now say so.
 ///
