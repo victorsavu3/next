@@ -35,6 +35,7 @@ A full-screen terminal front-end, `next-tui`, is also available — see [`TUI.md
 | `next tag exclude` | Hide tasks carrying these tags |
 | `next tag accept` | Pin tags to neither required nor excluded, ignoring a parent tag's state |
 | `next tag clear-state` | Drop the stored state for tags (all of them when none given) |
+| `next tag show` / `set-url` / `clear-url` / `set-priority` / `clear-priority` / `data ...` | More tag metadata; see [Other `next tag` subcommands](#other-next-tag-subcommands) |
 | `next forecast` | Show upcoming recurrence dates |
 | `next sync` | Pull from git remote, reconcile cache, auto-archive if due, push |
 | `next maintenance archive` | Move old closed tasks into archive segments now |
