@@ -238,6 +238,10 @@ next user clear           # no user filter
 next user list            # all assignees across all tasks
 ```
 
+The active filter is machine-local state. To see everything regardless of it for one
+command, pass `--all-users` to `list`, `next`, `tree`, or `forecast` — it bypasses the
+filter for that invocation without changing the stored state.
+
 ---
 
 ## Urgency scoring
