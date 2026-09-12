@@ -135,16 +135,19 @@ stable enough to pipe to Claude Code or other tools.
 
 ## Out of scope (for now)
 
-- Built-in AI; AI is invoked externally via piped output
-- GUI (a terminal UI, `next-tui`, has since been implemented — see TUI.md)
-- Multi-user / shared task lists
+- Built-in AI; AI is invoked externally via piped output or the MCP server
+- Desktop GUI application
+- Access control / permissions between users — the user filter (§3.2 in REQUIREMENTS.md) is
+  organisational, not a security boundary; all tasks stay visible to everyone with repo
+  access, and multi-user *task lists* (an `assignee` field, unassigned = shared backlog) are
+  already implemented, not out of scope
 - OS desktop notifications or background reminder daemon
 
-## Open questions
+## Decisions (previously open questions)
 
-- **Recurrence — lead time** — for schedule-based tasks, should the next instance become
-  visible immediately after the previous one completes, or only when today reaches the due
-  date? (Current assumption: visible immediately, scored by due date proximity.)
-- **Subtask files** — should subtasks be embedded in the parent's TOML file or stored as
-  separate files with a `parent` reference? Separate files are better for git diffs;
-  embedded is simpler to edit by hand.
+- **Recurrence — lead time.** Settled: a schedule-based recurrence's next instance is
+  created atomically when the current one is marked done (`next done`), and is visible
+  immediately, scored by due date proximity. See REQUIREMENTS.md §7.
+- **Subtask files.** Settled: subtasks are separate task files, linked to their parent via
+  `parent_id` — not embedded in the parent's TOML. See REQUIREMENTS.md §1.1/§1.2 and the
+  file-tree example in README.md.
