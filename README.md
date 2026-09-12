@@ -526,7 +526,7 @@ systemctl --user daemon-reload
 systemctl --user start next-mcp
 ```
 
-### MCP tools (15)
+### MCP tools (14)
 
 | Tool | R/M | Description |
 |------|-----|-------------|
