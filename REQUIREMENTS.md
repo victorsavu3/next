@@ -976,7 +976,8 @@ links the `next` library directly and maps Forgejo repositories to contexts.
   `sync`); a task resolved locally closes its issue (in real time via `hook`, and as a
   reconcile on `sync`). Reopening is out of scope for v1.
 - `hook` reads `next` and mutates only Forgejo (never `next`), so it cannot loop.
-- `sync` self-registers the export hook (idempotent) so per-task `watch` succeeds.
+- `sync` self-registers the export hook (idempotent) so per-task `watch` succeeds; `register`
+  exposes that same registration as its own subcommand, without importing.
 
 ### 10.4 Periodic plugin sync
 
