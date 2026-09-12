@@ -256,9 +256,15 @@ dimmed, because the row's key cycles its *own* entry, not the parent's.
 filter, edit, complete (recurrence-aware), cancel, start/stop, move, delete, open URL,
 manage machine-local state (tag state and the user filter), and sync. Every mutation goes
 through the shared `core` services and `TaskRepository` transactions — the same code paths,
-validation, git commits, and plugin export hooks as `next` and `next-mcp` — so running the
-TUI alongside the CLI or the MCP server is safe. Sync runs on a background worker thread so
-the UI stays responsive; its result surfaces in the footer.
+validation and git commits as `next` and `next-mcp` — so running the TUI alongside the CLI
+or the MCP server is safe. Sync runs on a background worker thread so the UI stays
+responsive; its result surfaces in the footer.
+
+Note: unlike `next` and `next-mcp`, TUI-driven mutations do not currently fire plugin
+export hooks (or `prune_task` on delete) at all — that notification step runs after a CLI
+command or MCP tool call drains its buffered task events, and the TUI never does. If you
+rely on plugin exports staying current, make the equivalent mutation through the CLI or
+MCP server instead of the TUI for now.
 
 For the full command-line surface and the underlying concepts (scoring, recurrence, filter
 syntax), see [`CLI.md`](CLI.md). For internal design, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
