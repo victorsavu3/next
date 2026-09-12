@@ -1180,3 +1180,66 @@ At most one sync MUST run at a time. When an explicit sync (tool call or webhook
 - Three named volumes MUST be used: `next-tasks` at `/data/tasks` (tasks repository), `next-state` at `/data/state` (XDG machine-local state via `XDG_STATE_HOME=/data/state`), and `next-config` at `/data/config` (TOML config file at `next-mcp/config.toml`, via `XDG_CONFIG_HOME=/data/config`)
 - Secrets MUST be passed via podman `Secret=` mounts referenced by the config's `*_file` forms, an `EnvironmentFile` override, or an inline chmod-600 config file — never baked into the image
 - Credentials embedded in `NEXT_GIT_URL` MUST be stripped before any log output; only the credential-free URL MAY be logged
+
+## 13. Terminal UI (`next-tui`)
+
+`next-tui` is an optional Cargo feature (`--features tui`) that produces a third binary: a
+full-screen [ratatui](https://ratatui.rs/) front-end that links the `next` library directly
+(`TaskRepository`) rather than shelling out to the `next` binary. Full reference:
+`TUI.md`.
+
+### 13.1 Feature flag
+
+- The `tui` feature MUST be `off` by default
+- All TUI-only runtime dependencies (`ratatui`, `tui-input`, `tui-textarea-2`,
+  `tui-tree-widget`) MUST be declared `optional = true` and activated only by the feature
+- `cargo build` and `cargo test` without `--features tui` MUST produce exactly the same
+  artefacts as before the feature was added
+
+### 13.2 Configuration
+
+The TUI MUST reuse the same `Config` schema as the CLI, but resolve its own config source
+with this precedence: `--config <path>` (if given) > `$XDG_CONFIG_HOME/next/tui.toml` (its
+own file) > `$XDG_CONFIG_HOME/next/config.toml` (the CLI's file, used when `tui.toml` is
+absent) > built-in defaults. The active source MUST be surfaced in the UI so a user can
+tell which file (if any) a setting came from. `--repo <path>` overrides the repository
+root the same way it does for the CLI (§8), taking precedence over `repository` in
+whichever config file was resolved and over the upward `.git` search.
+
+### 13.3 Views
+
+The TUI MUST expose three views, matching the CLI's own read paths so the two never drift
+in what they consider "urgent" or "upcoming":
+
+- **List** — the scored, sorted flat task list: the same filter + scoring + `list_limit`
+  pipeline as `next list`. A `.`-style toggle MUST switch to a closed-only view mirroring
+  `next list --closed`.
+- **Tree** — the parent/child hierarchy, grouped into context sections by each root task's
+  deepest `@context` tag (mirroring `next tree`), with done/cancelled tasks includable via
+  a tree-local toggle.
+- **Forecast** — the same chronological due-date projection as `next forecast`, including
+  projected (not-yet-spawned) occurrences of both recurrence modes over the horizon; this
+  MUST be read-only.
+
+All three MUST honour the same tag state, user filter, and `--all`/`--future`/`--all-users`
+equivalents as their CLI counterparts, since they read through the same core filtering
+pipeline rather than reimplementing it.
+
+### 13.4 Mutations and shared core guarantees
+
+Every TUI mutation (edit, done, cancel, start/stop, move, delete) MUST go through the same
+`core` services and `TaskRepository` transactions as the CLI and MCP server — the same
+validation and git commits — so running the TUI alongside either is safe: every change is
+a normal task-file commit, and none of the three surfaces can observe another mid-mutation.
+
+Sync MUST run on a background worker thread so the UI stays responsive, triggered either
+manually or, on launch, automatically when `sync.autopull` is enabled and the local copy is
+stale per `sync.staleness_secs` (the same staleness check the CLI applies before a command,
+run once at startup here instead of per-command).
+
+**Known gap (tracked, not yet required to close):** unlike the CLI and MCP server, the TUI
+does not currently drain buffered task events or invoke the plugin-export notification path
+after a mutation. TUI-driven edits and deletes therefore do not yet trigger plugin exports
+or `prune_task` on delete. This is a real behavior gap in the current implementation, not a
+deliberate design choice — closing it (wiring the TUI's mutation paths to the same
+`take_task_events` / `plugin::notify` call the CLI and MCP server make) is future work.
