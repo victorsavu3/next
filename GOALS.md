@@ -24,7 +24,9 @@ scorer handles the rest.
 
 AI is the primary path for enriching task metadata (`description`, `url`, `data`). The
 tool provides a clean pipe-friendly interface; AI reads the list, annotates tasks, and
-sets scores or data fields externally.
+sets scores or data fields externally. That interface is not limited to piping `--json`
+through a shell: the optional `next-mcp` server exposes the same operations as MCP tools
+over HTTP/JSON-RPC, for AI clients that talk MCP directly instead of shelling out.
 
 ## Key features
 
