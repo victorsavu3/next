@@ -162,7 +162,7 @@ All list commands accept filter tokens:
 ```sh
 next list +python -bug                 # has 'python', doesn't have 'bug'
 next list context:@work                # force context for this query
-next list user:alice                   # show alice's tasks only
+next list user:alice                   # show alice's tasks (plus anything unassigned)
 next list parent:launch                # all tasks under the 'launch' project
 next list --all                        # disable all implicit filters
 ```
