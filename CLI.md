@@ -1377,7 +1377,7 @@ part of the expression, and they stay where they are.
 | `<field><op><value>` | `due<+7d`, `priority>=medium`, `created>2026-08-01` | Ordered comparison (`<`, `<=`, `>`, `>=`) over `priority`, the dates, and numeric `data.*`. |
 | `<field>:<low>..<high>` | `due:2026-08-01..eom` | Inclusive range. |
 | `has:<field>` / `no:<field>` | `has:due`, `no:assignee`, `has:context` | Whether the field is set. `has:context` asks whether the task carries any `@` tag. |
-| `is:<name>` | `is:overdue`, `is:blocked`, `is:project`, `is:recurring`, `is:closed`, `is:assigned` | Named predicates. See the note below on `is:project` and `is:blocked`. |
+| `is:<name>` | `is:overdue`, `is:blocked`, `is:project`, `is:recurring`, `is:archived`, `is:closed`, `is:assigned` | Named predicates. `is:archived` reports whether the task is in the archive tier (true for every row of an `--archived` listing, false otherwise) — it does not search the archive from a non-archived query. See the note below on `is:project` and `is:blocked`. |
 | `and` `or` `not` `( )` | `+@work and (due<+7d or is:overdue)` | Booleans, also spelled `&`, `|`, `!`. Adjacency means `and`, and precedence runs `not` > `and` > `or`. Quote an operator word (`"or"`) to search for it literally. |
 | `parent:<slug>` | `parent:work`, `parent:launch-blog` | Task is a descendant (direct or transitive child) of the task with this slug. Exactly one slug — not a set. |
 | `context:<@tag>` | `context:@home` | Include exactly this tag for this query only, ignoring whatever the stored state includes. Exclusions still apply. |
