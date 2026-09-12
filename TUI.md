@@ -67,7 +67,11 @@ with `Tab` (`List → Tree → Forecast → List`). It opens in the **Tree** vie
   task).
 - **Tree** (`2`) — the parent/child hierarchy (`tui-tree-widget`), shown by default on
   startup. Nodes expand/collapse; a tree-local toggle includes done/cancelled tasks. The
-  detail pane and per-task actions operate on the highlighted node.
+  detail pane and per-task actions operate on the highlighted node. Root tasks are grouped
+  into context sections (`── @work ──`, …) by their deepest `@context` tag, with a trailing
+  "No context" section for the rest — the same grouping `next tree` applies. Each section
+  auto-expands the first time it appears, then remembers whether you collapsed it across
+  reloads.
 - **Forecast** (`3`) — the chronological forecast of upcoming due dates, including projected
   occurrences of both recurrence modes over the horizon (same engine as `next forecast`;
   completion-mode dates assume each instance is completed on its due date). It is
@@ -123,6 +127,7 @@ These operate on the selected list row or the highlighted tree node.
 | `o` | Open the task's URL in the system browser |
 | `m` | Open the move (parent-picker) popup |
 | `x`, `Delete` | Open the delete-confirmation popup |
+| `b` | Jump the selection/highlight to the task's first blocker; status message if there is none or it is outside the current filter |
 
 ### List view
 
@@ -145,10 +150,15 @@ These operate on the selected list row or the highlighted tree node.
 |-----|--------|
 | `j` / `Down` | Highlight next visible node |
 | `k` / `Up` | Highlight previous visible node |
+| `g` / `Home` | Highlight first node |
+| `G` / `End` | Highlight last node |
 | `Left` | Collapse the highlighted node |
 | `Right` | Expand the highlighted node |
 | `Space` / `Enter` | Toggle expand/collapse |
 | `.` | Toggle include-done/cancelled (tree-local) |
+| `A` (shift) | Toggle the `--all` filter |
+| `F` (shift) | Toggle the `--future` filter |
+| `U` (shift) | Toggle the `--all-users` filter |
 | `Ctrl-d` / `PageDown` | Scroll the detail pane down |
 | `Ctrl-u` / `PageUp` | Scroll the detail pane up |
 
@@ -196,7 +206,7 @@ is refused on save with the modal left open.
 | `Ctrl-s` | Validate and save, then reload (modal stays open on error so you can retry) |
 | `Esc` | Cancel and discard the form |
 | `Tab` / `Shift-Tab` (`BackTab`) | Move focus to the next / previous field (always, even inside a textarea) |
-| `Down` / `Up` | Move focus to the next / previous field — **except** inside the multi-line description/notes textareas, where they move the cursor |
+| `Down` / `Up` | Move focus to the next / previous field — **except** inside the multi-line description/notes textareas, where they move the cursor, and except while the Tags field is showing autocomplete suggestions, where they navigate the suggestion list instead |
 | *(any other key)* | Edit the focused field |
 
 ### Delete confirmation (`x` / `Delete`)
