@@ -266,5 +266,11 @@ command or MCP tool call drains its buffered task events, and the TUI never does
 rely on plugin exports staying current, make the equivalent mutation through the CLI or
 MCP server instead of the TUI for now.
 
+On launch, if `sync.autopull` is enabled and the local copy is stale (`sync.staleness_secs`
+since the last pull), the TUI automatically starts a background pull with no user action
+required — the same "pull-before-query" behavior the CLI applies before a command, just
+triggered once at startup here rather than per-command. The manual `y` keybinding triggers
+the same background sync on demand.
+
 For the full command-line surface and the underlying concepts (scoring, recurrence, filter
 syntax), see [`CLI.md`](CLI.md). For internal design, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
