@@ -68,6 +68,7 @@ Available on every subcommand:
 | `--offline` | Alias for `--no-autosync`: disable both — no network I/O. |
 | `--no-progress` | Never draw progress bars, even on a terminal. |
 | `--quiet`, `-q` | Suppress progress bars **and** the informational notes on stderr (the auto-pull note, the `Synced with remote.` confirmation). Errors and results are unaffected. |
+| `--log-level <LEVEL>` | Diagnostic log verbosity for this invocation: `error`, `warn`, `info`, `debug`, or `trace`. Sets the default level, overriding `RUST_LOG`'s default of `error`; any `RUST_LOG` per-target directives still apply on top. |
 
 Sync has two orthogonal capabilities: **autopull** (the pre-command staleness pull) and
 **autopush** (the push after a successful mutation). Each has a config key
