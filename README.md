@@ -197,7 +197,7 @@ next tag                        # list all tags with their descriptions
 ```
 
 `next tag` is the single command for everything about tags: the state
-(`include`, `exclude`, `default`, `clear-state`), the metadata (`describe`, `set-url`,
+(`require`, `exclude`, `accept`, `clear-state`), the metadata (`describe`, `set-url`,
 `set-priority`, `set-no-time-urgency`, `data`, `show`, and the matching `clear-*`
 subcommands), and `rename`.
 

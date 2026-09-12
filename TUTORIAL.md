@@ -367,7 +367,7 @@ next tree [--all]
 next forecast [--days N]
 next sync [--pull-only | --push-only]
 next tag [describe | set-url | set-priority | data | show | rename | clear-description | clear-url | clear-priority]
-next tag [include <tag>... | exclude <tag>... | default <tag>... | clear-state [<tag>...]]
+next tag [require <tag>... | exclude <tag>... | accept <tag>... | clear-state [<tag>...]]
 next user [set <name>... | clear | list]
 next config [get <key> | set <key> <value>]
 ```
