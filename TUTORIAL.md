@@ -18,6 +18,17 @@ Point `next` at your repository from any directory:
 repository = "/home/you/tasks"
 ```
 
+If you want to sync across machines, add a git remote now:
+
+```sh
+git remote add origin git@example.com:you/tasks.git
+```
+
+Without one, every command still works, but each will print a recurring
+`warning: auto-pull failed: ...` (autopull has nothing to pull from), and `next sync`
+will hard-error. A note on both: set `sync.autopull = false` (or pass `--no-autopull` /
+`--offline`) to silence the warning on a deliberately local-only repository.
+
 ---
 
 ## Core workflow
