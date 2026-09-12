@@ -96,6 +96,13 @@ next list parent:launch-blog   # list tasks within this project
 next show launch-blog          # show full details for a single task
 ```
 
+A task can also declare it is blocked by other tasks, independent of the parent/child
+relationship: `next add "Deploy" --blocked-by staging-tested` (or `next edit <id>
+--blocked-by <id>...` / `--clear-blocked-by`). A task with an open (not done/cancelled)
+blocker is hidden from the default scored list until that blocker resolves — the same
+implicit gate that hides unresolved parents. Use `is:blocked` to find blocked tasks, or
+`--all` to see them anyway.
+
 ---
 
 ## Recurrence
