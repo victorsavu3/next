@@ -15,8 +15,13 @@ Each task MUST carry the following fields:
 | `id` | UUID v4 string | Assigned on creation, never changed |
 | `title` | non-empty string | |
 | `status` | `open` \| `started` \| `done` \| `cancelled` | |
-| `created_at` | RFC 3339 datetime | Set on creation |
-| `updated_at` | RFC 3339 datetime | Updated on every write |
+
+`created_at` and `updated_at` are NOT fields of `Task` and are NOT stored in the TOML
+file. They are derived from git commit history (the commit that first introduced the
+task's file, and the most recent commit that touched it), surfaced through
+`scoring::TaskDates`, and cached in SQLite columns of the same name for the read path.
+They are filterable (`created:`, `updated:`) but never returned by `--fields` projection,
+since there is no task-file value to project. See §2.3 and §8.2.
 
 A task MAY carry the following optional fields:
 
