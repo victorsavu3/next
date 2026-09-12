@@ -47,13 +47,19 @@ the same, including `--no-default-features`.
   in the same file; cross-command behaviour goes in `tests/`, using the harness
   in `tests/common/`. Do not verify by running the binary by hand — write the
   test.
-- **Never run the `next` binary without `--repo`.** A bare invocation resolves
-  to the real task repository in `~`, which autopushes. Tests use tempdirs.
+- **Never run the `next` binary without `--repo`.** With no override, it falls
+  back to the `repository` key in your config, or an upward `.git` search from
+  cwd — on this machine that resolves to the real task repository, with
+  autopush enabled, so a bare mutating command pushes to it. Tests use
+  tempdirs.
 - **Docs are part of the change.** `README.md` is the introduction,
   `CLI.md` the command reference, `ARCHITECTURE.md` the map,
   `REQUIREMENTS.md` the long-term plan. `tests/test_docs.rs` executes the
-  filter examples in all of them, so an example that stops being true fails the
-  suite.
+  filter examples in every file in its `DOCS` const — currently `CLI.md`,
+  `README.md`, `TUI.md`, `REQUIREMENTS.md`, `CHANGELOG.md`, `TUTORIAL.md`, and
+  `ARCHITECTURE.md` (`CHANGELOG.md` is a log rather than living documentation,
+  but its filter examples can still go stale, so it's checked too) — so an
+  example that stops being true in any of them fails the suite.
 - **Update `ARCHITECTURE.md` in the same commit as the code.** It is the doc
   nothing can check for you. The test above reads *filter examples*; the rest of
   `ARCHITECTURE.md` is prose about types, signatures and file layout that no test
@@ -67,7 +73,7 @@ the same, including `--no-default-features`.
   | a public signature, trait method, or `Task` field | §3 |
   | a new, moved or deleted module | §2 |
   | a Cargo feature or dependency | §2.1, §14 |
-  | the SQLite schema or `SCHEMA_VERSION` | §6 |
+  | the SQLite schema or `SCHEMA_VERSION` | §3 (`next::storage`) |
   | the filter pipeline, pushdown, or a new atom | §7 |
   | scoring factors or weights | §9 |
   | a config key | §11 |
