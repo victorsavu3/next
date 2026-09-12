@@ -116,6 +116,9 @@ All list commands accept filters that can be combined freely:
 - `next sync` pulls from the remote git repo, rebuilds the DB, then pushes local commits
 - Offline edits accumulate as local git commits; sync merges them when connectivity returns
 - Git merge conflicts are resolved manually
+- During sync, closed tasks past an age threshold are archived automatically into
+  month-keyed segment files under `archive/`, keeping the working set small without
+  losing history — see REQUIREMENTS.md §2.3
 
 ### Forgejo integration (plugin — implemented)
 Provided by the bundled `next-forgejo` binary behind the off-by-default `forgejo`
