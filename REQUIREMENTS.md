@@ -1237,9 +1237,9 @@ manually or, on launch, automatically when `sync.autopull` is enabled and the lo
 stale per `sync.staleness_secs` (the same staleness check the CLI applies before a command,
 run once at startup here instead of per-command).
 
-**Known gap (tracked, not yet required to close):** unlike the CLI and MCP server, the TUI
-does not currently drain buffered task events or invoke the plugin-export notification path
-after a mutation. TUI-driven edits and deletes therefore do not yet trigger plugin exports
-or `prune_task` on delete. This is a real behavior gap in the current implementation, not a
-deliberate design choice — closing it (wiring the TUI's mutation paths to the same
-`take_task_events` / `plugin::notify` call the CLI and MCP server make) is future work.
+Like the CLI and MCP server, every TUI mutation MUST also drain its buffered task events and
+invoke the plugin-export notification path (`take_task_events` / `plugin::notify`), pruning
+the plugin registry (`prune_task`) on delete. The CLI and MCP server each do this once, at a
+single post-command chokepoint; the TUI has no equivalent per-command boundary (it is one
+long-lived interactive loop), so each mutating action MUST drain and dispatch its own event
+immediately after recording it.

@@ -260,11 +260,12 @@ validation and git commits as `next` and `next-mcp` — so running the TUI along
 or the MCP server is safe. Sync runs on a background worker thread so the UI stays
 responsive; its result surfaces in the footer.
 
-Note: unlike `next` and `next-mcp`, TUI-driven mutations do not currently fire plugin
-export hooks (or `prune_task` on delete) at all — that notification step runs after a CLI
-command or MCP tool call drains its buffered task events, and the TUI never does. If you
-rely on plugin exports staying current, make the equivalent mutation through the CLI or
-MCP server instead of the TUI for now.
+Like `next` and `next-mcp`, the TUI fires the same plugin export hooks after a mutation
+(and `prune_task` on delete): each mutating action records its event and then drains and
+dispatches it the same way the CLI and MCP server do at their own post-mutation chokepoint —
+the TUI just does it right after `record_task_event` in each action instead of once per
+process, since it has no single per-command dispatch point of its own. Plugin subscribers
+stay in sync regardless of which of the three surfaces made the change.
 
 On launch, if `sync.autopull` is enabled and the local copy is stale (`sync.staleness_secs`
 since the last pull), the TUI automatically starts a background pull with no user action
