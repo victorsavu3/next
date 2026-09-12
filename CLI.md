@@ -1227,7 +1227,7 @@ A weekend date that simply stands is the rule working as designed — no boundar
 | Leeway with no snap | `--recur-snap-leeway requires a snap; set --recur-snap first (e.g. dom:1, monday, next-workday)` |
 | Backward tolerance not shorter than the interval | `backward leeway (5d) must be less than the completion interval (3d), or the series would not advance` |
 | Out of range | `snap leeway must be between 0 and 365 days, got 400` |
-| Malformed | `invalid snap leeway "3,-1" — expected N or BACK,FORWARD in whole days (e.g. 3 or 5,0)` |
+| Malformed | `invalid snap leeway "3,-1" — expected N, BACK,FORWARD or BACK,* in whole days (e.g. 3, 5,0 or 5,*)` |
 | Set and clear together | `--recur-snap-leeway and --clear-recur-snap-leeway are mutually exclusive` |
 
 The backward bound applies to completion rules, where the interval is known. A schedule rule has no static period to compare against, so it is guarded differently: the RRULE's occurrences are snapped one by one and the first date that lands strictly *after* the current instance's is the one used. An occurrence that a backward pull moves onto a date already held is stepped over, not spawned again — so a weekly rule spawns once a week however wide the tolerance, and the pull can only ever shorten a single cycle.
