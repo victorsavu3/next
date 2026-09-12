@@ -299,6 +299,7 @@ See [CLI.md](CLI.md#filter-syntax) for the full reference.
 | Command | Description |
 |---------|-------------|
 | `next init` | Initialise a task repository in the current directory |
+| `next tutorial` | Walk through an interactive, in-terminal tutorial (see `TUTORIAL.md`) |
 | `next add` | Add a task |
 | `next list [-n N] [--page N] [--archived]` | List tasks sorted by urgency score; paginated (`--page`/`--page-size`, `-n`/`--limit` caps output, `list_limit` applies to the archive too); `--closed` shows done/cancelled, `--archived` lists the archive; `--count` prints the total, `--explain` shows how the query parsed |
 | `next next [N]` | Show top N highest-scored tasks (default 10) |
@@ -724,3 +725,4 @@ and plugins lives in the `core` module so the feature modules depend only on the
 - `ARCHITECTURE.md` — internal design and module layout
 - `CLI.md` — full command reference
 - `TUI.md` — terminal UI keymap and view reference
+- `TUTORIAL.md` — walkthrough behind `next tutorial`
